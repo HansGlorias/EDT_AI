@@ -70,23 +70,24 @@ Uninstall.**
 
 ## Сборка
 
-Нужны JDK 17 и Maven 3.9+, а также доступ к `download.eclipse.org` и Maven
-Central.
+Нужны JDK 17 и доступ к `download.eclipse.org` и Maven Central. Maven
+отдельно ставить не нужно: `mvnw` / `mvnw.cmd` скачает проверенную версию
+(3.9.11). На Windows вместо `./mvnw` — `mvnw.cmd`.
 
 ```bash
-mvn -B verify
+./mvnw -B verify
 ```
 
 На Linux без дисплея UI-тесты запускаются так:
 
 ```bash
-xvfb-run -a mvn -B verify
+xvfb-run -a ./mvnw -B verify
 ```
 
 Сборка без тестов:
 
 ```bash
-mvn -B verify -DskipTests
+./mvnw -B verify -DskipTests
 ```
 
 Структура проекта:

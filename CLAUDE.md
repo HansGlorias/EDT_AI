@@ -5,22 +5,24 @@
 
 ## Сборка
 
-Нужны JDK 17 и Maven 3.9+.
+Нужен JDK 17. Maven — через wrapper (`./mvnw`, версия 3.9.11): на более
+новом Maven из образа GitHub Actions Tycho 4.0.13 не стартовал, поэтому
+системный `mvn` не используй.
 
 ```bash
-mvn -B verify
+./mvnw -B verify
 ```
 
 На Linux без дисплея UI-тесты запускаются под xvfb:
 
 ```bash
-xvfb-run -a mvn -B verify
+xvfb-run -a ./mvnw -B verify
 ```
 
 Быстро, без тестов:
 
 ```bash
-mvn -B verify -DskipTests
+./mvnw -B verify -DskipTests
 ```
 
 Update-site после сборки:
@@ -42,7 +44,7 @@ Update-site после сборки:
   сгенерированный тестовый сертификат.
 - Новый код — с тестами в `tests/`. Логику держи в `core`, чтобы её можно
   было проверить без UI.
-- Перед пушем `mvn -B verify` должен быть зелёным.
+- Перед пушем `./mvnw -B verify` должен быть зелёным.
 
 ## Облачная сессия
 
