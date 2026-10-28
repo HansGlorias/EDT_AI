@@ -35,6 +35,9 @@ public final class SettingsValidator {
         if (settings.contextLimit() < AiSettings.MIN_CONTEXT_LIMIT || settings.contextLimit() > AiSettings.MAX_CONTEXT_LIMIT) {
             errors.add("Лимит контекста: от " + AiSettings.MIN_CONTEXT_LIMIT + " до " + AiSettings.MAX_CONTEXT_LIMIT + " символов");
         }
+        if (settings.modelWindow() < AiSettings.MIN_MODEL_WINDOW || settings.modelWindow() > AiSettings.MAX_MODEL_WINDOW) {
+            errors.add("Окно модели: от " + AiSettings.MIN_MODEL_WINDOW + " до " + AiSettings.MAX_MODEL_WINDOW + " токенов");
+        }
         if (!settings.caCertificateFile().isEmpty()) {
             String error = checkReadableFile(settings.caCertificateFile());
             if (error != null) {

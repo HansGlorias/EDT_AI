@@ -97,6 +97,18 @@ class SettingsStoreTest {
     }
 
     @Test
+    void modelWindowIsStoredOnlyWhenNotDefault() throws Exception {
+        assertEquals(AiSettings.DEFAULT_MODEL_WINDOW, store.load().modelWindow());
+
+        store.save(new AiSettings(null, "", "", 0, "", 0, true, true, "", List.of(), 131_072));
+        assertEquals(131_072, preferences.getInt(SettingsStore.KEY_MODEL_WINDOW, 0));
+        assertEquals(131_072, store.load().modelWindow());
+
+        store.save(AiSettings.defaults());
+        assertEquals(null, preferences.get(SettingsStore.KEY_MODEL_WINDOW, null));
+    }
+
+    @Test
     void defaultContextLimitIsNotStored() throws Exception {
         assertEquals(AiSettings.DEFAULT_CONTEXT_LIMIT, store.load().contextLimit());
 

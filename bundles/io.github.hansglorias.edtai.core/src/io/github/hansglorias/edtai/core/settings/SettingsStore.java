@@ -25,6 +25,7 @@ public final class SettingsStore {
     static final String KEY_MODEL = "model";
     static final String KEY_MAX_TOKENS = "maxTokens";
     static final String KEY_SYSTEM_PROMPT = "systemPrompt";
+    static final String KEY_MODEL_WINDOW = "modelWindow";
     static final String KEY_CONTEXT_LIMIT = "contextLimit";
     static final String KEY_TOOLS_ENABLED = "toolsEnabled";
     static final String KEY_USE_SYSTEM_TRUST_STORE = "useSystemTrustStore";
@@ -65,7 +66,8 @@ public final class SettingsStore {
                 preferences.getBoolean(KEY_TOOLS_ENABLED, AiSettings.DEFAULT_TOOLS_ENABLED),
                 preferences.getBoolean(KEY_USE_SYSTEM_TRUST_STORE, AiSettings.DEFAULT_USE_SYSTEM_TRUST_STORE),
                 preferences.get(KEY_CA_CERTIFICATE_FILE, ""),
-                servers);
+                servers,
+                preferences.getInt(KEY_MODEL_WINDOW, 0));
     }
 
     public void save(AiSettings settings) throws BackingStoreException {
@@ -93,6 +95,11 @@ public final class SettingsStore {
             preferences.remove(KEY_TOOLS_ENABLED);
         } else {
             preferences.putBoolean(KEY_TOOLS_ENABLED, settings.toolsEnabled());
+        }
+        if (settings.modelWindow() == AiSettings.DEFAULT_MODEL_WINDOW) {
+            preferences.remove(KEY_MODEL_WINDOW);
+        } else {
+            preferences.putInt(KEY_MODEL_WINDOW, settings.modelWindow());
         }
         preferences.putBoolean(KEY_USE_SYSTEM_TRUST_STORE, settings.useSystemTrustStore());
         put(KEY_CA_CERTIFICATE_FILE, settings.caCertificateFile());

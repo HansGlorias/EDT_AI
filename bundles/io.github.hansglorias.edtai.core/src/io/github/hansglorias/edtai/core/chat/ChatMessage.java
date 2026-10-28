@@ -3,6 +3,7 @@ package io.github.hansglorias.edtai.core.chat;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.context.ContextPrompt;
@@ -55,8 +56,21 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         return new ChatMessage(role, text, time, status, context, newTools);
     }
 
-    /** Текст для модели: фрагменты кода, затем сам текст. */
+    public ChatMessage withContext(List<ContextItem> newContext) {
+        return new ChatMessage(role, text, time, status, newContext, tools);
+    }
+
+    /**
+     * Текст для модели: у вопроса — фрагменты кода, затем сам текст; у
+     * ответа — перед текстом короткий след вызванных инструментов, чтобы в
+     * следующих ответах модель знала, что уже смотрела (сами результаты в
+     * историю не входят).
+     */
     public String modelText() {
+        if (role == ChatRole.ASSISTANT) {
+            String trace = tools.stream().filter(ToolUse::isCall).map(ToolUse::label).collect(Collectors.joining("; "));
+            return trace.isEmpty() ? text : "[Вызванные инструменты: " + trace + "]\n\n" + text;
+        }
         return ContextPrompt.compose(text, context);
     }
 }

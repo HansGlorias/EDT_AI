@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.llm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -11,6 +12,7 @@ import java.net.URI;
 import java.net.http.HttpConnectTimeoutException;
 import java.nio.channels.UnresolvedAddressException;
 import java.time.Duration;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +20,20 @@ class ModelErrorsTest {
 
     private static final URI URI_ = URI.create("https://llm.example.invalid:8443/v1/messages?key=secret");
     private static final Duration TIMEOUT = Duration.ofSeconds(20);
+
+    @Test
+    void contextOverflowIsExplained() {
+        for (String body : List.of(
+                "{\"error\":{\"message\":\"This model's maximum context length is 32768 tokens. However, you requested 40000 tokens"
+                        + " (36000 in the messages, 4000 in the completion).\",\"code\":\"context_length_exceeded\"}}",
+                "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 210000 tokens\"}}",
+                "{\"error\":{\"message\":\"the request exceeds the available context size, try increasing it\","
+                        + "\"type\":\"exceed_context_size_error\",\"tools\":1}}")) {
+            ModelException error = ModelErrors.http(400, body, URI_);
+            assertTrue(error.getMessage().startsWith("Диалог не помещается в окно модели (HTTP 400)."), error.getMessage());
+            assertFalse(error.rejectsTools(), "переполнение — не отказ от инструментов");
+        }
+    }
 
     @Test
     void unknownHost() {
