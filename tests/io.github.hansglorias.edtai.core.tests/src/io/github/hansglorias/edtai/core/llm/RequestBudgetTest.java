@@ -94,6 +94,10 @@ class RequestBudgetTest {
                 new ToolUse("call_1", "read_module", "Читает модуль Х", "строки 1–3 из 3", ToolUse.Status.DONE),
                 new ToolUse("context", "context", "Окно модели", "старые сообщения не переданы — 2", ToolUse.Status.DONE)));
         assertEquals("[Вызванные инструменты: Читает модуль Х — строки 1–3 из 3]\n\nВ модуле одна процедура.", answer.modelText());
+        // Модель повторила след сама — в ответ он не попадает; вложенные скобки аргументов не мешают.
+        assertEquals("Готово.", ChatMessage.stripTrace("[Вызванные инструменты: MCP «EDT»: modify ([{name: \"x\"}]) — OK]\n\nГотово."));
+        assertEquals("[Ссылка] текст", ChatMessage.stripTrace("[Ссылка] текст"));
+        assertEquals("[Вызванные инструменты: оборвано", ChatMessage.stripTrace("[Вызванные инструменты: оборвано"));
         assertEquals("Без инструментов.", assistant("Без инструментов.").modelText());
     }
 

@@ -138,7 +138,7 @@ final class AgentLoop {
         for (int step = 1;; step++) {
             ModelReply reply = request();
             if (reply.calls().isEmpty()) {
-                return ThinkFilter.strip(answer.toString()).strip();
+                return ChatMessage.stripTrace(ThinkFilter.strip(answer.toString())).strip();
             }
             if (step >= MAX_STEPS) {
                 text("_Остановлено: модель вызвала инструменты " + MAX_STEPS + " раз подряд. Напишите «продолжай»,"

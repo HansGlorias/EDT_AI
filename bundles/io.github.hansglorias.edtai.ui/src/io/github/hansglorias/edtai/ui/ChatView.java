@@ -1289,7 +1289,10 @@ public class ChatView extends ViewPart {
         if (!text.equals(status.getText())) {
             status.setText(text);
             status.setToolTipText(settings.isConfigured() ? settings.model() + " · " + settings.baseUrl() : null);
-            status.getParent().layout(true);
+            // Строка и так во всю ширину: перекомпоновка всего вида раз в секунду (счётчик секунд) дёргала ленту.
+            if (status.computeSize(SWT.DEFAULT, SWT.DEFAULT).y != status.getSize().y) {
+                status.getParent().layout(true);
+            }
         }
     }
 
