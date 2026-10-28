@@ -65,18 +65,11 @@ Windows и Linux (в том числе Astra Linux).
 
 ### Если Install New Software падает: EDT в `/opt`, sudo нет
 
-Так бывает на Linux, когда EDT установлена от root в
-`/opt/1C/1CE/components/…`. p2 пытается поставить плагин в профиль
-пользователя и падает с «Ошибка при сборе элементов для установки» или «Ошибка
-при установке элементов». В логе `.metadata/.log` при этом видно, что
-упал другой компонент, например `Действие chmod не удалось … nginx не
-существует` у 1C:Link. Через Install New Software в такой EDT не поставить
-никакой плагин.
-
-Обходной путь без p2 и без прав на каталог EDT —
-[`tools/edtai-user-install.sh`](tools/edtai-user-install.sh). Скрипт кладёт
-jar плагина в `~/.edt-ai` и собирает свой список бандлов (системный
-`bundles.info` EDT плюс наш плагин), а EDT запускается с этим списком:
+Так бывает на Linux, когда EDT установлена от root. Ошибки: «Ошибка при сборе
+элементов для установки» или «Ошибка при установке элементов». Через Install
+New Software в такой EDT не встаёт ни один плагин. Обходной путь без p2 и без
+прав на каталог EDT — скрипт
+[`tools/edtai-user-install.sh`](tools/edtai-user-install.sh):
 
 ```bash
 bash edtai-user-install.sh /tmp/edtai.zip /opt/1C/1CE/components/1c-edt-<версия>
@@ -86,14 +79,8 @@ bash edtai-user-install.sh /tmp/edtai.zip /opt/1C/1CE/components/1c-edt-<вер�
 bash ~/.edt-ai/edt.sh
 ```
 
-- Плагин виден только при запуске через `~/.edt-ai/edt.sh`. Обычный ярлык
-  запускает EDT без него.
-- Запускайте скрипты через `bash …`: в домашнем каталоге запуск файлов может
-  быть запрещён.
-- После обновления EDT или новой версии плагина запустите
-  `edtai-user-install.sh` ещё раз: список бандлов EDT копируется на момент
-  запуска.
-- Удаление: `rm -rf ~/.edt-ai`.
+Пошаговая инструкция, разбор причин и что может исправить администратор —
+в [docs/install-astra.md](docs/install-astra.md).
 
 ### Удаление
 
