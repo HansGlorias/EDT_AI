@@ -38,10 +38,12 @@ class GitToolsTest {
         write(project.resolve(MODULE), "Процедура Сообщить1() Экспорт\n\tСообщить(\"Привет\");\nКонецПроцедуры\n");
         Files.createDirectories(temp.resolve("Вне"));
         try (Git git = Git.init().setDirectory(temp.resolve("repo").toFile()).call()) {
-            // Глобальный ~/.gitconfig машины не должен влиять на тест (подпись коммитов, gpg.format=ssh).
+            // Глобальный ~/.gitconfig машины не должен влиять на тест (подпись коммитов, gpg.format=ssh, переводы строк).
             StoredConfig config = git.getRepository().getConfig();
             config.setString("gpg", null, "format", "openpgp");
             config.setBoolean("commit", null, "gpgsign", false);
+            // На Windows-раннере autocrlf=true: откат записал бы файл с CRLF.
+            config.setBoolean("core", null, "autocrlf", false);
             config.save();
             git.add().addFilepattern(".").call();
             first = commit(git, "Первый модуль");
