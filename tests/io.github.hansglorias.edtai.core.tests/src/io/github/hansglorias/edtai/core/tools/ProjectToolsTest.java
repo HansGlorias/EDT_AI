@@ -77,6 +77,17 @@ class ProjectToolsTest {
             public Optional<String> unsavedText(String project, String path) {
                 return Optional.ofNullable(unsaved.get(project + "/" + path));
             }
+
+            @Override
+            public Map<String, String> unsavedTexts(String project) {
+                Map<String, String> texts = new HashMap<>();
+                unsaved.forEach((key, text) -> {
+                    if (key.startsWith(project + "/")) {
+                        texts.put(key.substring(project.length() + 1), text);
+                    }
+                });
+                return texts;
+            }
         };
         tools = new HashMap<>();
         for (Tool tool : ProjectTools.create(files, () -> limit)) {
@@ -167,6 +178,15 @@ class ProjectToolsTest {
         assertEquals("найдено 1", call("search_code", "query", "сообщить(", "type", "ОбщийМодуль").outcome());
         assertTrue(call("search_code", "query", "Процедура", "max_results", 1).text().contains(", показаны первые 1\n"));
         assertEquals("Не задано, что искать (query)", message("search_code", "query", " "));
+    }
+
+    @Test
+    void searchCodeSeesUnsavedChanges() throws Exception {
+        unsaved.put("Демо/src/CommonModules/Общий/Module.bsl", "Процедура Сообщить1() Экспорт\n\tНовое = ИзРедактора;\nКонецПроцедуры\n");
+
+        assertEquals("«изредактора»: совпадений — 1, модулей — 1\nОбщийМодуль.Общий.Модуль:2: Новое = ИзРедактора;",
+                call("search_code", "query", "изредактора").text());
+        assertEquals("найдено 1", call("search_code", "query", "сообщить(").outcome(), "старый текст модуля не ищется");
     }
 
     @Test

@@ -35,6 +35,8 @@ final class AgentLoop {
     static final String REPEATED = "Этот вызов с теми же аргументами уже был в этом ответе, его результат выше. Не повторяй его:"
             + " используй полученный результат или вызови с другими аргументами.";
 
+    static final String MCP_REJECTED = "сервер модели не принял их описания, ответ только со встроенными инструментами. ";
+
     static final String TOOLS_UNSUPPORTED = "Сервер не принимает инструменты — ответ без чтения проекта."
             + " Отключите «Инструменты» в настройках, чтобы не видеть это сообщение.";
 
@@ -120,20 +122,7 @@ final class AgentLoop {
                     ToolUse.Status.FAILED));
         }
         for (int step = 1;; step++) {
-            ModelReply reply;
-            try {
-                Prepared request = prepare();
-                reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
-            } catch (ModelException e) {
-                if (!e.rejectsTools() || tools.isEmpty() || !steps.isEmpty()) {
-                    throw e;
-                }
-                toolsRejected = true;
-                tools = List.of();
-                onTool.accept(new ToolUse("tools", "tools", "Инструменты", TOOLS_UNSUPPORTED, ToolUse.Status.FAILED));
-                Prepared request = prepare();
-                reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
-            }
+            ModelReply reply = request();
             if (reply.calls().isEmpty()) {
                 return ThinkFilter.strip(answer.toString()).strip();
             }
@@ -187,6 +176,35 @@ final class AgentLoop {
             extra.addAll(adapter.toolResults(results));
         }
         return extra;
+    }
+
+    /**
+     * Запрос к модели. Если сервер отклонил первый запрос из-за
+     * инструментов — сначала без инструментов MCP-серверов (часто виновата
+     * схема одного из них), потом совсем без инструментов.
+     */
+    private ModelReply request() throws Exception {
+        while (true) {
+            try {
+                Prepared request = prepare();
+                return await(client.request(connection(), request.history(), request.extra(), tools, this::text));
+            } catch (ModelException e) {
+                if (!e.rejectsTools() || tools.isEmpty() || !steps.isEmpty()) {
+                    throw e;
+                }
+                // Встроенные инструменты — без подтверждения; инструменты MCP — с ним.
+                List<Tool> builtIn = tools.stream().filter(tool -> !tool.needsApproval()).toList();
+                if (!builtIn.isEmpty() && builtIn.size() < tools.size()) {
+                    tools = builtIn;
+                    onTool.accept(new ToolUse("tools-mcp", "tools", "Инструменты MCP", MCP_REJECTED + e.getMessage(),
+                            ToolUse.Status.FAILED));
+                } else {
+                    toolsRejected = true;
+                    tools = List.of();
+                    onTool.accept(new ToolUse("tools", "tools", "Инструменты", TOOLS_UNSUPPORTED, ToolUse.Status.FAILED));
+                }
+            }
+        }
     }
 
     /** Подключение; если есть инструменты — с правилами работы с ними в системном промпте. */

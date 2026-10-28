@@ -204,6 +204,59 @@ class AgentLoopTest {
     }
 
     @Test
+    void rejectedMcpSchemaFallsBackToBuiltInTools() throws Exception {
+        Tool broken = new Tool() {
+            @Override
+            public String name() {
+                return "mcp_broken";
+            }
+
+            @Override
+            public String description() {
+                return "Инструмент MCP с кривой схемой";
+            }
+
+            @Override
+            public Map<String, Object> inputSchema() {
+                return Json.object("type", "object");
+            }
+
+            @Override
+            public boolean needsApproval() {
+                return true;
+            }
+
+            @Override
+            public String summary(Map<String, Object> input) {
+                return "MCP";
+            }
+
+            @Override
+            public Result call(Map<String, Object> input) {
+                return new Result("", "");
+            }
+        };
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (request.body().contains("mcp_broken")) {
+                response.send(400, "application/json", "{\"error\":{\"message\":\"Invalid schema for function 'mcp_broken'\","
+                        + "\"param\":\"tools[1].function.parameters\"}}");
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Со встроенными.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+        ModelChatProvider provider = new ModelChatProvider(this::connectionOpenAi, new ModelClient(), problems -> List.of(READ, broken),
+                ToolApprover.ALLOW_ALL);
+
+        assertEquals("Со встроенными.", provider.reply(HISTORY, parts::add, uses::add).get(10, TimeUnit.SECONDS));
+        assertTrue(uses.get(0).outcome().startsWith(AgentLoop.MCP_REJECTED), uses.get(0).outcome());
+        assertEquals("read_module", Json.stringAt(Json.parseObject(server.requests().get(1).body()), "tools", 0, "function", "name"));
+
+        // Следующий ответ снова пробует все инструменты: сервер не попал в «без инструментов».
+        provider.reply(HISTORY, parts::add, uses::add).get(10, TimeUnit.SECONDS);
+        assertTrue(server.requests().get(2).body().contains("mcp_broken"));
+    }
+
+    @Test
     void fullResponseWithToolCalls() throws Exception {
         server = FakeModelServer.http().handler((request, response) -> response.send(200, "application/json",
                 request.body().contains("\"role\":\"tool\"")

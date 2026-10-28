@@ -2,6 +2,7 @@ package io.github.hansglorias.edtai.core.tools;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -38,5 +39,10 @@ public interface WorkspaceFiles {
      */
     default Optional<String> unsavedText(String project, String path) {
         return Optional.empty();
+    }
+
+    /** Все файлы проекта с несохранёнными правками: путь относительно проекта → текст. */
+    default Map<String, String> unsavedTexts(String project) {
+        return Map.of();
     }
 }
