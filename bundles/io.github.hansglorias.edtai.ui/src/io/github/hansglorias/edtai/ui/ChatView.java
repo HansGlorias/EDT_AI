@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -79,6 +80,7 @@ import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
@@ -241,6 +243,7 @@ public class ChatView extends ViewPart {
     private int[] historyWeights = { 30, 70 };
     private Action historyAction;
     private ChatHistoryPanel historyPanel;
+    private ThinScrollBar scrollBar;
     private Composite top;
     private StackLayout topLayout;
     private StyledText history;
@@ -478,9 +481,11 @@ public class ChatView extends ViewPart {
     }
 
     private void createHistory(Composite parent) {
-        history = new StyledText(parent, SWT.MULTI | SWT.V_SCROLL | SWT.WRAP | SWT.READ_ONLY | SWT.BORDER);
+        // Без системной полосы прокрутки: своя, узкая (ThinScrollBar).
+        history = new StyledText(parent, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY | SWT.BORDER);
         history.setMargins(12, 10, 12, 10);
         history.setLineSpacing(2);
+        scrollBar = new ThinScrollBar(history);
         renderer = new MessageRenderer(history, new MessageRenderer.Callbacks() {
             @Override
             public void copy(String text) {
@@ -539,6 +544,11 @@ public class ChatView extends ViewPart {
             }
 
             @Override
+            public void openImage(Attachment image) {
+                ChatView.this.openImage(image);
+            }
+
+            @Override
             public void showChange(ChatMessage answer, String path) {
                 ChatView.this.showChanges(answer, path);
             }
@@ -559,6 +569,7 @@ public class ChatView extends ViewPart {
         });
         history.addListener(SWT.MouseMove, event -> history.setCursor(actionAt(event.x, event.y) != null ? handCursor : null));
         // Фон блока кода — на всю ширину ленты, а не только под символами.
+        history.addPaintObjectListener(event -> renderer.paintObject(event));
         history.addLineBackgroundListener(event -> {
             if (isInCode(event.lineOffset)) {
                 event.lineBackground = renderer.codeBackground();
@@ -722,7 +733,7 @@ public class ChatView extends ViewPart {
                 openPreferences();
             }
         };
-        preferencesAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_DEF_VIEW));
+        preferencesAction.setImageDescriptor(Icons.descriptor(Icons.SETTINGS));
 
         autoAction = new Action(AUTO_MODE, IAction.AS_CHECK_BOX) {
             @Override
@@ -1407,6 +1418,27 @@ public class ChatView extends ViewPart {
         return menu;
     }
 
+    /** Открывает приложенную картинку в программе системы: файл во временном каталоге. */
+    private void openImage(Attachment image) {
+        try {
+            String name = image.name().replaceAll("[\\\\/:*?\"<>|]", "_");
+            Path file = Files.createTempDirectory("edtai-").resolve(name.isBlank() ? "image.png" : name);
+            Files.write(file, Base64.getDecoder().decode(image.data()));
+            file.toFile().deleteOnExit();
+            file.getParent().toFile().deleteOnExit();
+            openFile.accept(file);
+        } catch (IOException | IllegalArgumentException e) {
+            showNotice("Не удалось открыть картинку: " + e.getMessage());
+        }
+    }
+
+    /** Открыть файл программой системы; тесты подменяют. */
+    Consumer<Path> openFile = file -> {
+        if (!Program.launch(file.toString())) {
+            showNotice("Нет программы для просмотра " + file.getFileName());
+        }
+    };
+
     /** Диалог выбора файлов: картинки и текстовые файлы. */
     private void chooseFiles() {
         FileDialog dialog = new FileDialog(getSite().getShell(), SWT.OPEN | SWT.MULTI);
@@ -2083,6 +2115,9 @@ public class ChatView extends ViewPart {
     public void dispose() {
         markTabBusy(false);
         contextBar.clear();
+        if (renderer != null) {
+            renderer.dispose();
+        }
         session.removeListener(chatListener);
         session.cancel();
         // Закрытие сессий MCP — запросы по сети, не в UI-потоке.
@@ -2105,6 +2140,10 @@ public class ChatView extends ViewPart {
 
     ChatStore chats() {
         return chats;
+    }
+
+    ThinScrollBar scrollBar() {
+        return scrollBar;
     }
 
     ChatHistoryPanel historyPanel() {

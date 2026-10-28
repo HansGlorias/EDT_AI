@@ -1,20 +1,31 @@
 package io.github.hansglorias.edtai.ui;
 
+import java.io.ByteArrayInputStream;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.eclipse.jface.preference.JFacePreferences;
-import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.resource.FontRegistry;
+import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.SWTException;
+import org.eclipse.swt.custom.PaintObjectEvent;
 import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.GlyphMetrics;
+import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.RGB;
 
 import io.github.hansglorias.edtai.core.chat.AnswerParts;
@@ -98,7 +109,26 @@ final class MessageRenderer {
 
         /** «показать» / «свернуть» у группы вызовов. */
         void toggle(ChatMessage answer, int group);
+
+        /** Открыть приложенную картинку целиком. */
+        void openImage(Attachment image);
     }
+
+    /** Миниатюра картинки в ленте: место под неё — символ с {@link GlyphMetrics}, рисует её вид. */
+    record Thumbnail(Image image, int width, int height, Runnable open) implements Runnable {
+        @Override
+        public void run() {
+            open.run();
+        }
+    }
+
+    /** Предел миниатюры: крупнее — уменьшается с сохранением пропорций. */
+    static final int THUMB_WIDTH = 240;
+    static final int THUMB_HEIGHT = 140;
+    private static final int THUMB_GAP = 8;
+    /** Символ-заглушка под миниатюру. */
+    static final char OBJECT = '\uFFFC';
+    private final Map<Attachment, Thumbnail> thumbnails = new HashMap<>();
 
     private final StyledText history;
     private final Callbacks callbacks;
@@ -309,10 +339,27 @@ final class MessageRenderer {
         text.append('\n');
     }
 
-    /** Строка «Вложения:» с подписями файлов и скриншотов. */
+    /** Миниатюры картинок (щелчок — открыть целиком) и строка «Вложения:» с подписями. */
     private void attachments(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles) {
         if (message.attachments().isEmpty()) {
             return;
+        }
+        boolean shown = false;
+        for (Attachment image : message.images()) {
+            Thumbnail thumbnail = thumbnail(image);
+            if (thumbnail != null) {
+                StyleRange place = new StyleRange();
+                place.start = offset + text.length();
+                place.length = 1;
+                place.metrics = new GlyphMetrics(thumbnail.height() + 2, 0, thumbnail.width() + THUMB_GAP);
+                place.data = thumbnail;
+                styles.add(place);
+                text.append(OBJECT);
+                shown = true;
+            }
+        }
+        if (shown) {
+            text.append('\n');
         }
         String line = FILES + message.attachments().stream().map(Attachment::label).collect(Collectors.joining("; "));
         styles.add(style(offset + text.length(), line.length(), metaColor(), SWT.NORMAL));
@@ -367,6 +414,54 @@ final class MessageRenderer {
 
     private static StyleRange style(int start, int length, Color foreground, int fontStyle) {
         return new StyleRange(start, length, foreground, null, fontStyle);
+    }
+
+    /** Миниатюра картинки; не картинка (повреждённые данные) — null. */
+    private Thumbnail thumbnail(Attachment image) {
+        Thumbnail cached = thumbnails.get(image);
+        if (cached != null && !cached.image().isDisposed()) {
+            return cached;
+        }
+        try {
+            ImageData data = new ImageLoader().load(new ByteArrayInputStream(Base64.getDecoder().decode(image.data())))[0];
+            double scale = Math.min(1.0, Math.min((double) THUMB_WIDTH / data.width, (double) THUMB_HEIGHT / data.height));
+            int width = Math.max(1, (int) Math.round(data.width * scale));
+            int height = Math.max(1, (int) Math.round(data.height * scale));
+            Image full = new Image(history.getDisplay(), data);
+            Image small = new Image(history.getDisplay(), width, height);
+            GC gc = new GC(small);
+            try {
+                gc.setBackground(history.getBackground());
+                gc.fillRectangle(0, 0, width, height);
+                gc.setAntialias(SWT.ON);
+                gc.setInterpolation(SWT.HIGH);
+                gc.drawImage(full, 0, 0, data.width, data.height, 0, 0, width, height);
+            } finally {
+                gc.dispose();
+                full.dispose();
+            }
+            Thumbnail thumbnail = new Thumbnail(small, width, height, () -> callbacks.openImage(image));
+            thumbnails.put(image, thumbnail);
+            return thumbnail;
+        } catch (SWTException | IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
+            return null;
+        }
+    }
+
+    /** Рисует миниатюру на её месте в ленте, в тонкой рамке. */
+    void paintObject(PaintObjectEvent event) {
+        if (event.style.data instanceof Thumbnail thumbnail && !thumbnail.image().isDisposed()) {
+            // event.y — верх места под эту картинку (не строки): картинки разной высоты стоят по нижнему краю.
+            event.gc.drawImage(thumbnail.image(), event.x + 1, event.y + 1);
+            event.gc.setForeground(metaColor());
+            event.gc.drawRectangle(event.x, event.y, thumbnail.width() + 1, thumbnail.height() + 1);
+        }
+    }
+
+    /** Освобождает картинки миниатюр. */
+    void dispose() {
+        thumbnails.values().forEach(thumbnail -> thumbnail.image().dispose());
+        thumbnails.clear();
     }
 
     private static final String NAME_FONT = "io.github.hansglorias.edtai.ui.nameFont";

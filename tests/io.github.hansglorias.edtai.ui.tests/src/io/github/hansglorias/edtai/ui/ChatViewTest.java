@@ -13,6 +13,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.jface.preference.PreferenceDialog;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.StyledText;
+import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.junit.jupiter.api.Test;
@@ -117,6 +120,45 @@ class ChatViewTest extends AbstractChatTest {
         waitUntil(() -> !view.session().isBusy() && view.history().getText().contains("строка 159"));
         view.refresh();
         assertEquals(0, view.history().getTopPixel());
+    }
+
+    @Test
+    void thinScrollBarFollowsAndScrolls() throws Exception {
+        StringBuilder answer = new StringBuilder();
+        for (int i = 0; i < 120; i++) {
+            answer.append("строка ").append(i).append('\n');
+        }
+        answering(List.of(answer.toString()));
+        ChatView view = showView();
+        assertFalse(view.scrollBar().isShown(), "пустая лента — полосы нет");
+
+        ask(view, QUESTION);
+        waitUntil(() -> view.scrollBar().isShown(), () -> "полоса не появилась");
+        StyledText history = view.history();
+        waitUntil(() -> history.getTopPixel() > 0, () -> "лента не прокрутилась вниз");
+        assertEquals(ThinScrollBar.WIDTH, view.scrollBar().control().getSize().x);
+        settle();
+        Rectangle bottom = view.scrollBar().thumbBounds();
+        assertTrue(bottom.y + bottom.height >= view.scrollBar().control().getSize().y - 2, "ползунок внизу: " + bottom);
+
+        Event wheel = new Event();
+        wheel.count = 3;
+        int before = history.getTopPixel();
+        history.notifyListeners(SWT.MouseVerticalWheel, wheel);
+        assertEquals(before - 3 * history.getLineHeight(), history.getTopPixel(), "колесо прокручивает вверх");
+        assertFalse(wheel.doit);
+
+        Event down = new Event();
+        down.button = 1;
+        down.y = 0;
+        view.scrollBar().control().notifyListeners(SWT.MouseDown, down);
+        Event move = new Event();
+        move.y = 0;
+        view.scrollBar().control().notifyListeners(SWT.MouseMove, move);
+        view.scrollBar().control().notifyListeners(SWT.MouseUp, new Event());
+        assertEquals(0, history.getTopPixel(), "щелчок и протяжка вверх — к началу");
+        settle();
+        assertEquals(0, view.scrollBar().thumbBounds().y);
     }
 
     private static boolean isLastLineVisible(ChatView view) {

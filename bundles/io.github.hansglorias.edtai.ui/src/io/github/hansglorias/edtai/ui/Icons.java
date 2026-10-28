@@ -18,6 +18,7 @@ final class Icons {
     static final String AUTO = "auto";
     static final String NEW_CHAT = "new_chat";
     static final String SEND = "send";
+    static final String SETTINGS = "settings";
 
     private static final String PREFIX = "io.github.hansglorias.edtai.ui.icons/";
 
