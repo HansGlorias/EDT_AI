@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -34,6 +35,7 @@ import org.eclipse.compare.CompareUI;
 import org.eclipse.core.resources.IContainer;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceChangeEvent;
 import org.eclipse.core.resources.IResourceChangeListener;
@@ -126,6 +128,8 @@ import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
+import io.github.hansglorias.edtai.core.skills.Skill;
+import io.github.hansglorias.edtai.core.skills.SkillLibrary;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
 import io.github.hansglorias.edtai.core.tools.EditTools;
 import io.github.hansglorias.edtai.core.tools.TextChange;
@@ -133,6 +137,7 @@ import io.github.hansglorias.edtai.core.tools.ToolException;
 import io.github.hansglorias.edtai.core.tools.GitTools;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
+import io.github.hansglorias.edtai.core.tools.SkillTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolApprover.Decision;
 import io.github.hansglorias.edtai.core.tools.ToolSource;
@@ -176,6 +181,8 @@ public class ChatView extends ViewPart {
     /** Файлы больше не читаем: картинка всё равно не пройдёт, текст — тоже. */
     private static final long MAX_FILE_BYTES = 10_000_000;
     private static final DateTimeFormatter SCREENSHOT_TIME = DateTimeFormatter.ofPattern("HHmmss");
+    static final String SKILL_PROMPT = "Создай скилл по описанию ниже. Следуй приложенному скиллу create-skill; если описание"
+            + " неясно — сначала задай вопросы; сохрани инструментом save_skill.";
     /** Придумывать ли название чата после первого ответа (запрос к модели). Хранится в настройках рабочей области. */
     static final String GENERATE_TITLES = "generateChatTitles";
 
@@ -209,10 +216,16 @@ public class ChatView extends ViewPart {
                 @Override
                 public String brief() {
                     String brief = ProjectBrief.describe(EclipseWorkspaceFiles.current());
+                    if (SettingsStore.workspace().load().toolsEnabled()) {
+                        brief = (brief + "\n\n" + skills.prompt()).strip();
+                    }
                     return isReadOnly() ? (brief + "\n\n" + ProjectBrief.READ_ONLY_RULES).strip() : brief;
                 }
             }, this::approve));
     private final Path stateLocation = Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath();
+    /** Скиллы: встроенные, свои (в рабочей области) и открытых проектов. */
+    private final SkillLibrary skills = new SkillLibrary(stateLocation.resolve("skills"), ChatView::projectSkillDirectories,
+            Arrays.stream(SlashCommand.values()).map(command -> command.text().substring(1)).collect(Collectors.toSet()));
     /** Все диалоги; {@link #chatId} — открытый. */
     private final ChatStore chats = new ChatStore(stateLocation.resolve(CHATS_DIRECTORY));
     private String chatId;
@@ -650,7 +663,7 @@ public class ChatView extends ViewPart {
         });
         input.addListener(SWT.Resize, event -> updateInputHeight());
         input.setMenu(inputMenu());
-        inputAssist = new InputAssist(input, file -> attach(AttachedContext.wholeFile(file)));
+        inputAssist = new InputAssist(input, file -> attach(AttachedContext.wholeFile(file)), skills::all);
         // Пока пользователь правил модуль, строки фрагментов могли сдвинуться.
         input.addListener(SWT.FocusIn, event -> {
             if (!contextBar.isEmpty()) {
@@ -779,6 +792,12 @@ public class ChatView extends ViewPart {
             @Override
             public void run() {
                 deleteChat();
+            }
+        });
+        menu.add(new Action("Скиллы…") {
+            @Override
+            public void run() {
+                showSkills();
             }
         });
         menu.add(new Separator());
@@ -1316,8 +1335,10 @@ public class ChatView extends ViewPart {
             case COMMIT -> COMMIT_PROMPT;
             case EXPLAIN -> EXPLAIN_PROMPT;
             case TESTS -> TESTS_PROMPT;
+            case SKILL -> SKILL_PROMPT;
             default -> null;
         };
+        Skill skill = command == null ? invokedSkill(text) : null;
         if (command != null && prompt == null) {
             input.setText("");
             run(command.command());
@@ -1325,6 +1346,20 @@ public class ChatView extends ViewPart {
         }
         if (session.isBusy()) {
             return;
+        }
+        List<Attachment> extra = new ArrayList<>();
+        if (skill != null) {
+            // Инструкция скилла — вложением: в ленте видно «скилл …», модель получает её целиком.
+            String argument = text.strip().substring(skill.command().length()).strip();
+            text = argument.isEmpty() ? "Выполни скилл «" + skill.name() + "»." : argument;
+            extra.add(Attachment.skill(skill.name(), skill.body()));
+        }
+        if (command != null && command.command() == SlashCommand.SKILL) {
+            if (command.argument().isEmpty()) {
+                showNotice("Опишите после /skill, что должен делать скилл: «/skill оформление печатных форм по нашему стандарту»");
+                return;
+            }
+            skills.find("create-skill").ifPresent(guide -> extra.add(Attachment.skill(guide.name(), guide.body())));
         }
         if (command != null) {
             boolean aboutCode = command.command() == SlashCommand.EXPLAIN || command.command() == SlashCommand.TESTS;
@@ -1338,9 +1373,48 @@ public class ChatView extends ViewPart {
             text = command.argument().isEmpty() ? prompt : prompt + "\n\n" + command.argument();
         }
         List<ContextItem> context = contextBar.snapshot();
+        List<Attachment> attachments = new ArrayList<>(contextBar.attachments());
+        attachments.addAll(extra);
         input.setText("");
-        session.send(text, context, contextBar.attachments());
+        session.send(text, context, attachments);
         contextBar.clear();
+    }
+
+    /** Скилл, если сообщение начинается с его команды: {@code /query-optimize …}. */
+    private Skill invokedSkill(String text) {
+        String stripped = text.strip();
+        if (!stripped.startsWith("/") || stripped.length() < 2) {
+            return null;
+        }
+        String word = stripped.substring(1).split("\\s", 2)[0];
+        return skills.find(word).orElse(null);
+    }
+
+    /** {@code /skills}: список в окне, из него — открыть папку своих скиллов. */
+    private void showSkills() {
+        if (skillsDialog.test(skills.describe())) {
+            try {
+                Files.createDirectories(skills.userDirectory());
+                openFile.accept(skills.userDirectory());
+            } catch (IOException e) {
+                showNotice("Не удалось открыть папку скиллов: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Показ списка скиллов; {@code true} — открыть папку своих. Тесты подменяют. */
+    Predicate<String> skillsDialog = text -> new MessageDialog(getSite().getShell(), "Скиллы", null, text, MessageDialog.INFORMATION,
+            0, "Закрыть", "Открыть папку своих скиллов").open() == 1;
+
+    /** Каталоги скиллов открытых проектов: {@code <проект>/.edtai/skills}. */
+    private static List<Path> projectSkillDirectories() {
+        List<Path> directories = new ArrayList<>();
+        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
+            if (project.isOpen() && project.getLocation() != null) {
+                directories.add(project.getLocation().toFile().toPath().resolve(SkillLibrary.PROJECT_DIRECTORY));
+            }
+        }
+        return directories;
     }
 
     /** Команда поля ввода, кроме тех, что отправляют вопрос. */
@@ -1352,6 +1426,7 @@ public class ChatView extends ViewPart {
             case READONLY -> setReadOnly(!isReadOnly());
             case COMPACT -> compact();
             case MCP -> showMcpStatus();
+            case SKILLS -> showSkills();
             default -> throw new IllegalArgumentException(command.text());
         }
     }
@@ -2066,6 +2141,7 @@ public class ChatView extends ViewPart {
         EclipseWorkspaceFiles files = EclipseWorkspaceFiles.current();
         List<Tool> tools = new ArrayList<>(ProjectTools.create(files, current::contextLimit));
         tools.addAll(EditTools.create(files, pendingChanges::add));
+        tools.addAll(SkillTools.create(skills));
         try {
             tools.addAll(GitTools.create(files, current::contextLimit));
         } catch (LinkageError e) {

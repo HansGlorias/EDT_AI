@@ -6,14 +6,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import org.eclipse.core.runtime.preferences.InstanceScope;
+import org.eclipse.jface.fieldassist.IContentProposal;
 import org.junit.jupiter.api.Test;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ChatStore;
+import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 /** Команды через «/» и строка состояния: что делает модель, токены. */
@@ -111,6 +116,49 @@ class ChatCommandsTest extends AbstractChatTest {
         } catch (IOException e) {
             return e.toString();
         }
+    }
+
+    @Test
+    void skillsAreInvokedListedAndCreated() throws Exception {
+        answering(List.of("Готово."));
+        ChatView view = showView();
+
+        IContentProposal[] proposals = view.inputAssist().proposals("/q", 2);
+        assertTrue(Arrays.stream(proposals).anyMatch(proposal -> proposal.getContent().equals("/query-optimize")),
+                Arrays.toString(proposals));
+
+        ask(view, "/query-optimize  проверь запрос в ОбщийМодуль.Склад");
+        ChatMessage question = view.session().messages().get(0);
+        assertEquals("проверь запрос в ОбщийМодуль.Склад", question.text());
+        assertEquals(List.of("скилл query-optimize"), question.attachments().stream().map(Attachment::label).toList());
+        Map<String, Object> request = Json.parseObject(server.requests().get(0).body());
+        List<Object> messages = Json.asList(request.get("messages"));
+        assertTrue(Json.stringAt(messages.get(0), "content").contains("Скиллы — проверенные инструкции"), "список скиллов в промпте");
+        String sent = Json.stringAt(messages.get(messages.size() - 1), "content");
+        assertTrue(sent.startsWith("Выполни задачу по скиллу «query-optimize» — инструкция:\n```markdown\n# Оптимизация запроса 1С"), sent);
+        assertTrue(view.history().getText().contains(MessageRenderer.FILES + "скилл query-optimize"), view.history().getText());
+
+        ask(view, "/method-docs");
+        assertEquals("Выполни скилл «method-docs».", view.session().messages().get(2).text());
+
+        view.input().setText("/skill");
+        view.send();
+        assertTrue(view.status().getText().startsWith("Опишите после /skill"), view.status().getText());
+        ask(view, "/skill оформление печатных форм");
+        ChatMessage create = view.session().messages().get(4);
+        assertEquals(ChatView.SKILL_PROMPT + "\n\nоформление печатных форм", create.text());
+        assertEquals("create-skill", create.attachments().get(0).name());
+
+        List<String> shown = new ArrayList<>();
+        List<java.nio.file.Path> opened = new ArrayList<>();
+        view.skillsDialog = text -> shown.add(text);
+        view.openFile = opened::add;
+        view.input().setText("/skills");
+        view.send();
+        assertTrue(shown.get(0).startsWith("Встроенные:\n  /client-server — "), shown.get(0));
+        assertEquals(1, opened.size(), "«Открыть папку своих скиллов»");
+        assertTrue(opened.get(0).endsWith("skills"), opened.toString());
+        assertEquals(3, server.requests().size(), "/skills модели не отправляется");
     }
 
     @Test

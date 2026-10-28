@@ -3,7 +3,9 @@ package io.github.hansglorias.edtai.ui;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.jface.fieldassist.ContentProposal;
@@ -16,10 +18,11 @@ import org.eclipse.swt.widgets.Text;
 import io.github.hansglorias.edtai.core.chat.InputCompletion;
 import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.context.ModuleSearch;
+import io.github.hansglorias.edtai.core.skills.Skill;
 
 /**
  * Подсказки в поле ввода: после {@code @} — модули проекта (выбранный
- * прикрепляется к вопросу целиком), {@code /} в начале — команды.
+ * прикрепляется к вопросу целиком), {@code /} в начале — команды и скиллы.
  */
 final class InputAssist {
 
@@ -39,14 +42,19 @@ final class InputAssist {
 
     private final Text input;
     private final Consumer<IFile> attach;
+    private final Supplier<List<Skill>> skills;
     private final ContentProposalAdapter adapter;
     private List<IFile> modules;
     private long modulesTime;
 
-    /** @param attach прикрепляет выбранный модуль к вопросу */
-    InputAssist(Text input, Consumer<IFile> attach) {
+    /**
+     * @param attach прикрепляет выбранный модуль к вопросу
+     * @param skills скиллы: их команды — в подсказках после встроенных
+     */
+    InputAssist(Text input, Consumer<IFile> attach, Supplier<List<Skill>> skills) {
         this.input = input;
         this.attach = attach;
+        this.skills = skills;
         adapter = new ContentProposalAdapter(input, new TextContentAdapter(), this::proposals, null, new char[] { '@', '/' });
         adapter.setAutoActivationDelay(100);
         adapter.setProposalAcceptanceStyle(ContentProposalAdapter.PROPOSAL_IGNORE);
@@ -68,6 +76,13 @@ final class InputAssist {
         if (completion.kind() == InputCompletion.Kind.COMMAND) {
             for (SlashCommand command : SlashCommand.matching(completion.prefix())) {
                 proposals.add(new ContentProposal(command.text(), command.text() + " — " + command.description(), null));
+            }
+            String prefix = completion.prefix().toLowerCase(Locale.ROOT);
+            for (Skill skill : skills.get()) {
+                if (skill.name().startsWith(prefix)) {
+                    proposals.add(new ContentProposal(skill.command(), skill.command() + " — скилл: " + skill.description(),
+                            skill.description()));
+                }
             }
         } else {
             ModuleSearch search = new ModuleSearch(completion.prefix());

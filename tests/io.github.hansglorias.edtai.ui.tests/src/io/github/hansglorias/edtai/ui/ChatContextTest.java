@@ -43,6 +43,7 @@ import org.junit.jupiter.api.Test;
 import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.json.Json;
+import io.github.hansglorias.edtai.core.skills.SkillLibrary;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
@@ -309,7 +310,8 @@ class ChatContextTest extends AbstractChatTest {
 
         assertEquals("смотри @Справочник.Номенклатура.МодульОбъекта ", view.input().getText());
         assertEquals(List.of("Справочник.Номенклатура.МодульОбъекта"), view.contextBar().labels());
-        assertEquals(SlashCommand.values().length, view.inputAssist().proposals("/", 1).length);
+        assertEquals(SlashCommand.values().length + SkillLibrary.BUILT_IN.size(), view.inputAssist().proposals("/", 1).length,
+                "команды и встроенные скиллы");
         assertEquals(0, view.inputAssist().proposals("a/", 2).length);
     }
 

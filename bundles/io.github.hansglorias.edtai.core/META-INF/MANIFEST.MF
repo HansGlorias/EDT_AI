@@ -30,5 +30,6 @@ Export-Package: io.github.hansglorias.edtai.core.chat,
  io.github.hansglorias.edtai.core.markdown,
  io.github.hansglorias.edtai.core.mcp,
  io.github.hansglorias.edtai.core.settings,
+ io.github.hansglorias.edtai.core.skills,
  io.github.hansglorias.edtai.core.tls,
  io.github.hansglorias.edtai.core.tools
