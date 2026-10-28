@@ -60,6 +60,14 @@ class ChatCommandsTest extends AbstractChatTest {
         view.input().setText("Считай");
         view.send();
         waitUntil(() -> view.status().getText().matches("test-model · (думает|пишет ответ)… \\d+ с"), () -> view.status().getText());
+        // Новый чат — в истории сразу, пока ответ ещё идёт.
+        waitUntil(() -> {
+            try {
+                return view.session().isBusy() && view.chats().list().size() == 1;
+            } catch (java.io.IOException e) {
+                return false;
+            }
+        }, () -> "чат не сохранён до конца ответа");
         waitUntil(() -> !view.session().isBusy());
         settle();
 

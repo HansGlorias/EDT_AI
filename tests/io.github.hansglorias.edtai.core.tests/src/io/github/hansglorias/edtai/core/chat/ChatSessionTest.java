@@ -297,8 +297,8 @@ class ChatSessionTest {
         CompletableFuture<ChatMessage> reply = session.send("что в проекте?");
 
         provider.tool.accept(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "", ToolUse.Status.RUNNING));
-        assertEquals(List.of(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "", ToolUse.Status.RUNNING)),
-                last(session).tools());
+        assertEquals(List.of(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "", ToolUse.Status.RUNNING, 0)),
+                last(session).tools(), "вызов до текста — в начале ответа");
         assertEquals(Status.STREAMING, last(session).status());
         provider.tool.accept(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "Демо 1.0", ToolUse.Status.DONE));
         provider.tool.accept(new ToolUse("2", "read_module", "Читает модуль Х", "", ToolUse.Status.RUNNING));
@@ -309,6 +309,37 @@ class ChatSessionTest {
         assertEquals(List.of("Смотрит сведения о проекте — Демо 1.0", "Читает модуль Х — ошибка: прервано"),
                 last(session).tools().stream().map(ToolUse::label).toList());
         assertEquals("Ответ", last(session).text());
+    }
+
+    @Test
+    void toolPositionFollowsTextAndSurvivesStrippedAnswer() throws Exception {
+        ToolProvider provider = new ToolProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> reply = session.send("правь");
+
+        provider.text.accept("\n\nСмотрю.");
+        provider.tool.accept(new ToolUse("1", "read_module", "Читает модуль Х", "", ToolUse.Status.RUNNING));
+        provider.tool.accept(new ToolUse("1", "read_module", "Читает модуль Х", "10 строк", ToolUse.Status.DONE));
+        provider.text.accept("\n\nГотово.");
+        provider.reply.complete("Смотрю.\n\nГотово.");
+        reply.get(TIMEOUT, TimeUnit.SECONDS);
+
+        ChatMessage answer = last(session);
+        assertEquals(7, answer.tools().get(0).at(), "сдвинут на убранные в начале переводы строк");
+        assertEquals(List.of("Смотрю.", "Читает модуль Х — 10 строк", "Готово."), AnswerParts.split(answer.text(), answer.tools()).stream()
+                .map(part -> part.isText() ? part.text() : part.tools().get(0).label()).toList());
+    }
+
+    @Test
+    void answerPartsKeepLinesWhole() {
+        ToolUse early = new ToolUse("1", "a", "Первый", "", ToolUse.Status.DONE, -1);
+        ToolUse middle = new ToolUse("2", "b", "Второй", "", ToolUse.Status.DONE, 3);
+        ToolUse end = new ToolUse("3", "c", "Третий", "", ToolUse.Status.DONE, 99);
+        List<AnswerParts.Part> parts = AnswerParts.split("Строка раз\nСтрока два", List.of(early, middle, end));
+
+        assertEquals(List.of("[Первый]", "Строка раз", "[Второй]", "Строка два", "[Третий]"), parts.stream()
+                .map(part -> part.isText() ? part.text() : part.tools().stream().map(ToolUse::summary).toList().toString()).toList());
+        assertEquals(List.of(), AnswerParts.split("", List.of()));
     }
 
     @Test
@@ -422,6 +453,7 @@ class ChatSessionTest {
 
         Consumer<String> text;
         Consumer<ToolUse> tool;
+        CompletableFuture<String> reply;
 
         @Override
         public String name() {
@@ -437,7 +469,8 @@ class ChatSessionTest {
         public CompletableFuture<String> reply(List<ChatMessage> request, Consumer<String> onText, Consumer<ToolUse> onTool) {
             text = onText;
             tool = onTool;
-            return new CompletableFuture<>();
+            reply = new CompletableFuture<>();
+            return reply;
         }
     }
 

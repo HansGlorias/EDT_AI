@@ -89,8 +89,9 @@ class ChatToolsTest extends AbstractChatTest {
         assertTrue(result.contains("2  \tСообщить(\"Тест\");"), result);
 
         String transcript = view.history().getText();
-        assertTrue(transcript.contains("\n" + MessageRenderer.TOOL + "Читает модуль ОбщийМодуль.Тест — строки 1–3 из 3\n"
-                + "Посмотрю модуль.\n\nВ модуле одна процедура Тест."), transcript);
+        // Вызов — между текстом шагов, там, где модель его сделала.
+        assertTrue(transcript.contains("\nПосмотрю модуль.\n\n" + MessageRenderer.TOOL
+                + "Читает модуль ОбщийМодуль.Тест — строки 1–3 из 3\nВ модуле одна процедура Тест."), transcript);
         assertEquals(List.of(ToolUse.Status.DONE), view.session().messages().get(1).tools().stream().map(ToolUse::status).toList());
         Screenshots.capture(view.control(), "tools");
 
@@ -140,6 +141,8 @@ class ChatToolsTest extends AbstractChatTest {
         // Правки ответа — дифф и откат одной ссылкой.
         waitUntil(() -> view.linkAction(MessageRenderer.REVERT) != null, () -> view.history().getText());
         assertTrue(view.linkAction(MessageRenderer.CHANGES) != null);
+        assertTrue(view.history().getText().contains(MessageRenderer.CHANGED + "Тест/Module.bsl"), view.history().getText());
+        assertTrue(view.linkAction("Тест/Module.bsl") != null, "файл в строке «Изменено:» — ссылка на сравнение");
         Screenshots.capture(view.control(), "model-edit");
         view.linkAction(MessageRenderer.CHANGES).run();
         waitUntil(() -> java.util.Arrays.stream(page.getEditorReferences())

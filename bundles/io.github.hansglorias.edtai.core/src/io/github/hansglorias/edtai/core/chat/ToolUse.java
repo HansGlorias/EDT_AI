@@ -11,8 +11,10 @@ import java.util.Set;
  * @param name    имя инструмента
  * @param summary что делается, по-русски: «Читает модуль ОбщийМодуль.Х.Модуль»
  * @param outcome итог коротко: «строки 1–120 из 120»; при ошибке — её текст
+ * @param at      сколько символов текста ответа было написано до вызова: там строка вызова и стоит в ленте;
+ *                -1 — не известно (старые диалоги), строка над текстом
  */
-public record ToolUse(String id, String name, String summary, String outcome, Status status) {
+public record ToolUse(String id, String name, String summary, String outcome, Status status, int at) {
 
     public enum Status {
         /** Ждёт, пока пользователь разрешит или отклонит вызов. */
@@ -25,6 +27,14 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         summary = Objects.requireNonNullElse(summary, name);
         outcome = Objects.requireNonNullElse(outcome, "");
         status = Objects.requireNonNullElse(status, Status.DONE);
+    }
+
+    public ToolUse(String id, String name, String summary, String outcome, Status status) {
+        this(id, name, summary, outcome, status, -1);
+    }
+
+    public ToolUse withAt(int newAt) {
+        return new ToolUse(id, name, summary, outcome, status, newAt);
     }
 
     /** Служебные строки ленты (сервер не подключился, окно модели), а не вызовы инструментов. */
