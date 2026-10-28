@@ -54,6 +54,37 @@ Update-site после сборки:
   `eclipse/updates/4.30`.
 - Если нет JDK 17 — поставь (`apt-get install openjdk-17-jdk-headless`) и
   собирай с `JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`.
+- `repo.maven.apache.org` через прокси облака может отвечать 429 — тогда
+  ни wrapper, ни плагины не скачиваются. Обход только для своей сессии, в
+  репозиторий не коммитить:
+  - wrapper качает Maven с зеркала, если задан
+    `MVNW_REPOURL=https://repo1.maven.org/maven2`;
+  - зависимости — через зеркало в `~/.m2/settings.xml`:
+
+    ```xml
+    <settings>
+      <mirrors>
+        <mirror>
+          <id>repo1</id>
+          <mirrorOf>central</mirrorOf>
+          <url>https://repo1.maven.org/maven2</url>
+        </mirror>
+      </mirrors>
+    </settings>
+    ```
+- Если в контейнере нет UTF-8-локали (`LANG` пуст), JVM не создаёт
+  каталоги с кириллицей и UI-тесты с `src/CommonModules/Тест/…` падают с
+  `InvalidPathException`. Собирай с `LANG=C.UTF-8` (в CI задано так же).
+- Вся сборка с тестами одной строкой:
+
+  ```bash
+  export LANG=C.UTF-8 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 MVNW_REPOURL=https://repo1.maven.org/maven2
+  xvfb-run -a -s "-screen 0 1280x1024x24" ./mvnw -B -ntp verify
+  ```
+
+  Повторно, когда всё уже скачано, быстрее с `-o` (offline). Модуль
+  отдельно — с `-pl releng/edtai.target,<модуль>`: без target platform
+  Tycho не собирает.
 - Работай в своей ветке, PR в `main`.
 
 ## Коммиты
