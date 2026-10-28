@@ -133,6 +133,14 @@ class GitToolsTest {
     }
 
     @Test
+    void headTextIsTheLastCommit() throws Exception {
+        assertEquals("Процедура Сообщить1() Экспорт\r\n\tСообщить(\"Пока\");\r\nКонецПроцедуры\r\n",
+                GitTools.headText("Демо", project, MODULE, "текст\r\nс CRLF"), "переводы строк — как у файла сейчас");
+        assertEquals(null, GitTools.headText("Демо", project, "src/CommonModules/Новый/Module.bsl", "// новый\n"));
+        assertThrows(ToolException.class, () -> GitTools.headText("Вне", temp.resolve("Вне"), "x.bsl", null));
+    }
+
+    @Test
     void projectOutsideRepository() {
         ToolException error = assertThrows(ToolException.class, () -> tools.get("git_status").call(Map.of("project", "Вне")));
         assertEquals("Проект «Вне» не в git-репозитории", error.getMessage());

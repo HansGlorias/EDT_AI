@@ -4,13 +4,24 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IProjectDescription;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.StoredConfig;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Event;
@@ -36,6 +47,12 @@ class ChatMcpTest extends AbstractChatTest {
     private FakeModelServer mcp;
     /** Вызванные на MCP-сервере инструменты. */
     private final List<String> calls = new CopyOnWriteArrayList<>();
+    /** Что делает инструмент на сервере, кроме ответа: например, правит файл, как EDT-MCP. */
+    private volatile ThrowingRunnable onCall = () -> { };
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
 
     @BeforeEach
     void startMcp() throws Exception {
@@ -190,6 +207,55 @@ class ChatMcpTest extends AbstractChatTest {
         assertTrue(transcript.contains("Отвечаю без MCP."), transcript);
     }
 
+    @Test
+    void mcpEditsAreShownAndRevertedAgainstGit() throws Exception {
+        Path directory = Files.createTempDirectory("edtai-mcp-git");
+        Path form = directory.resolve("src/Catalogs/Товары/Forms/ФормаСписка/Form.form");
+        Files.createDirectories(form.getParent());
+        Files.writeString(form, "<form>\n<field>Скачать</field>\n</form>\n");
+        try (Git git = Git.init().setDirectory(directory.toFile()).call()) {
+            StoredConfig config = git.getRepository().getConfig();
+            config.setString("gpg", null, "format", "openpgp");
+            config.setBoolean("commit", null, "gpgsign", false);
+            config.setBoolean("core", null, "autocrlf", false);
+            config.save();
+            git.add().addFilepattern(".").call();
+            git.commit().setMessage("форма").setAuthor("Тестов", "test@example.invalid")
+                    .setCommitter("Тестов", "test@example.invalid").setSign(false).call();
+        }
+        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject("McpGit");
+        IProjectDescription description = ResourcesPlugin.getWorkspace().newProjectDescription("McpGit");
+        description.setLocation(new org.eclipse.core.runtime.Path(directory.toString()));
+        project.create(description, null);
+        project.open(null);
+        try {
+            IFile file = project.getFile("src/Catalogs/Товары/Forms/ФормаСписка/Form.form");
+            onCall = () -> file.setContents(new ByteArrayInputStream("<form>\n</form>\n".getBytes(StandardCharsets.UTF_8)),
+                    true, false, null);
+            ChatView view = configured(mcp.url() + "/mcp");
+            view.setAutoApprove(true);
+
+            ask(view, "Удали колонку");
+
+            waitUntil(() -> view.linkAction(MessageRenderer.REVERT) != null, () -> view.history().getText());
+            view.linkAction(MessageRenderer.CHANGES).run();
+            waitUntil(() -> Arrays.stream(page.getEditorReferences()).anyMatch(editor -> editor.getTitle().equals("Правки модели: Form.form")),
+                    () -> "окно сравнения не открылось");
+            page.closeAllEditors(false);
+
+            List<String> questions = new ArrayList<>();
+            view.confirmRevert = question -> questions.add(question);
+            view.linkAction(MessageRenderer.REVERT).run();
+
+            assertEquals("<form>\n<field>Скачать</field>\n</form>\n", Files.readString(form));
+            assertTrue(questions.get(0).contains("инструменты MCP (1)"), questions.toString());
+            view.refresh();
+            assertEquals(null, view.linkAction(MessageRenderer.REVERT), "откатывать больше нечего");
+        } finally {
+            project.delete(true, true, null);
+        }
+    }
+
     private ChatView configured(String mcpUrl) throws Exception {
         SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, "", 0, true, false, "",
                 new ArrayList<>(List.of(new McpServer("EDT", McpTransport.HTTP, mcpUrl, true, "get_edt_version")))));
@@ -227,6 +293,7 @@ class ChatMcpTest extends AbstractChatTest {
                     Json.object("name", "delete_project", "description", "Удаляет проект", "inputSchema", Json.object("type", "object"))));
             case "tools/call" -> {
                 calls.add(Json.stringAt(message, "params", "name"));
+                onCall.run();
                 result = Json.object("content", List.of(Json.object("type", "resource", "resource",
                         Json.object("uri", "edt://version", "mimeType", "text/markdown", "text", "## Версия EDT\n2026.1.0"))));
             }

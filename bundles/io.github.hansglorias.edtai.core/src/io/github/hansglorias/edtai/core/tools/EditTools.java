@@ -22,11 +22,19 @@ import io.github.hansglorias.edtai.core.context.BslModulePath;
 public final class EditTools {
 
     /**
-     * Правка модуля моделью: файл до и после — для диффа и отката.
+     * Правка файла моделью: файл до и после — для диффа и отката.
      *
-     * @param path путь относительно проекта
+     * @param path        путь относительно проекта
+     * @param before      текст до правки; {@code null} — файла не было
+     * @param after       текст после; {@code null} — файл удалён
+     * @param sinceCommit правка сделана мимо плагина (инструментом MCP): «до» — последний коммит, а не состояние
+     *                    перед ответом
      */
-    public record Change(String project, String path, String before, String after) {
+    public record Change(String project, String path, String before, String after, boolean sinceCommit) {
+
+        public Change(String project, String path, String before, String after) {
+            this(project, path, before, after, false);
+        }
     }
 
     private final WorkspaceFiles files;

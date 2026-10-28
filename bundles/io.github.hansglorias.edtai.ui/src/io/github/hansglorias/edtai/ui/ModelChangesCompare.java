@@ -24,19 +24,20 @@ final class ModelChangesCompare extends CompareEditorInput {
     private final String now;
     private final String before;
 
-    ModelChangesCompare(IFile file, String now, String before) {
-        super(configuration(file));
+    /** @param sinceCommit «до» — последний коммит (правки инструментов MCP), а не состояние перед ответом */
+    ModelChangesCompare(IFile file, String now, String before, boolean sinceCommit) {
+        super(configuration(file, sinceCommit));
         this.file = file;
         this.now = now;
         this.before = before;
         setTitle("Правки модели: " + file.getName());
     }
 
-    private static CompareConfiguration configuration(IFile file) {
+    private static CompareConfiguration configuration(IFile file, boolean sinceCommit) {
         CompareConfiguration configuration = new CompareConfiguration();
         configuration.setLeftLabel(file.getFullPath().makeRelative() + " — сейчас");
         configuration.setLeftEditable(false);
-        configuration.setRightLabel("До правок модели");
+        configuration.setRightLabel(sinceCommit ? "Последний коммит (git)" : "До правок модели");
         configuration.setRightEditable(false);
         return configuration;
     }
