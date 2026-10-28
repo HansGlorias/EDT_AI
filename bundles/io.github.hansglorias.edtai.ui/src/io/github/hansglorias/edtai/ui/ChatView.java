@@ -21,6 +21,7 @@ import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.IPreferenceChangeListener;
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
@@ -76,6 +77,7 @@ import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
+import io.github.hansglorias.edtai.core.tools.GitTools;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
@@ -97,6 +99,14 @@ public class ChatView extends ViewPart {
     static final String STOP = "Стоп";
     static final String RETRY = MessageRenderer.RETRY;
     static final String HISTORY_FILE = "chat.json";
+    static final String REVIEW_CHANGES = "Ревью моих изменений";
+    static final String COMMIT_MESSAGE = "Сообщение коммита";
+    static final String REVIEW_PROMPT = "Сделай ревью моих незакоммиченных изменений: посмотри git_status и git_diff, при"
+            + " необходимости прочитай модули целиком. Найди ошибки, пропущенные случаи и нарушения стандартов 1С; по каждой"
+            + " находке — Модуль:строка и как исправить. Если всё хорошо — так и скажи.";
+    static final String COMMIT_PROMPT = "Напиши сообщение коммита для моих незакоммиченных изменений (посмотри git_status и"
+            + " git_diff): первая строка — суть до 72 символов, по-русски, затем пустая строка и короткий список изменений."
+            + " Только текст сообщения в блоке кода, без пояснений.";
 
     /** Как часто перерисовывать ленту во время стриминга. */
     private static final int REFRESH_DELAY_MS = 40;
@@ -405,6 +415,25 @@ public class ChatView extends ViewPart {
         };
         preferencesAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_DEF_VIEW));
         toolBar.add(preferencesAction);
+
+        IMenuManager menu = getViewSite().getActionBars().getMenuManager();
+        menu.add(prompt(REVIEW_CHANGES, REVIEW_PROMPT));
+        menu.add(prompt(COMMIT_MESSAGE, COMMIT_PROMPT));
+    }
+
+    /** Пункт меню вида: отправляет готовый вопрос, модель сама смотрит git. */
+    private Action prompt(String title, String text) {
+        return new Action(title) {
+            @Override
+            public void run() {
+                if (session.isBusy()) {
+                    showNotice("Дождитесь ответа или остановите его");
+                    return;
+                }
+                session.send(text, contextBar.snapshot());
+                contextBar.clear();
+            }
+        };
     }
 
     private void newChat() {
@@ -860,7 +889,13 @@ public class ChatView extends ViewPart {
         if (!current.toolsEnabled()) {
             return List.of();
         }
-        List<Tool> tools = new ArrayList<>(ProjectTools.create(EclipseWorkspaceFiles.current(), current::contextLimit));
+        EclipseWorkspaceFiles files = EclipseWorkspaceFiles.current();
+        List<Tool> tools = new ArrayList<>(ProjectTools.create(files, current::contextLimit));
+        try {
+            tools.addAll(GitTools.create(files, current::contextLimit));
+        } catch (LinkageError e) {
+            // В этой сборке EDT нет JGit (EGit): без инструментов git.
+        }
         Set<String> builtIn = tools.stream().map(Tool::name).collect(Collectors.toSet());
         tools.addAll(mcp.tools(current.mcpServers(), TrustSettings.from(current), builtIn, current::contextLimit, problems));
         return tools;

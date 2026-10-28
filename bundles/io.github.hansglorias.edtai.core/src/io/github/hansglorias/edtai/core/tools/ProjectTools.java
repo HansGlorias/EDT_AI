@@ -320,9 +320,14 @@ public final class ProjectTools {
 
     // ---- общее ----
 
-    private static final Map<String, Object> PROJECT = string("Имя проекта, если в рабочей области их несколько");
+    static final Map<String, Object> PROJECT = string("Имя проекта, если в рабочей области их несколько");
 
     private String project(Map<String, Object> input) throws ToolException {
+        return project(files, input);
+    }
+
+    /** Проект из аргумента {@code project} или проект по умолчанию. */
+    static String project(WorkspaceFiles files, Map<String, Object> input) throws ToolException {
         List<String> projects = files.projects();
         String asked = text(input, "project");
         if (!asked.isEmpty()) {
@@ -355,7 +360,7 @@ public final class ProjectTools {
     }
 
     /** Путь модуля в проекте по имени 1С или пути. */
-    private static String modulePath(String project, String module) throws ToolException {
+    static String modulePath(String project, String module) throws ToolException {
         String value = module.strip().replace('\\', '/');
         if (value.isEmpty()) {
             throw new ToolException("Не задан модуль (module)");
@@ -445,12 +450,12 @@ public final class ProjectTools {
         }
     }
 
-    private static String text(Map<String, Object> input, String key) {
+    static String text(Map<String, Object> input, String key) {
         Object value = input.get(key);
         return value == null ? "" : String.valueOf(value).strip();
     }
 
-    private static int number(Map<String, Object> input, String key, int fallback) {
+    static int number(Map<String, Object> input, String key, int fallback) {
         Object value = input.get(key);
         if (value instanceof Number number) {
             return number.intValue();
@@ -466,16 +471,16 @@ public final class ProjectTools {
         return text.toLowerCase(Locale.ROOT).replace('ё', 'е');
     }
 
-    private static Map<String, Object> schema(Map<String, Object> properties, List<String> required) {
+    static Map<String, Object> schema(Map<String, Object> properties, List<String> required) {
         return required.isEmpty() ? Json.object("type", "object", "properties", properties)
                 : Json.object("type", "object", "properties", properties, "required", required);
     }
 
-    private static Map<String, Object> string(String description) {
+    static Map<String, Object> string(String description) {
         return Json.object("type", "string", "description", description);
     }
 
-    private static Map<String, Object> integer(String description) {
+    static Map<String, Object> integer(String description) {
         return Json.object("type", "integer", "description", description);
     }
 }
