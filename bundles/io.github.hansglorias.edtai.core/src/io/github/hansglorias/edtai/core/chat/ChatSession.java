@@ -140,6 +140,62 @@ public final class ChatSession {
         }
     }
 
+    /** Есть ли что сжимать по команде: ничего не выполняется и после последнего краткого содержания есть ответ. */
+    public boolean canCompact() {
+        synchronized (lock) {
+            return current == null && history().stream().anyMatch(message -> message.role() == ChatRole.ASSISTANT);
+        }
+    }
+
+    /**
+     * Сжимает историю по команде пользователя: краткое содержание всего, что
+     * модель видит сейчас, встаёт в конец диалога, и дальше модель получает
+     * его вместо сообщений выше. Не удалось — в истории ошибка; остановили —
+     * ничего не меняется.
+     *
+     * @return сжата ли история
+     * @throws IllegalStateException если запрос выполняется или сжимать нечего
+     */
+    public CompletableFuture<Boolean> compact() {
+        synchronized (lock) {
+            if (!canCompact()) {
+                throw new IllegalStateException(current != null ? "Предыдущий запрос ещё выполняется" : "Сжимать нечего");
+            }
+            List<ChatMessage> history = history();
+            Request request = new Request();
+            request.activity = new ReplyActivity(ReplyActivity.Phase.TOOL, "Сжимаю историю диалога", Instant.now());
+            current = request;
+            listeners.forEach(listener -> listener.busyChanged(true));
+            CompletableFuture<String> summary;
+            try {
+                summary = provider.summarize(history);
+            } catch (RuntimeException e) {
+                summary = CompletableFuture.failedFuture(e);
+            }
+            request.reply = summary;
+            request.inner = summary;
+            return summary.handle((text, error) -> {
+                boolean done;
+                synchronized (lock) {
+                    request.finished = true;
+                    Throwable cause = unwrap(error);
+                    done = cause == null && text != null && !text.isBlank();
+                    if (done) {
+                        add(new ChatMessage(ChatRole.SUMMARY, text.strip(), Instant.now(), Status.DONE));
+                    } else if (!(cause instanceof CancellationException)) {
+                        add(ChatMessage.of(ChatRole.ERROR, "Не удалось сжать историю: "
+                                + (cause == null ? "модель вернула пустой ответ" : describe(cause))));
+                    }
+                    if (current == request) {
+                        current = null;
+                    }
+                }
+                listeners.forEach(listener -> listener.busyChanged(false));
+                return done;
+            });
+        }
+    }
+
     /** Останавливает текущий запрос. Полученная часть ответа остаётся в истории. */
     public void cancel() {
         Request request;

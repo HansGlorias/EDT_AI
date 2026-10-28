@@ -214,6 +214,36 @@ public final class ModelChatProvider implements ChatProvider {
         return client.stream(connection.withMaxTokens(SUMMARY_TOKENS), List.of(prompt), part -> { });
     }
 
+    /** Название по первому обмену: вопрос и начало ответа. */
+    @Override
+    public CompletableFuture<String> title(List<ChatMessage> messages) {
+        ModelConnection connection;
+        try {
+            connection = source.get();
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
+        List<ChatMessage> start = messages.stream().filter(message -> message.role() == ChatRole.USER
+                || message.role() == ChatRole.ASSISTANT).limit(2).toList();
+        ChatMessage prompt = ChatMessage.of(ChatRole.USER, TITLE_PROMPT + "\n\n" + transcript(start, TITLE_TRANSCRIPT));
+        return client.stream(connection.withMaxTokens(TITLE_TOKENS), List.of(prompt), part -> { })
+                .thenApply(ModelChatProvider::cleanTitle);
+    }
+
+    static final String TITLE_PROMPT = "Придумай короткое название (2–6 слов, по-русски) для этого чата разработчика 1С:"
+            + " о чём вопрос. Только название: без кавычек, без точки в конце, без пояснений.";
+    private static final int TITLE_TOKENS = 64;
+    private static final int TITLE_TRANSCRIPT = 3000;
+    private static final int MAX_TITLE = 80;
+
+    /** Ответ модели — в название: первая непустая строка без кавычек, Markdown и точки; пустая — не вышло. */
+    static String cleanTitle(String answer) {
+        String line = ChatMessage.stripTrace(answer == null ? "" : answer).lines().map(String::strip)
+                .filter(text -> !text.isEmpty()).findFirst().orElse("");
+        line = line.replaceFirst("^(?iu)(название|title)\\s*:\\s*", "").replaceAll("^[#*_`\"'«»“”„\\s]+|[*_`\"'«»“”„\\s.]+$", "");
+        return line.length() > MAX_TITLE ? line.substring(0, MAX_TITLE).strip() : line;
+    }
+
     static final String SUMMARY_PROMPT = "Сожми переписку ниже в краткое содержание, по которому можно продолжить работу"
             + " (до 400 слов): что просил пользователь и зачем; принятые решения и договорённости; какие модули, объекты"
             + " метаданных и формы обсуждали и меняли (с путями); результаты и выводы; что осталось сделать. По делу, без"

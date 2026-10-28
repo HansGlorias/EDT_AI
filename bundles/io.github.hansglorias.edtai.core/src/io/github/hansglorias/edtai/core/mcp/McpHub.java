@@ -133,6 +133,52 @@ public final class McpHub implements AutoCloseable {
         return text.toString();
     }
 
+    /**
+     * Состояние серверов для команды {@code /mcp}: подключение и какие
+     * инструменты модель получает — отдельно читающие и меняющие проект.
+     * Подключается к включённым серверам, как перед ответом.
+     */
+    public String describe(List<McpServer> servers, TrustSettings trust) {
+        if (servers.isEmpty()) {
+            return "MCP-серверы не настроены. Добавить: Настройки → EDT AI → MCP-серверы.";
+        }
+        StringBuilder text = new StringBuilder();
+        for (McpServer server : servers) {
+            text.append(server.name()).append(" — ").append(server.target()).append('\n');
+            if (!server.enabled()) {
+                text.append("Выключен.\n\n");
+                continue;
+            }
+            if (server.transport() == McpTransport.STDIO) {
+                text.append("stdio пока не поддерживается, нужен адрес http://…/mcp.\n\n");
+                continue;
+            }
+            try {
+                Connection connection = connect(server, trust);
+                List<McpToolInfo> allowed = connection.tools().stream().filter(info -> server.allowsTool(info.name())).toList();
+                text.append("Подключено");
+                if (!connection.client().serverName().isEmpty()) {
+                    text.append(": ").append(connection.client().serverName());
+                }
+                text.append(". Инструментов: ").append(connection.tools().size()).append(", модели доступно: ")
+                        .append(allowed.size()).append(".\n");
+                names(text, "Читают", allowed.stream().filter(info -> !info.modifies()).toList());
+                names(text, "Меняют проект (в режиме «только вопросы» не передаются)",
+                        allowed.stream().filter(McpToolInfo::modifies).toList());
+            } catch (McpException e) {
+                text.append("Не подключён: ").append(e.getMessage()).append('\n');
+            }
+            text.append('\n');
+        }
+        return text.toString().strip();
+    }
+
+    private static void names(StringBuilder text, String title, List<McpToolInfo> tools) {
+        if (!tools.isEmpty()) {
+            text.append(title).append(": ").append(String.join(", ", tools.stream().map(McpToolInfo::name).toList())).append(".\n");
+        }
+    }
+
     /** Имена инструментов сервера: для подсказки в настройках. */
     public List<String> toolNames(McpServer server, TrustSettings trust) throws McpException {
         return connect(server, trust).tools().stream().map(McpToolInfo::name).toList();
