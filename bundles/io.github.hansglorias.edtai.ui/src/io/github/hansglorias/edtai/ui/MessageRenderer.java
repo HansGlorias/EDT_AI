@@ -16,6 +16,7 @@ import org.eclipse.swt.graphics.RGB;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.markdown.CodeBlock;
 import io.github.hansglorias.edtai.core.markdown.Kind;
 import io.github.hansglorias.edtai.core.markdown.Markdown;
@@ -33,6 +34,7 @@ final class MessageRenderer {
     static final String RETRY = "Повторить";
     static final String EDIT = "Изменить";
     static final String INSERT = "Вставить в редактор";
+    static final String CONTEXT = "Контекст: ";
 
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault());
     private static final List<String> CODE_ACTIONS = List.of(COPY, INSERT);
@@ -59,6 +61,9 @@ final class MessageRenderer {
         void edit(int index);
 
         void open(String url);
+
+        /** Открыть файл фрагмента на его строках. */
+        void openContext(ContextItem item);
     }
 
     private final StyledText history;
@@ -83,6 +88,7 @@ final class MessageRenderer {
             text.append("\n\n");
         }
         header(message, index, actions, offset, text, styles);
+        context(message, offset, text, styles);
         String body = message.text();
         if (body.isEmpty() && message.role() == ChatRole.ASSISTANT) {
             String placeholder = switch (message.status()) {
@@ -145,6 +151,27 @@ final class MessageRenderer {
                 styles.add(link);
                 text.append(action.label);
             }
+        }
+        text.append('\n');
+    }
+
+    /** Строка «Контекст:» с подписями фрагментов-ссылками. */
+    private void context(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles) {
+        if (message.context().isEmpty()) {
+            return;
+        }
+        styles.add(style(offset + text.length(), CONTEXT.length(), metaColor(), SWT.NORMAL));
+        text.append(CONTEXT);
+        for (int i = 0; i < message.context().size(); i++) {
+            ContextItem item = message.context().get(i);
+            if (i > 0) {
+                text.append(", ");
+            }
+            String label = item.label();
+            StyleRange link = new StyleRange(offset + text.length(), label.length(), linkColor(), null);
+            link.data = (Runnable) () -> callbacks.openContext(item);
+            styles.add(link);
+            text.append(label);
         }
         text.append('\n');
     }

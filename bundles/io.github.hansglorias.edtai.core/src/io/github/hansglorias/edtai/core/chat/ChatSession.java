@@ -9,6 +9,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
+import io.github.hansglorias.edtai.core.context.ContextItem;
 
 /**
  * История одного диалога и отправка сообщений провайдеру. Одновременно
@@ -59,12 +60,23 @@ public final class ChatSession {
      * @throws IllegalStateException    если предыдущий запрос ещё не завершён
      */
     public CompletableFuture<ChatMessage> send(String text) {
+        return send(text, List.of());
+    }
+
+    /**
+     * Добавляет сообщение пользователя с фрагментами кода и запрашивает ответ.
+     * Модель получает фрагменты перед текстом сообщения.
+     *
+     * @throws IllegalArgumentException если текст пустой
+     * @throws IllegalStateException    если предыдущий запрос ещё не завершён
+     */
+    public CompletableFuture<ChatMessage> send(String text, List<ContextItem> context) {
         if (text == null || text.isBlank()) {
             throw new IllegalArgumentException("Пустое сообщение");
         }
         synchronized (lock) {
             checkIdle();
-            add(ChatMessage.of(ChatRole.USER, text.strip()));
+            add(new ChatMessage(ChatRole.USER, text.strip(), Instant.now(), Status.DONE, context));
             return request();
         }
     }
@@ -125,22 +137,22 @@ public final class ChatSession {
     /**
      * «Изменить» своё сообщение: убирает его и всё, что после него.
      *
-     * @return текст убранного сообщения — его возвращают в поле ввода
+     * @return убранное сообщение — его текст и фрагменты возвращают в поле ввода
      * @throws IllegalStateException    если запрос выполняется
      * @throws IllegalArgumentException если по этому номеру не сообщение пользователя
      */
-    public String editFrom(int index) {
-        String text;
+    public ChatMessage editFrom(int index) {
+        ChatMessage message;
         synchronized (lock) {
             checkIdle();
             if (index < 0 || index >= messages.size() || messages.get(index).role() != ChatRole.USER) {
                 throw new IllegalArgumentException("Изменить можно только своё сообщение");
             }
-            text = messages.get(index).text();
+            message = messages.get(index);
             messages.subList(index, messages.size()).clear();
         }
         listeners.forEach(ChatListener::historyChanged);
-        return text;
+        return message;
     }
 
     /**

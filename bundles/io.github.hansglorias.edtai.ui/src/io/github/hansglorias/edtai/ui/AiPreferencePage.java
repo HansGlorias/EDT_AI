@@ -59,6 +59,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Text model;
     private Text maxTokens;
     private Text systemPrompt;
+    private Text contextLimit;
     private Text token;
     private Label tokenState;
     private Button removeToken;
@@ -130,6 +131,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 + " «Restore Defaults» возвращает промпт по умолчанию.");
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, systemPrompt.getLineHeight() * 4)
                 .applyTo(systemPrompt);
+
+        label(group, "Лимит контекста, символов:");
+        contextLimit = new Text(group, SWT.BORDER);
+        contextLimit.setMessage(String.valueOf(AiSettings.DEFAULT_CONTEXT_LIMIT));
+        contextLimit.setToolTipText("Сколько символов кода из EDT прикреплять к одному сообщению. Что не влезло —"
+                + " обрезается по строкам. Пусто — " + AiSettings.DEFAULT_CONTEXT_LIMIT + ".");
+        GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(contextLimit);
+        contextLimit.addModifyListener(event -> validate());
 
         label(group, "Токен:");
         token = new Text(group, SWT.BORDER | SWT.PASSWORD);
@@ -330,6 +339,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         model.setText(settings.model());
         maxTokens.setText(settings.maxTokens() > 0 ? String.valueOf(settings.maxTokens()) : "");
         systemPrompt.setText(settings.systemPrompt());
+        contextLimit.setText(
+                settings.contextLimit() == AiSettings.DEFAULT_CONTEXT_LIMIT ? "" : String.valueOf(settings.contextLimit()));
         useSystemTrustStore.setSelection(settings.useSystemTrustStore());
         caFile.setText(settings.caCertificateFile());
         servers.clear();
@@ -340,13 +351,17 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     AiSettings current() {
         return new AiSettings(Protocol.values()[Math.max(0, protocol.getSelectionIndex())], baseUrl.getText(),
-                model.getText(), Math.max(0, maxTokensValue()), systemPrompt.getText(), useSystemTrustStore.getSelection(),
-                caFile.getText(), servers);
+                model.getText(), Math.max(0, maxTokensValue()), systemPrompt.getText(), Math.max(0, number(contextLimit)),
+                useSystemTrustStore.getSelection(), caFile.getText(), servers);
+    }
+
+    private int maxTokensValue() {
+        return number(maxTokens);
     }
 
     /** @return число из поля, 0 — пусто, -1 — не число */
-    private int maxTokensValue() {
-        String text = maxTokens.getText().strip();
+    private static int number(Text field) {
+        String text = field.getText().strip();
         if (text.isEmpty()) {
             return 0;
         }
@@ -359,10 +374,13 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     }
 
     private void validate() {
-        if (baseUrl == null || maxTokens == null || caFile == null || serverViewer == null) {
+        if (baseUrl == null || maxTokens == null || contextLimit == null || caFile == null || serverViewer == null) {
             return;
         }
         List<String> errors = new ArrayList<>(SettingsValidator.validate(current()));
+        if (number(contextLimit) < 0) {
+            errors.add(0, "Лимит контекста: нужно целое положительное число или пусто");
+        }
         if (maxTokensValue() < 0) {
             errors.add(0, "Макс. токенов ответа: нужно целое положительное число или пусто");
         }
@@ -502,6 +520,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     Text systemPromptField() {
         return systemPrompt;
+    }
+
+    Text contextLimitField() {
+        return contextLimit;
     }
 
     Button checkButton() {

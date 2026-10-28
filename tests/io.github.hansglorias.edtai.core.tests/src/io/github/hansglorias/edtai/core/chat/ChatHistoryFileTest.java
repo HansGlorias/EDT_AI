@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
+import io.github.hansglorias.edtai.core.context.ContextItem;
 
 class ChatHistoryFileTest {
 
@@ -36,6 +37,34 @@ class ChatHistoryFileTest {
     }
 
     @Test
+    void savesAndLoadsContext() throws Exception {
+        ContextItem lines = ContextItem.of("Демо", "src/CommonModules/Цены/Module.bsl", 10, 12, 40, "А = 1;\nБ = 2;\nВ = 3;")
+                .truncate(13);
+        ContextItem file = ContextItem.of("Демо", "notes.txt", 1, 1, 1, "заметка");
+        List<ChatMessage> messages = List.of(
+                new ChatMessage(ChatRole.USER, "что тут?", Instant.parse("2026-10-28T09:00:00Z"), Status.DONE, List.of(lines, file)),
+                new ChatMessage(ChatRole.ASSISTANT, "ответ", Instant.parse("2026-10-28T09:00:05Z"), Status.DONE));
+        ChatHistoryFile history = new ChatHistoryFile(temp.resolve("chat.json"));
+
+        history.save(messages);
+
+        List<ChatMessage> loaded = history.load();
+        assertEquals(messages, loaded);
+        assertEquals("ОбщийМодуль.Цены.Модуль: 10–12 (обрезано)", loaded.get(0).context().get(0).label());
+        assertFalse(Files.readString(history.path()).contains("\"context\":[]"), "у сообщений без фрагментов поля нет");
+    }
+
+    @Test
+    void readsFileWithoutContextFromStage3() throws Exception {
+        Path path = Files.writeString(temp.resolve("old.json"), "{\"version\":1,\"messages\":[{\"role\":\"USER\",\"status\":\"DONE\","
+                + "\"time\":\"2026-10-28T09:00:00Z\",\"text\":\"вопрос\"}]}");
+
+        List<ChatMessage> loaded = new ChatHistoryFile(path).load();
+
+        assertEquals(List.of(new ChatMessage(ChatRole.USER, "вопрос", Instant.parse("2026-10-28T09:00:00Z"), Status.DONE)), loaded);
+    }
+
+    @Test
     void missingFileIsEmptyHistory() throws Exception {
         assertEquals(List.of(), new ChatHistoryFile(temp.resolve("missing.json")).load());
     }
@@ -53,7 +82,8 @@ class ChatHistoryFileTest {
     @Test
     void corruptedFileIsReported() throws Exception {
         for (String text : List.of("не json", "{\"messages\":[{\"role\":\"КТО\",\"text\":\"x\"}]}",
-                "{\"messages\":[{\"role\":\"USER\"}]}", "{\"messages\":[{\"role\":\"USER\",\"text\":\"x\",\"time\":\"вчера\"}]}")) {
+                "{\"messages\":[{\"role\":\"USER\"}]}", "{\"messages\":[{\"role\":\"USER\",\"text\":\"x\",\"time\":\"вчера\"}]}",
+                "{\"messages\":[{\"role\":\"USER\",\"text\":\"x\",\"context\":[{\"project\":\"Демо\"}]}]}")) {
             Path path = Files.writeString(temp.resolve("bad.json"), text);
             assertThrows(IOException.class, () -> new ChatHistoryFile(path).load(), text);
         }

@@ -10,7 +10,8 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
-import org.eclipse.core.runtime.Adapters;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.IPreferenceChangeListener;
@@ -23,6 +24,8 @@ import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
+import org.eclipse.jface.text.TextUtilities;
+import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.custom.StyleRange;
@@ -45,9 +48,9 @@ import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.ISharedImages;
+import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.dialogs.PreferencesUtil;
-import org.eclipse.ui.part.MultiPageEditorPart;
 import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.texteditor.ITextEditor;
 import org.eclipse.ui.texteditor.ITextEditorExtension2;
@@ -59,16 +62,19 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
+import io.github.hansglorias.edtai.core.context.CodeInsertion;
+import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.llm.ModelChatProvider;
 import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 /**
- * Вид «AI Chat»: лента диалога и поле ввода. Enter — отправить,
- * Shift+Enter — новая строка. Ответ модели появляется по мере генерации,
- * его можно остановить кнопкой «Стоп» или Esc. Диалог сохраняется в
- * рабочей области и восстанавливается при следующем открытии вида.
+ * Вид «AI Chat»: лента диалога, панель прикреплённых фрагментов кода и
+ * поле ввода. Enter — отправить, Shift+Enter — новая строка. Ответ модели
+ * появляется по мере генерации, его можно остановить кнопкой «Стоп» или Esc.
+ * Диалог сохраняется в рабочей области и восстанавливается при следующем
+ * открытии вида.
  */
 public class ChatView extends ViewPart {
 
@@ -98,6 +104,7 @@ public class ChatView extends ViewPart {
     private Label emptyTitle;
     private Label emptyText;
     private Link emptyLink;
+    private ContextBar contextBar;
     private Text input;
     private Button sendButton;
     private Label status;
@@ -141,14 +148,15 @@ public class ChatView extends ViewPart {
         }
     };
 
+    /** Настройки для подсказок и строки состояния; запросы к модели читают их сами. */
+    private AiSettings settings = AiSettings.defaults();
+
     private final IPreferenceChangeListener preferenceListener = event -> inUi(() -> {
         settings = SettingsStore.workspace().load();
+        contextBar.setLimit(settings.contextLimit());
         updateStatus();
         updateEmptyState();
     });
-
-    /** Настройки для подсказок и строки состояния; запросы к модели читают их сами. */
-    private AiSettings settings = AiSettings.defaults();
 
     @Override
     public void createPartControl(Composite parent) {
@@ -162,6 +170,7 @@ public class ChatView extends ViewPart {
         top.setLayout(topLayout);
         createHistory(top);
         createEmptyState(top);
+        createContextBar(parent);
         createInput(parent);
 
         status = new Label(parent, SWT.NONE);
@@ -172,6 +181,7 @@ public class ChatView extends ViewPart {
         session.addListener(chatListener);
         preferences().addPreferenceChangeListener(preferenceListener);
         settings = SettingsStore.workspace().load();
+        contextBar.setLimit(settings.contextLimit());
         restoreHistory();
         updateStatus();
         updateEmptyState();
@@ -208,6 +218,12 @@ public class ChatView extends ViewPart {
             @Override
             public void open(String url) {
                 openLink(url);
+            }
+
+            @Override
+            public void openContext(ContextItem item) {
+                IFile file = ResourcesPlugin.getWorkspace().getRoot().getProject(item.project()).getFile(item.path());
+                reveal(file, item.whole() ? 0 : item.firstLine(), item.requestedLastLine());
             }
         });
         history.addListener(SWT.MouseUp, event -> {
@@ -265,6 +281,21 @@ public class ChatView extends ViewPart {
         GridDataFactory.fillDefaults().applyTo(emptyLink);
     }
 
+    private void createContextBar(Composite parent) {
+        contextBar = new ContextBar(parent, new ContextBar.Callbacks() {
+            @Override
+            public void open(AttachedContext context) {
+                int[] lines = context.lines();
+                reveal(context.file(), lines[0], lines[1]);
+            }
+
+            @Override
+            public void changed() {
+                root.layout(true, true);
+            }
+        });
+    }
+
     private void createInput(Composite parent) {
         Composite bottom = new Composite(parent, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(bottom);
@@ -282,6 +313,12 @@ public class ChatView extends ViewPart {
             updateInputHeight();
         });
         input.addListener(SWT.Resize, event -> updateInputHeight());
+        // Пока пользователь правил модуль, строки фрагментов могли сдвинуться.
+        input.addListener(SWT.FocusIn, event -> {
+            if (!contextBar.isEmpty()) {
+                contextBar.refresh();
+            }
+        });
 
         sendButton = new Button(bottom, SWT.PUSH);
         int width = 0;
@@ -307,6 +344,16 @@ public class ChatView extends ViewPart {
         };
         newChat.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_TOOL_NEW_WIZARD));
         toolBar.add(newChat);
+
+        Action attachModule = new Action("Прикрепить модуль…") {
+            @Override
+            public void run() {
+                attachModule();
+            }
+        };
+        attachModule.setToolTipText("Прикрепить к вопросу модуль целиком: поиск по имени объекта или пути");
+        attachModule.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_OBJ_FILE));
+        toolBar.add(attachModule);
 
         Action preferencesAction = new Action("Настройки EDT AI") {
             @Override
@@ -406,8 +453,30 @@ public class ChatView extends ViewPart {
         if (text.isBlank() || session.isBusy()) {
             return;
         }
+        List<ContextItem> context = contextBar.snapshot();
         input.setText("");
-        session.send(text);
+        session.send(text, context);
+        contextBar.clear();
+    }
+
+    /** Добавляет фрагмент на панель над полем ввода и ставит фокус в поле. */
+    void attach(AttachedContext context) {
+        if (!contextBar.add(context)) {
+            showNotice("Этот фрагмент уже прикреплён");
+        }
+        input.setFocus();
+    }
+
+    private void attachModule() {
+        ModuleSelectionDialog dialog = new ModuleSelectionDialog(getSite().getShell());
+        if (dialog.open() != Window.OK) {
+            return;
+        }
+        for (Object item : dialog.getResult()) {
+            if (item instanceof IFile file) {
+                attach(AttachedContext.wholeFile(file));
+            }
+        }
     }
 
     private void editMessage(int index) {
@@ -415,9 +484,11 @@ public class ChatView extends ViewPart {
             showNotice("Дождитесь ответа или остановите его, чтобы изменить сообщение");
             return;
         }
-        String text = session.editFrom(index);
-        input.setText(text);
-        input.setSelection(text.length());
+        ChatMessage message = session.editFrom(index);
+        input.setText(message.text());
+        input.setSelection(message.text().length());
+        contextBar.clear();
+        message.context().forEach(item -> contextBar.add(AttachedContext.fromItem(item)));
         input.setFocus();
     }
 
@@ -433,10 +504,14 @@ public class ChatView extends ViewPart {
         showNotice("Скопировано в буфер обмена");
     }
 
-    /** Заменяет выделение в последнем активном текстовом редакторе; отменяется через Ctrl+Z. */
+    /**
+     * Заменяет выделение в последнем активном текстовом редакторе; отменяется
+     * через Ctrl+Z. Переводы строк — как в документе, вторая и следующие
+     * строки получают отступ строки, куда вставляем.
+     */
     void insertIntoEditor(String code) {
         IEditorPart editor = getSite().getPage().getActiveEditor();
-        ITextEditor textEditor = textEditor(editor);
+        ITextEditor textEditor = EditorAccess.textEditor(editor);
         if (textEditor == null) {
             showNotice("Откройте модуль в редакторе, чтобы вставить код");
             return;
@@ -451,29 +526,32 @@ public class ChatView extends ViewPart {
             showNotice("Не удалось вставить код в редактор");
             return;
         }
+        String inserted;
         try {
-            document.replace(selection.getOffset(), selection.getLength(), code);
+            int lineStart = document.getLineOffset(document.getLineOfOffset(selection.getOffset()));
+            inserted = CodeInsertion.adapt(code, document.get(lineStart, selection.getOffset() - lineStart),
+                    TextUtilities.getDefaultLineDelimiter(document));
+            document.replace(selection.getOffset(), selection.getLength(), inserted);
         } catch (BadLocationException e) {
             showNotice("Не удалось вставить код в редактор: " + e.getMessage());
             return;
         }
-        textEditor.selectAndReveal(selection.getOffset(), code.length());
+        textEditor.selectAndReveal(selection.getOffset(), inserted.length());
         getSite().getPage().activate(editor);
         showNotice("Код вставлен в " + editor.getTitle() + " (Ctrl+Z — отменить)");
     }
 
-    private static ITextEditor textEditor(IEditorPart editor) {
-        if (editor == null) {
-            return null;
+    /** Открывает файл фрагмента на его строках (с 1); {@code firstLine <= 0} — только открыть. */
+    private void reveal(IFile file, int firstLine, int lastLine) {
+        if (!file.exists()) {
+            showNotice("Файл не найден: " + file.getFullPath().makeRelative());
+            return;
         }
-        // Редактор объекта в EDT многостраничный: модуль — на одной из его страниц.
-        if (editor instanceof MultiPageEditorPart multiPage && multiPage.getSelectedPage() instanceof IEditorPart page) {
-            ITextEditor text = Adapters.adapt(page, ITextEditor.class);
-            if (text != null) {
-                return text;
-            }
+        try {
+            EditorAccess.reveal(getSite().getPage(), file, firstLine, lastLine);
+        } catch (PartInitException e) {
+            showNotice("Не удалось открыть " + file.getName() + ": " + e.getMessage());
         }
-        return Adapters.adapt(editor, ITextEditor.class);
     }
 
     private void openLink(String url) {
@@ -490,7 +568,7 @@ public class ChatView extends ViewPart {
     }
 
     /** Короткое сообщение в строке состояния. */
-    private void showNotice(String text) {
+    void showNotice(String text) {
         notice = text;
         updateStatus();
         history.getDisplay().timerExec(NOTICE_MS, () -> {
@@ -640,7 +718,7 @@ public class ChatView extends ViewPart {
         String title = configured ? "Чем помочь?" : "Модель не настроена";
         String text = configured
                 ? "Задайте вопрос модели " + settings.model() + ". Enter — отправить, Shift+Enter — новая строка,"
-                        + " Esc — остановить ответ."
+                        + " Esc — остановить ответ. Чтобы спросить о коде, выделите его в модуле и нажмите Ctrl+Alt+A."
                 : "Укажите адрес сервера, протокол и модель в настройках EDT AI. Для локальной Ollama или"
                         + " LM Studio токен не нужен.";
         if (!title.equals(emptyTitle.getText()) || !text.equals(emptyText.getText())) {
@@ -716,6 +794,7 @@ public class ChatView extends ViewPart {
 
     @Override
     public void dispose() {
+        contextBar.clear();
         session.removeListener(chatListener);
         session.cancel();
         List<ChatMessage> messages = session.messages();
@@ -742,6 +821,10 @@ public class ChatView extends ViewPart {
 
     Text input() {
         return input;
+    }
+
+    ContextBar contextBar() {
+        return contextBar;
     }
 
     StyledText history() {

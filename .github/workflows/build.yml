@@ -26,8 +26,11 @@ jobs:
       # Maven берётся из wrapper (.mvn/wrapper): Tycho 4.0.x не стартует на
       # более новом Maven, который стоит на runner.
       # UI-тесты на Linux идут под xvfb с GTK 3 — ближе всего к Astra Linux.
+      # UTF-8 в локали — для кириллических имён каталогов модулей в UI-тестах.
       - name: Build and test (Linux, GTK под xvfb)
         if: runner.os == 'Linux'
+        env:
+          LANG: C.UTF-8
         run: xvfb-run -a -s "-screen 0 1280x1024x24" ./mvnw -B -ntp verify
 
       - name: Build and test (Windows)

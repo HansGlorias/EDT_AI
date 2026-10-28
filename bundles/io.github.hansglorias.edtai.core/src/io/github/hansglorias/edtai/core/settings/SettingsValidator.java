@@ -32,6 +32,9 @@ public final class SettingsValidator {
         if (settings.maxTokens() > AiSettings.MAX_TOKENS_LIMIT) {
             errors.add("Макс. токенов ответа: не больше " + AiSettings.MAX_TOKENS_LIMIT);
         }
+        if (settings.contextLimit() < AiSettings.MIN_CONTEXT_LIMIT || settings.contextLimit() > AiSettings.MAX_CONTEXT_LIMIT) {
+            errors.add("Лимит контекста: от " + AiSettings.MIN_CONTEXT_LIMIT + " до " + AiSettings.MAX_CONTEXT_LIMIT + " символов");
+        }
         if (!settings.caCertificateFile().isEmpty()) {
             String error = checkReadableFile(settings.caCertificateFile());
             if (error != null) {

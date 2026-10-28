@@ -43,7 +43,8 @@ abstract class ProtocolAdapter {
     abstract String fullResponse(Object json) throws ModelException;
 
     /**
-     * Сообщения в формате {@code [{role, content}]}. Ошибки и пустые
+     * Сообщения в формате {@code [{role, content}]}; у сообщений
+     * пользователя фрагменты кода идут перед текстом. Ошибки и пустые
      * сообщения не передаются, подряд идущие сообщения одной роли
      * склеиваются: не все серверы принимают их по отдельности.
      */
@@ -57,7 +58,7 @@ abstract class ProtocolAdapter {
             }
             String next = message.role() == ChatRole.USER ? "user" : "assistant";
             if (next.equals(role)) {
-                content.append("\n\n").append(message.text());
+                content.append("\n\n").append(message.modelText());
                 continue;
             }
             if (role != null) {
@@ -65,7 +66,7 @@ abstract class ProtocolAdapter {
             }
             role = next;
             content.setLength(0);
-            content.append(message.text());
+            content.append(message.modelText());
         }
         if (role != null) {
             result.add(Json.object("role", role, "content", content.toString()));

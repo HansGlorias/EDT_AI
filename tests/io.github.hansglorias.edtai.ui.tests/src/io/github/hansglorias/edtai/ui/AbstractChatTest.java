@@ -99,7 +99,7 @@ abstract class AbstractChatTest {
     }
 
     static void configure(FakeModelServer server) throws Exception {
-        SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, "", false, "",
+        SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, "", 0, false, "",
                 new ArrayList<>()));
     }
 

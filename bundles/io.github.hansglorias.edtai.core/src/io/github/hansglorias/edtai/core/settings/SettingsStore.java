@@ -25,6 +25,7 @@ public final class SettingsStore {
     static final String KEY_MODEL = "model";
     static final String KEY_MAX_TOKENS = "maxTokens";
     static final String KEY_SYSTEM_PROMPT = "systemPrompt";
+    static final String KEY_CONTEXT_LIMIT = "contextLimit";
     static final String KEY_USE_SYSTEM_TRUST_STORE = "useSystemTrustStore";
     static final String KEY_CA_CERTIFICATE_FILE = "caCertificateFile";
     static final String KEY_MCP_SERVERS = "mcpServers";
@@ -59,6 +60,7 @@ public final class SettingsStore {
                 preferences.get(KEY_MODEL, ""),
                 preferences.getInt(KEY_MAX_TOKENS, 0),
                 preferences.get(KEY_SYSTEM_PROMPT, AiSettings.DEFAULT_SYSTEM_PROMPT),
+                preferences.getInt(KEY_CONTEXT_LIMIT, 0),
                 preferences.getBoolean(KEY_USE_SYSTEM_TRUST_STORE, AiSettings.DEFAULT_USE_SYSTEM_TRUST_STORE),
                 preferences.get(KEY_CA_CERTIFICATE_FILE, ""),
                 servers);
@@ -79,6 +81,11 @@ public final class SettingsStore {
             preferences.remove(KEY_SYSTEM_PROMPT);
         } else {
             preferences.put(KEY_SYSTEM_PROMPT, settings.systemPrompt());
+        }
+        if (settings.contextLimit() == AiSettings.DEFAULT_CONTEXT_LIMIT) {
+            preferences.remove(KEY_CONTEXT_LIMIT);
+        } else {
+            preferences.putInt(KEY_CONTEXT_LIMIT, settings.contextLimit());
         }
         preferences.putBoolean(KEY_USE_SYSTEM_TRUST_STORE, settings.useSystemTrustStore());
         put(KEY_CA_CERTIFICATE_FILE, settings.caCertificateFile());
