@@ -30,6 +30,10 @@ public final class ModelChatProvider implements ChatProvider {
         ModelConnection get() throws Exception;
     }
 
+    /** Каждый ответ без инструментов — на виду: иначе модель только пишет «смотрю», ничего не вызывая. */
+    static final String WITHOUT_TOOLS = "не передаются: сервер модели отклонил запрос с ними. Модель не видит проект и не"
+            + " может ничего менять. «Новый чат» или изменение настроек — попробовать снова";
+
     private final ConnectionSource source;
     /** Подключение без токена: для окна и оценки, чтобы не открывать Secure Storage из UI. */
     private final ConnectionSource withoutToken;
@@ -117,6 +121,9 @@ public final class ModelChatProvider implements ChatProvider {
         connection = withBrief(connection);
         String server = connection.baseUrl() + "|" + connection.model();
         if (tools == ToolSource.NONE || withoutTools.contains(server)) {
+            if (tools != ToolSource.NONE) {
+                onTool.accept(new ToolUse("tools", "tools", "Инструменты", WITHOUT_TOOLS, ToolUse.Status.FAILED));
+            }
             ModelConnection plain = connection;
             RequestBudget.Fitted fitted = RequestBudget.fit(history,
                     part -> RequestBudget.size(plain, part, List.of(), List.of()), RequestBudget.chars(plain));

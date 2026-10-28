@@ -183,6 +183,21 @@ class AgentLoopTest {
     }
 
     @Test
+    void anthropicErrorAboutToolsIsShownNotSilenced() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> response.send(400, "application/json",
+                "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"tools.0.custom.input_schema: invalid\"}}"));
+        ModelConnection connection = new ModelConnection(Protocol.ANTHROPIC, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()));
+        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(READ),
+                ToolApprover.ALLOW_ALL);
+
+        Exception error = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                () -> provider.reply(HISTORY, parts::add, uses::add).get(10, TimeUnit.SECONDS));
+        assertTrue(error.getMessage().contains("input_schema"), error.getMessage());
+        assertEquals(1, server.requests().size(), "без молчаливого повтора без инструментов");
+    }
+
+    @Test
     void serverWithoutToolsGetsPlainRequest() throws Exception {
         server = FakeModelServer.http().handler((request, response) -> {
             if (request.body().contains("\"tools\"")) {
@@ -197,13 +212,18 @@ class AgentLoopTest {
 
         assertEquals("Без инструментов.", provider.reply(HISTORY, parts::add, uses::add).get(10, TimeUnit.SECONDS));
         assertEquals(ToolUse.Status.FAILED, uses.get(0).status());
-        assertEquals(AgentLoop.TOOLS_UNSUPPORTED, uses.get(0).outcome());
+        assertTrue(uses.get(0).outcome().startsWith(AgentLoop.TOOLS_UNSUPPORTED + " Причина: "), uses.get(0).outcome());
+        assertTrue(uses.get(0).outcome().contains("enable-auto-tool-choice"), uses.get(0).outcome());
         assertEquals(2, server.requests().size());
 
         // Второй вопрос тому же серверу — сразу без инструментов.
         assertEquals("Без инструментов.", provider.reply(HISTORY, parts::add, uses::add).get(10, TimeUnit.SECONDS));
         assertEquals(3, server.requests().size());
         assertNull(Json.parseObject(server.requests().get(2).body()).get("tools"));
+        assertEquals(ModelChatProvider.WITHOUT_TOOLS, uses.get(uses.size() - 1).outcome(), "каждый ответ без инструментов — на виду");
+        provider.forgetRejections();
+        provider.reply(HISTORY, parts::add, uses::add).get(10, TimeUnit.SECONDS);
+        assertTrue(server.requests().get(3).body().contains("\"tools\""), "после «Нового чата» — снова с инструментами");
     }
 
     @Test

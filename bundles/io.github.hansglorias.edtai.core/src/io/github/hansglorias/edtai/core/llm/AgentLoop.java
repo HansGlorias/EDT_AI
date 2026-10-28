@@ -14,6 +14,7 @@ import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.json.JsonException;
+import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolApprover;
@@ -216,16 +217,22 @@ final class AgentLoop {
                 if (!e.rejectsTools() || tools.isEmpty() || !steps.isEmpty()) {
                     throw e;
                 }
+                boolean anthropic = base.protocol() == Protocol.ANTHROPIC;
                 // Встроенные инструменты — без подтверждения; инструменты MCP — с ним.
                 List<Tool> builtIn = tools.stream().filter(tool -> !tool.needsApproval()).toList();
                 if (!builtIn.isEmpty() && builtIn.size() < tools.size()) {
                     tools = builtIn;
                     onTool.accept(new ToolUse("tools-mcp", "tools", "Инструменты MCP", MCP_REJECTED + e.getMessage(),
                             ToolUse.Status.FAILED));
+                } else if (anthropic) {
+                    // Anthropic инструменты поддерживает всегда: ошибка про них — в самом запросе, её и покажем,
+                    // а не будем молча отвечать без инструментов (модель тогда «делает» на словах).
+                    throw e;
                 } else {
                     toolsRejected = true;
                     tools = List.of();
-                    onTool.accept(new ToolUse("tools", "tools", "Инструменты", TOOLS_UNSUPPORTED, ToolUse.Status.FAILED));
+                    onTool.accept(new ToolUse("tools", "tools", "Инструменты", TOOLS_UNSUPPORTED + " Причина: " + e.getMessage(),
+                            ToolUse.Status.FAILED));
                 }
             }
         }
