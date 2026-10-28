@@ -67,7 +67,8 @@ class ChatMcpTest extends AbstractChatTest {
         waitUntil(() -> view.approvalBar().isShown(), () -> view.history().getText());
 
         assertTrue(view.approvalBar().messageText().contains("MCP «EDT»: get_edt_version"), view.approvalBar().messageText());
-        assertEquals("{}", view.approvalBar().argumentsText());
+        assertFalse(view.approvalBar().argumentsShown(), "пустые аргументы не показываем");
+        assertTrue(view.status().getText().endsWith("ждёт вашего решения"), view.status().getText());
         waitUntil(() -> view.history().getText().contains(MessageRenderer.TOOL + "MCP «EDT»: get_edt_version — ждёт разрешения"),
                 () -> view.history().getText());
         Screenshots.capture(view.control(), "mcp-approval");
@@ -98,6 +99,23 @@ class ChatMcpTest extends AbstractChatTest {
 
         assertEquals(List.of(), calls);
         assertTrue(view.history().getText().contains("get_edt_version — ошибка: отклонено\nНе дали посмотреть."), view.history().getText());
+    }
+
+    @Test
+    void escapeInInputDeniesCall() throws Exception {
+        ChatView view = configured(mcp.url() + "/mcp");
+
+        view.input().setText("Какая версия EDT?");
+        view.send();
+        waitUntil(() -> view.approvalBar().isShown());
+        Event escape = new Event();
+        escape.keyCode = SWT.ESC;
+        view.onInputKey(escape);
+        waitUntil(() -> !view.session().isBusy() && view.session().messages().size() == 2);
+        view.refresh();
+
+        assertEquals(List.of(), calls);
+        assertTrue(view.history().getText().contains("Не дали посмотреть."), "ответ не остановлен, модель узнала об отказе");
     }
 
     @Test
