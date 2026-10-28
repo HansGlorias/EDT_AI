@@ -48,11 +48,18 @@ final class FakeModelServer implements AutoCloseable {
         }
 
         void start(int status, String contentType) throws IOException {
-            String head = "HTTP/1.1 " + status + " X\r\n"
+            start(status, contentType, Map.of());
+        }
+
+        /** Начало ответа с дополнительными заголовками: например, {@code Mcp-Session-Id}. */
+        void start(int status, String contentType, Map<String, String> headers) throws IOException {
+            StringBuilder head = new StringBuilder("HTTP/1.1 " + status + " X\r\n"
                     + "Content-Type: " + contentType + "\r\n"
                     + "Transfer-Encoding: chunked\r\n"
-                    + "Connection: close\r\n\r\n";
-            out.write(head.getBytes(StandardCharsets.US_ASCII));
+                    + "Connection: close\r\n");
+            headers.forEach((name, value) -> head.append(name).append(": ").append(value).append("\r\n"));
+            head.append("\r\n");
+            out.write(head.toString().getBytes(StandardCharsets.US_ASCII));
             out.flush();
         }
 

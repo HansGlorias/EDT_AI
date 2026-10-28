@@ -14,7 +14,8 @@ import java.util.Objects;
 public record ToolUse(String id, String name, String summary, String outcome, Status status) {
 
     public enum Status {
-        RUNNING, DONE, FAILED
+        /** Ждёт, пока пользователь разрешит или отклонит вызов. */
+        AWAITING, RUNNING, DONE, FAILED
     }
 
     public ToolUse {
@@ -28,6 +29,7 @@ public record ToolUse(String id, String name, String summary, String outcome, St
     /** Строка для ленты: «Читает модуль Х — строки 1–120 из 120». */
     public String label() {
         return switch (status) {
+            case AWAITING -> summary + " — ждёт разрешения";
             case RUNNING -> summary + "…";
             case DONE -> outcome.isEmpty() ? summary : summary + " — " + outcome;
             case FAILED -> summary + " — ошибка: " + outcome;

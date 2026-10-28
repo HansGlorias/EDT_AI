@@ -34,6 +34,7 @@ class McpServerDialog extends TitleAreaDialog {
     private Combo transport;
     private Label targetLabel;
     private Text target;
+    private Text tools;
     private Button enabled;
 
     private McpServer result;
@@ -63,7 +64,8 @@ class McpServerDialog extends TitleAreaDialog {
     protected Control createDialogArea(Composite parent) {
         Composite area = (Composite) super.createDialogArea(parent);
         setTitle("MCP-сервер");
-        setMessage("Подключение к серверу пока не выполняется — список сохраняется для следующих этапов.");
+        setMessage("MCP-сервер по HTTP (Streamable HTTP), например EDT-MCP: http://localhost:8765/mcp."
+                + " Вызовы его инструментов модель делает с вашего разрешения.");
 
         Composite body = new Composite(area, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, true).applyTo(body);
@@ -83,14 +85,22 @@ class McpServerDialog extends TitleAreaDialog {
         target = new Text(body, SWT.BORDER);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(target);
 
+        new Label(body, SWT.NONE).setText("Инструменты:");
+        tools = new Text(body, SWT.BORDER);
+        tools.setMessage("все; или через запятую: read_module_source, search_in_code, get_*");
+        tools.setToolTipText("Какие инструменты сервера давать модели. Описание каждого уходит в каждый запрос: у EDT-MCP"
+                + " их около сотни, лучше перечислить нужные. * в конце — по началу имени.");
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(tools);
+
         new Label(body, SWT.NONE);
         enabled = new Button(body, SWT.CHECK);
         enabled.setText("Включён");
 
-        McpServer start = initial != null ? initial : new McpServer("", McpTransport.STDIO, "", true);
+        McpServer start = initial != null ? initial : new McpServer("", McpTransport.HTTP, "", true);
         name.setText(start.name());
         transport.select(start.transport().ordinal());
         target.setText(start.target());
+        tools.setText(start.tools());
         enabled.setSelection(start.enabled());
 
         name.addModifyListener(event -> validate());
@@ -112,12 +122,13 @@ class McpServerDialog extends TitleAreaDialog {
 
     private void updateTargetLabel() {
         targetLabel.setText(selectedTransport() == McpTransport.STDIO ? "Команда:" : "URL:");
-        target.setMessage(selectedTransport() == McpTransport.STDIO ? "node server.js --stdio" : "http://localhost:8080/mcp");
+        target.setMessage(selectedTransport() == McpTransport.STDIO ? "python3 server.py (stdio пока не поддерживается)"
+                : "http://localhost:8765/mcp");
         targetLabel.getParent().layout(true);
     }
 
     private McpServer current() {
-        return new McpServer(name.getText(), selectedTransport(), target.getText(), enabled.getSelection());
+        return new McpServer(name.getText(), selectedTransport(), target.getText(), enabled.getSelection(), tools.getText());
     }
 
     private void validate() {

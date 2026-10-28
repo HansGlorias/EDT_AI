@@ -36,12 +36,15 @@ import org.eclipse.ui.IWorkbenchPreferencePage;
 
 import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.llm.ModelConnection;
+import io.github.hansglorias.edtai.core.mcp.McpException;
+import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.settings.SettingsValidator;
 import io.github.hansglorias.edtai.core.tls.PemCertificates;
+import io.github.hansglorias.edtai.core.tls.TrustSettings;
 
 /**
  * Window → Preferences → EDT AI: подключение к модели, токен, сертификаты,
@@ -74,6 +77,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private CheckboxTableViewer serverViewer;
     private Button editServer;
     private Button removeServer;
+    private Button checkServer;
+    private Label serverResult;
 
     @Override
     public void init(IWorkbench workbench) {
@@ -143,9 +148,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
         new Label(group, SWT.NONE);
         toolsEnabled = new Button(group, SWT.CHECK);
-        toolsEnabled.setText("Инструменты: модель сама читает модули и ищет по проекту");
-        toolsEnabled.setToolTipText("Модель может вызвать: сведения о проекте, список объектов, чтение модуля, поиск по коду."
-                + " Только чтение. Выключите, если сервер модели не поддерживает инструменты.");
+        toolsEnabled.setText("Инструменты: модель сама читает проект и вызывает MCP-серверы");
+        toolsEnabled.setToolTipText("Встроенные — только чтение: сведения о проекте, список объектов, чтение модуля, поиск"
+                + " по коду. Инструменты MCP-серверов — с подтверждением каждого вызова. Выключите, если сервер модели"
+                + " не поддерживает инструменты.");
         GridDataFactory.fillDefaults().span(2, 1).applyTo(toolsEnabled);
 
         label(group, "Токен:");
@@ -260,7 +266,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
         column("Имя", 140, McpServer::name);
         column("Транспорт", 80, server -> server.transport().label());
-        column("Команда / URL", 260, McpServer::target);
+        column("Команда / URL", 220, McpServer::target);
+        column("Инструменты", 140, server -> server.tools().isEmpty() ? "все" : server.tools());
 
         serverViewer.setContentProvider(ArrayContentProvider.getInstance());
         serverViewer.setCheckStateProvider(new ICheckStateProvider() {
@@ -305,7 +312,47 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 refreshServers();
             }
         });
+        checkServer = button(buttons, "Проверить");
+        checkServer.setToolTipText("Подключиться к выбранному серверу и получить список инструментов");
+        checkServer.addListener(SWT.Selection, event -> checkSelectedServer());
+
+        serverResult = new Label(group, SWT.WRAP);
+        GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, SWT.DEFAULT).applyTo(serverResult);
         updateServerButtons();
+    }
+
+    /** Подключение к выбранному MCP-серверу в фоне; результат — под таблицей. */
+    private void checkSelectedServer() {
+        McpServer server = selectedServer();
+        if (server == null) {
+            return;
+        }
+        checkServer.setEnabled(false);
+        showServerResult("Подключаюсь к «" + server.name() + "»…");
+        TrustSettings trust = TrustSettings.from(current());
+        Display display = checkServer.getDisplay();
+        Thread thread = new Thread(() -> {
+            String result;
+            try (McpHub hub = new McpHub()) {
+                result = "«" + server.name() + "»: " + hub.check(server, trust);
+            } catch (McpException e) {
+                result = "«" + server.name() + "» не работает: " + e.getMessage();
+            }
+            String text = result;
+            display.asyncExec(() -> {
+                if (!serverResult.isDisposed()) {
+                    showServerResult(text);
+                    updateServerButtons();
+                }
+            });
+        }, "EDT AI: проверка MCP-сервера");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void showServerResult(String text) {
+        serverResult.setText(text);
+        serverResult.getShell().layout(new Control[] { serverResult });
     }
 
     private void editSelectedServer() {
@@ -339,6 +386,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         boolean selected = selectedServer() != null;
         editServer.setEnabled(selected);
         removeServer.setEnabled(selected);
+        if (checkServer != null) {
+            checkServer.setEnabled(selected);
+        }
     }
 
     private void fill(AiSettings settings) {
@@ -533,6 +583,18 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     Text contextLimitField() {
         return contextLimit;
+    }
+
+    Button checkServerButton() {
+        return checkServer;
+    }
+
+    Label serverResult() {
+        return serverResult;
+    }
+
+    CheckboxTableViewer serverViewer() {
+        return serverViewer;
     }
 
     Button checkButton() {

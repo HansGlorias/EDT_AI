@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.settings;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -21,9 +22,31 @@ class McpServersCodecTest {
     void roundTripKeepsAllFields() {
         List<McpServer> servers = List.of(
                 new McpServer("файлы", McpTransport.STDIO, "npx -y @modelcontextprotocol/server-filesystem C:\\work", true),
-                new McpServer("remote", McpTransport.HTTP, "http://localhost:8080/mcp", false));
+                new McpServer("remote", McpTransport.HTTP, "http://localhost:8080/mcp", false),
+                new McpServer("EDT", McpTransport.HTTP, "http://localhost:8765/mcp", true, "read_module_source, get_*"));
 
         assertEquals(servers, McpServersCodec.decode(McpServersCodec.encode(servers)));
+    }
+
+    @Test
+    void recordWithoutToolsFromStage5IsRead() {
+        assertEquals(List.of(new McpServer("EDT", McpTransport.HTTP, "http://localhost:8765/mcp", true, "")),
+                McpServersCodec.decode("1\tHTTP\tEDT\thttp://localhost:8765/mcp"));
+    }
+
+    @Test
+    void toolFilter() {
+        McpServer all = new McpServer("EDT", McpTransport.HTTP, "", true, " ");
+        McpServer some = new McpServer("EDT", McpTransport.HTTP, "", true, "read_module_source;  GET_* ,search_in_code");
+
+        assertEquals("", all.tools());
+        assertTrue(all.allowsTool("delete_project"));
+        assertEquals("read_module_source, GET_*, search_in_code", some.tools());
+        assertTrue(some.allowsTool("read_module_source"));
+        assertTrue(some.allowsTool("get_edt_version"));
+        assertTrue(some.allowsTool("Search_In_Code"));
+        assertFalse(some.allowsTool("read_module_source_2"));
+        assertFalse(some.allowsTool("delete_project"));
     }
 
     @Test
@@ -34,7 +57,7 @@ class McpServersCodecTest {
         String encoded = McpServersCodec.encode(servers);
 
         assertEquals(1, encoded.split("\n").length);
-        assertEquals(4, encoded.split("\t").length);
+        assertEquals(5, encoded.split("\t", -1).length);
         assertEquals(servers, McpServersCodec.decode(encoded));
     }
 

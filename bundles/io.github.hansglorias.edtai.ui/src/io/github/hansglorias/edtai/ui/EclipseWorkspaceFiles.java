@@ -33,13 +33,17 @@ final class EclipseWorkspaceFiles implements WorkspaceFiles {
         this.preferred = preferred;
     }
 
-    /** Предпочтительный проект — проект файла в активном редакторе. Вызывать в UI-потоке. */
+    /** Предпочтительный проект — проект файла в активном редакторе. Можно вызывать из любого потока. */
     static EclipseWorkspaceFiles current() {
-        IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
-        IWorkbenchPage page = window == null ? null : window.getActivePage();
-        ITextEditor editor = page == null ? null : EditorAccess.textEditor(page.getActiveEditor());
-        IFile file = editor == null ? null : EditorAccess.file(editor);
-        return new EclipseWorkspaceFiles(file == null ? null : file.getProject().getName());
+        AtomicReference<String> project = new AtomicReference<>();
+        inUi(() -> {
+            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+            IWorkbenchPage page = window == null ? null : window.getActivePage();
+            ITextEditor editor = page == null ? null : EditorAccess.textEditor(page.getActiveEditor());
+            IFile file = editor == null ? null : EditorAccess.file(editor);
+            project.set(file == null ? null : file.getProject().getName());
+        });
+        return new EclipseWorkspaceFiles(project.get());
     }
 
     @Override
@@ -64,18 +68,23 @@ final class EclipseWorkspaceFiles implements WorkspaceFiles {
     public Optional<String> unsavedText(String project, String path) {
         IFile file = ResourcesPlugin.getWorkspace().getRoot().getProject(project).getFile(path);
         AtomicReference<String> text = new AtomicReference<>();
-        Display display = PlatformUI.getWorkbench().getDisplay();
         Runnable read = () -> {
             ITextFileBuffer buffer = FileBuffers.getTextFileBufferManager().getTextFileBuffer(file.getFullPath(), LocationKind.IFILE);
             if (buffer != null && buffer.isDirty()) {
                 text.set(buffer.getDocument().get());
             }
         };
-        if (Display.getCurrent() != null) {
-            read.run();
-        } else if (!display.isDisposed()) {
-            display.syncExec(read);
-        }
+        inUi(read);
         return Optional.ofNullable(text.get());
+    }
+
+    /** Выполняет в UI-потоке и ждёт. */
+    private static void inUi(Runnable runnable) {
+        Display display = PlatformUI.getWorkbench().getDisplay();
+        if (Display.getCurrent() != null) {
+            runnable.run();
+        } else if (!display.isDisposed()) {
+            display.syncExec(runnable);
+        }
     }
 }

@@ -280,7 +280,7 @@ public final class ChatSession {
 
     /** Инструмент, который не успел завершиться до конца ответа. */
     private static ToolUse interrupted(ToolUse use) {
-        return use.status() == ToolUse.Status.RUNNING
+        return use.status() == ToolUse.Status.RUNNING || use.status() == ToolUse.Status.AWAITING
                 ? new ToolUse(use.id(), use.name(), use.summary(), "прервано", ToolUse.Status.FAILED)
                 : use;
     }

@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
@@ -22,7 +23,9 @@ import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
 import io.github.hansglorias.edtai.core.tools.Tool;
+import io.github.hansglorias.edtai.core.tools.ToolApprover;
 import io.github.hansglorias.edtai.core.tools.ToolException;
+import io.github.hansglorias.edtai.core.tools.ToolSource;
 
 class AgentLoopTest {
 
@@ -186,7 +189,8 @@ class AgentLoopTest {
                 response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Без инструментов.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
             }
         });
-        ModelChatProvider provider = new ModelChatProvider(this::connectionOpenAi, new ModelClient(), () -> List.of(READ));
+        ModelChatProvider provider = new ModelChatProvider(this::connectionOpenAi, new ModelClient(), problems -> List.of(READ),
+                ToolApprover.ALLOW_ALL);
 
         assertEquals("Без инструментов.", provider.reply(HISTORY, parts::add, uses::add).get(10, TimeUnit.SECONDS));
         assertEquals(ToolUse.Status.FAILED, uses.get(0).status());
@@ -214,10 +218,102 @@ class AgentLoopTest {
         assertEquals("{\"module\":\"Б\"}", Json.stringAt(assistant, "tool_calls", 0, "function", "arguments"));
     }
 
+    @Test
+    void approvalDeniedGoesBackToModel() throws Exception {
+        server = FakeModelServer.http().handler(this::oneToolCallThenText);
+        List<String> asked = new CopyOnWriteArrayList<>();
+        ToolApprover deny = (use, arguments) -> {
+            asked.add(use.summary() + " " + arguments);
+            return CompletableFuture.completedFuture(ToolApprover.Decision.DENY);
+        };
+
+        assertEquals("Понял.", run(Protocol.OPENAI_COMPATIBLE, problems -> List.of(approved(READ)), deny));
+
+        assertEquals(List.of("Читает модуль Общий {\"module\":\"Общий\"}"), asked);
+        assertEquals(List.of(ToolUse.Status.AWAITING, ToolUse.Status.FAILED), uses.stream().map(ToolUse::status).toList());
+        assertEquals("отклонено", uses.get(1).outcome());
+        String result = Json.stringAt(Json.parse(server.requests().get(1).body()), "messages", 2, "content");
+        assertTrue(result.startsWith("Ошибка: Пользователь отклонил вызов"), result);
+    }
+
+    @Test
+    void approvalAllowedRunsTool() throws Exception {
+        server = FakeModelServer.http().handler(this::oneToolCallThenText);
+
+        assertEquals("Понял.", run(Protocol.OPENAI_COMPATIBLE, problems -> List.of(approved(READ)),
+                (use, arguments) -> CompletableFuture.completedFuture(ToolApprover.Decision.ALLOW_IN_CHAT)));
+
+        assertEquals(List.of(ToolUse.Status.AWAITING, ToolUse.Status.RUNNING, ToolUse.Status.DONE),
+                uses.stream().map(ToolUse::status).toList());
+    }
+
+    @Test
+    void toolSourceProblemsAreShownAndAnswerContinues() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Ответ.\"}}]}\n\n", "data: [DONE]\n\n"), 0));
+        ToolUse problem = new ToolUse("mcp:EDT", "mcp", "MCP «EDT»", "не подключился: нет", ToolUse.Status.FAILED);
+
+        assertEquals("Ответ.", run(Protocol.OPENAI_COMPATIBLE, problems -> {
+            problems.accept(problem);
+            return List.of();
+        }, ToolApprover.ALLOW_ALL));
+
+        assertEquals(List.of(problem), uses);
+        assertNull(Json.parseObject(server.requests().get(0).body()).get("tools"));
+    }
+
+    private void oneToolCallThenText(FakeModelServer.Request request, FakeModelServer.Response response) throws Exception {
+        if (!request.body().contains("\"role\":\"tool\"")) {
+            response.sse(List.of(toolCalls("{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"read_module\",\"arguments\":"
+                    + "\"{\\\"module\\\":\\\"Общий\\\"}\"}}"), "data: [DONE]\n\n"), 0);
+        } else {
+            response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Понял.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+        }
+    }
+
+    /** Тот же инструмент, но с подтверждением, как у MCP-серверов. */
+    private static Tool approved(Tool tool) {
+        return new Tool() {
+            @Override
+            public String name() {
+                return tool.name();
+            }
+
+            @Override
+            public String description() {
+                return tool.description();
+            }
+
+            @Override
+            public Map<String, Object> inputSchema() {
+                return tool.inputSchema();
+            }
+
+            @Override
+            public boolean needsApproval() {
+                return true;
+            }
+
+            @Override
+            public String summary(Map<String, Object> input) {
+                return tool.summary(input);
+            }
+
+            @Override
+            public Result call(Map<String, Object> input) throws ToolException {
+                return tool.call(input);
+            }
+        };
+    }
+
     private String run(Protocol protocol) throws Exception {
+        return run(protocol, problems -> List.of(READ), ToolApprover.ALLOW_ALL);
+    }
+
+    private String run(Protocol protocol, ToolSource tools, ToolApprover approver) throws Exception {
         ModelConnection connection = new ModelConnection(protocol, server.url(), "test-model", "", 0, "",
                 new TrustSettings(false, Optional.empty()));
-        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), () -> List.of(READ));
+        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), tools, approver);
         return provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS);
     }
 

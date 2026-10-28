@@ -9,6 +9,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.ResourcesPlugin;
@@ -62,14 +66,18 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
+import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.context.CodeInsertion;
 import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.llm.ModelChatProvider;
 import io.github.hansglorias.edtai.core.llm.ModelClient;
+import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
+import io.github.hansglorias.edtai.core.tls.TrustSettings;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
+import io.github.hansglorias.edtai.core.tools.ToolApprover.Decision;
 
 /**
  * Вид «AI Chat»: лента диалога, панель прикреплённых фрагментов кода и
@@ -93,8 +101,12 @@ public class ChatView extends ViewPart {
     private static final int MAX_INPUT_LINES = 10;
     private static final int NOTICE_MS = 4000;
 
+    /** Подключения к MCP-серверам из настроек. */
+    private final McpHub mcp = new McpHub();
+    /** Инструменты, которые пользователь разрешил «в этом чате»; сбрасываются «Новым чатом». */
+    private final Set<String> allowedInChat = ConcurrentHashMap.newKeySet();
     private final ChatSession session = new ChatSession(
-            ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), ChatView::tools));
+            ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), this::tools, this::approve));
     private final ChatHistoryFile historyFile = new ChatHistoryFile(
             Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath().resolve(HISTORY_FILE));
 
@@ -107,6 +119,7 @@ public class ChatView extends ViewPart {
     private Label emptyTitle;
     private Label emptyText;
     private Link emptyLink;
+    private ApprovalBar approvalBar;
     private ContextBar contextBar;
     private Text input;
     private Button sendButton;
@@ -148,6 +161,9 @@ public class ChatView extends ViewPart {
         @Override
         public void busyChanged(boolean busy) {
             scheduleRefresh();
+            if (!busy) {
+                inUi(() -> approvalBar.dismiss());
+            }
         }
     };
 
@@ -156,6 +172,7 @@ public class ChatView extends ViewPart {
 
     private final IPreferenceChangeListener preferenceListener = event -> inUi(() -> {
         settings = SettingsStore.workspace().load();
+        mcp.reset();
         contextBar.setLimit(settings.contextLimit());
         updateStatus();
         updateEmptyState();
@@ -173,6 +190,7 @@ public class ChatView extends ViewPart {
         top.setLayout(topLayout);
         createHistory(top);
         createEmptyState(top);
+        approvalBar = new ApprovalBar(parent, () -> root.layout(true, true));
         createContextBar(parent);
         createInput(parent);
 
@@ -255,7 +273,7 @@ public class ChatView extends ViewPart {
         new MenuItem(menu, SWT.SEPARATOR);
         MenuItem newChat = new MenuItem(menu, SWT.PUSH);
         newChat.setText("Новый чат");
-        newChat.addListener(SWT.Selection, event -> session.clear());
+        newChat.addListener(SWT.Selection, event -> newChat());
         menu.addListener(SWT.Show, event -> copy.setEnabled(history.getSelectionCount() > 0));
         history.setMenu(menu);
         history.addListener(SWT.KeyDown, event -> {
@@ -341,7 +359,7 @@ public class ChatView extends ViewPart {
         Action newChat = new Action("Новый чат") {
             @Override
             public void run() {
-                session.clear();
+                newChat();
                 input.setFocus();
             }
         };
@@ -366,6 +384,11 @@ public class ChatView extends ViewPart {
         };
         preferencesAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_DEF_VIEW));
         toolBar.add(preferencesAction);
+    }
+
+    private void newChat() {
+        session.clear();
+        allowedInChat.clear();
     }
 
     private void openPreferences() {
@@ -786,10 +809,35 @@ public class ChatView extends ViewPart {
         });
     }
 
-    /** Инструменты для очередного запроса: читаются настройки и активный проект. Вызывается в UI-потоке. */
-    private static List<Tool> tools() {
+    /**
+     * Инструменты для очередного ответа: встроенные и включённых MCP-серверов.
+     * Вызывается в фоновом потоке ответа: подключение к серверу может занять
+     * время.
+     */
+    private List<Tool> tools(Consumer<ToolUse> problems) {
         AiSettings current = SettingsStore.workspace().load();
-        return current.toolsEnabled() ? ProjectTools.create(EclipseWorkspaceFiles.current(), current::contextLimit) : List.of();
+        if (!current.toolsEnabled()) {
+            return List.of();
+        }
+        List<Tool> tools = new ArrayList<>(ProjectTools.create(EclipseWorkspaceFiles.current(), current::contextLimit));
+        Set<String> builtIn = tools.stream().map(Tool::name).collect(Collectors.toSet());
+        tools.addAll(mcp.tools(current.mcpServers(), TrustSettings.from(current), builtIn, current::contextLimit, problems));
+        return tools;
+    }
+
+    /** Вопрос пользователю перед вызовом инструмента MCP-сервера: панель над полем ввода. */
+    private CompletableFuture<Decision> approve(ToolUse use, String arguments) {
+        if (allowedInChat.contains(use.name())) {
+            return CompletableFuture.completedFuture(Decision.ALLOW);
+        }
+        CompletableFuture<Decision> decision = new CompletableFuture<>();
+        decision.thenAccept(value -> {
+            if (value == Decision.ALLOW_IN_CHAT) {
+                allowedInChat.add(use.name());
+            }
+        });
+        inUi(() -> approvalBar.ask(use, arguments, decision));
+        return decision;
     }
 
     private static IEclipsePreferences preferences() {
@@ -806,6 +854,10 @@ public class ChatView extends ViewPart {
         contextBar.clear();
         session.removeListener(chatListener);
         session.cancel();
+        // Закрытие сессий MCP — запросы по сети, не в UI-потоке.
+        Thread closing = new Thread(mcp::close, "EDT AI: закрытие MCP");
+        closing.setDaemon(true);
+        closing.start();
         List<ChatMessage> messages = session.messages();
         if (!messages.equals(saved)) {
             saveHistory(messages);
@@ -834,6 +886,10 @@ public class ChatView extends ViewPart {
 
     ContextBar contextBar() {
         return contextBar;
+    }
+
+    ApprovalBar approvalBar() {
+        return approvalBar;
     }
 
     StyledText history() {

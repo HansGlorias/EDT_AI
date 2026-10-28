@@ -17,6 +17,15 @@ public interface Tool {
     /** JSON Schema аргументов ({@code {"type":"object","properties":{…}}}). */
     Map<String, Object> inputSchema();
 
+    /**
+     * Спрашивать ли пользователя перед вызовом. Встроенные инструменты только
+     * читают проект — без подтверждения; инструменты MCP-серверов могут
+     * менять проект — с подтверждением.
+     */
+    default boolean needsApproval() {
+        return false;
+    }
+
     /** Что делается — для ленты, по-русски: «Читает модуль ОбщийМодуль.Х.Модуль». */
     String summary(Map<String, Object> input);
 

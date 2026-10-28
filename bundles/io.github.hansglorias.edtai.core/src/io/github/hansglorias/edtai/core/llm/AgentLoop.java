@@ -12,7 +12,9 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.JsonException;
 import io.github.hansglorias.edtai.core.tools.Tool;
+import io.github.hansglorias.edtai.core.tools.ToolApprover;
 import io.github.hansglorias.edtai.core.tools.ToolException;
+import io.github.hansglorias.edtai.core.tools.ToolSource;
 
 /**
  * Цикл агента: запрос к модели → вызовы инструментов → результаты обратно
@@ -33,21 +35,28 @@ final class AgentLoop {
     private final Consumer<String> onText;
     private final Consumer<ToolUse> onTool;
     private final ProtocolAdapter adapter;
+    private final ToolSource source;
+    private final ToolApprover approver;
     private final CompletableFuture<String> result = new CompletableFuture<>();
 
-    private List<Tool> tools;
+    private List<Tool> tools = List.of();
     private volatile CompletableFuture<ModelReply> current;
     private final StringBuilder answer = new StringBuilder();
     private boolean separate;
     /** Сервер отклонил запрос с инструментами: больше их не передаём. */
     private boolean toolsRejected;
 
-    AgentLoop(ModelClient client, ModelConnection connection, List<ChatMessage> history, List<Tool> tools, Consumer<String> onText,
-            Consumer<ToolUse> onTool) {
+    /**
+     * @param source   инструменты; запрашиваются в фоновом потоке перед первым запросом
+     * @param approver спрашивает пользователя перед вызовом инструмента, которому нужно подтверждение
+     */
+    AgentLoop(ModelClient client, ModelConnection connection, List<ChatMessage> history, ToolSource source, ToolApprover approver,
+            Consumer<String> onText, Consumer<ToolUse> onTool) {
         this.client = client;
         this.connection = connection;
         this.history = history;
-        this.tools = tools;
+        this.source = source;
+        this.approver = approver;
         this.onText = onText;
         this.onTool = onTool;
         this.adapter = ProtocolAdapter.of(connection.protocol());
@@ -82,6 +91,12 @@ final class AgentLoop {
     }
 
     private String loop() throws Exception {
+        try {
+            tools = List.copyOf(source.tools(onTool));
+        } catch (RuntimeException e) {
+            onTool.accept(new ToolUse("tools", "tools", "Инструменты", "не удалось получить список: " + e.getMessage(),
+                    ToolUse.Status.FAILED));
+        }
         List<Object> extra = new ArrayList<>();
         for (int step = 1;; step++) {
             ModelReply reply;
@@ -130,6 +145,16 @@ final class AgentLoop {
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
         String summary = tool.summary(input);
+        if (tool.needsApproval()) {
+            ToolUse waiting = new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.AWAITING);
+            onTool.accept(waiting);
+            ToolApprover.Decision decision = decide(waiting, call.arguments());
+            if (decision == ToolApprover.Decision.DENY) {
+                onTool.accept(new ToolUse(call.id(), call.name(), summary, "отклонено", ToolUse.Status.FAILED));
+                return new ProtocolAdapter.ToolResult(call, "Пользователь отклонил вызов этого инструмента. Не вызывай его"
+                        + " повторно с теми же аргументами; объясни, что хотел сделать, или ответь без него.", true);
+            }
+        }
         onTool.accept(new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.RUNNING));
         try {
             Tool.Result output = tool.call(input);
@@ -139,6 +164,20 @@ final class AgentLoop {
             String error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             onTool.accept(new ToolUse(call.id(), call.name(), summary, error, ToolUse.Status.FAILED));
             return new ProtocolAdapter.ToolResult(call, error, true);
+        }
+    }
+
+    /** Ждёт решения пользователя; прерывание ответа — отказ и конец ответа. */
+    private ToolApprover.Decision decide(ToolUse use, String arguments) {
+        CompletableFuture<ToolApprover.Decision> decision = approver.approve(use, arguments);
+        try {
+            return decision.get();
+        } catch (InterruptedException e) {
+            decision.cancel(true);
+            Thread.currentThread().interrupt();
+            return ToolApprover.Decision.DENY;
+        } catch (ExecutionException | CancellationException e) {
+            return ToolApprover.Decision.DENY;
         }
     }
 
