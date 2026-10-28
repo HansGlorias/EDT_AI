@@ -5,14 +5,14 @@ package io.github.hansglorias.edtai.core.llm;
  * перевода строки (как их отдаёт {@link java.io.BufferedReader#readLine()}),
  * событие завершается пустой строкой.
  */
-final class SseParser {
+public final class SseParser {
 
     private final StringBuilder data = new StringBuilder();
     private String event = "";
     private boolean hasData;
 
     /** @return событие, если строка его завершила, иначе {@code null} */
-    SseEvent line(String line) {
+    public SseEvent line(String line) {
         if (line.isEmpty()) {
             return dispatch();
         }
@@ -42,7 +42,7 @@ final class SseParser {
     }
 
     /** Конец потока: последнее событие могло остаться без завершающей пустой строки. */
-    SseEvent finish() {
+    public SseEvent finish() {
         return dispatch();
     }
 

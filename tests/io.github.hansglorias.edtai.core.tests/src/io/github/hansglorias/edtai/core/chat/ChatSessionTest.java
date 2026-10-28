@@ -15,6 +15,7 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
+import io.github.hansglorias.edtai.core.context.ContextItem;
 
 class ChatSessionTest {
 
@@ -225,7 +226,7 @@ class ChatSessionTest {
         second.get(TIMEOUT, TimeUnit.SECONDS);
         List<String> events = record(session);
 
-        assertEquals("два", session.editFrom(2));
+        assertEquals("два", session.editFrom(2).text());
 
         assertEquals(List.of("USER:раз", "ASSISTANT:ответ 1"), texts(session.messages()));
         assertEquals(List.of("history"), events);
@@ -233,6 +234,52 @@ class ChatSessionTest {
         assertThrows(IllegalArgumentException.class, () -> session.editFrom(5));
         session.send("три");
         assertThrows(IllegalStateException.class, () -> session.editFrom(0));
+    }
+
+    @Test
+    void contextGoesToProviderAndSurvivesRetryAndEdit() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        List<ContextItem> context = List.of(ContextItem.of("Демо", "src/CommonModules/Цены/Module.bsl", 3, 4, 10, "А = 1;\nБ = 2;"));
+
+        CompletableFuture<ChatMessage> reply = session.send("  что тут?  ", context);
+        assertEquals("что тут?", provider.history.get(0).text());
+        assertEquals(context, provider.history.get(0).context());
+        assertTrue(provider.history.get(0).modelText().startsWith("ОбщийМодуль.Цены.Модуль (проект Демо, "));
+        assertTrue(provider.history.get(0).modelText().endsWith("```bsl\nА = 1;\nБ = 2;\n```\n\nчто тут?"));
+        provider.fail(new IllegalStateException("сбой"));
+        reply.get(TIMEOUT, TimeUnit.SECONDS);
+
+        CompletableFuture<ChatMessage> again = session.retry();
+        assertEquals(context, provider.history.get(0).context());
+        provider.complete("ответ");
+        again.get(TIMEOUT, TimeUnit.SECONDS);
+
+        ChatMessage edited = session.editFrom(0);
+        assertEquals("что тут?", edited.text());
+        assertEquals(context, edited.context());
+        assertTrue(session.messages().isEmpty());
+    }
+
+    @Test
+    void toolUsesGoIntoAnswerAndUnfinishedAreInterrupted() throws Exception {
+        ToolProvider provider = new ToolProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> reply = session.send("что в проекте?");
+
+        provider.tool.accept(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "", ToolUse.Status.RUNNING));
+        assertEquals(List.of(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "", ToolUse.Status.RUNNING)),
+                last(session).tools());
+        assertEquals(Status.STREAMING, last(session).status());
+        provider.tool.accept(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "Демо 1.0", ToolUse.Status.DONE));
+        provider.tool.accept(new ToolUse("2", "read_module", "Читает модуль Х", "", ToolUse.Status.RUNNING));
+        provider.text.accept("Ответ");
+        session.cancel();
+        reply.get(TIMEOUT, TimeUnit.SECONDS);
+
+        assertEquals(List.of("Смотрит сведения о проекте — Демо 1.0", "Читает модуль Х — ошибка: прервано"),
+                last(session).tools().stream().map(ToolUse::label).toList());
+        assertEquals("Ответ", last(session).text());
     }
 
     @Test
@@ -341,6 +388,30 @@ class ChatSessionTest {
     }
 
     /** Провайдер, которым управляет тест: части ответа, завершение, ошибка. */
+    /** Провайдер, который сообщает о вызовах инструментов. */
+    private static final class ToolProvider implements ChatProvider {
+
+        Consumer<String> text;
+        Consumer<ToolUse> tool;
+
+        @Override
+        public String name() {
+            return "tools";
+        }
+
+        @Override
+        public CompletableFuture<String> reply(List<ChatMessage> request, Consumer<String> consumer) {
+            throw new AssertionError("сессия должна вызывать вариант с инструментами");
+        }
+
+        @Override
+        public CompletableFuture<String> reply(List<ChatMessage> request, Consumer<String> onText, Consumer<ToolUse> onTool) {
+            text = onText;
+            tool = onTool;
+            return new CompletableFuture<>();
+        }
+    }
+
     private static final class ManualProvider implements ChatProvider {
 
         List<ChatMessage> history;

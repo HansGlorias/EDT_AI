@@ -23,4 +23,43 @@
             class="io.github.hansglorias.edtai.ui.AiPreferencePage">
       </page>
    </extension>
+   <extension point="org.eclipse.ui.commands">
+      <category
+            id="io.github.hansglorias.edtai.ui.commands"
+            name="EDT AI">
+      </category>
+      <command
+            id="io.github.hansglorias.edtai.ui.askAboutSelection"
+            categoryId="io.github.hansglorias.edtai.ui.commands"
+            name="Спросить AI о выделенном"
+            description="Прикрепить к вопросу в чате AI выделенные строки, метод под курсором или модуль">
+      </command>
+   </extension>
+   <extension point="org.eclipse.ui.handlers">
+      <handler
+            commandId="io.github.hansglorias.edtai.ui.askAboutSelection"
+            class="io.github.hansglorias.edtai.ui.AskAboutSelectionHandler">
+      </handler>
+   </extension>
+   <!-- Контекст окна, а не textEditorScope: многостраничный редактор объекта EDT
+        может не включать контекст текстового редактора у страницы модуля. -->
+   <extension point="org.eclipse.ui.bindings">
+      <key
+            commandId="io.github.hansglorias.edtai.ui.askAboutSelection"
+            contextId="org.eclipse.ui.contexts.window"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="M1+M3+A">
+      </key>
+   </extension>
+   <!-- #TextEditorContext — меню текстовых редакторов Eclipse, его же использует
+        BSL-редактор EDT на Xtext. Проверяется руками в EDT. -->
+   <extension point="org.eclipse.ui.menus">
+      <menuContribution locationURI="popup:#TextEditorContext?after=additions">
+         <command
+               commandId="io.github.hansglorias.edtai.ui.askAboutSelection"
+               icon="icons/chat.png"
+               style="push">
+         </command>
+      </menuContribution>
+   </extension>
 </plugin>

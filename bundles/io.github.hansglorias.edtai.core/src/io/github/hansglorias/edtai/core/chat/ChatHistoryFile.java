@@ -9,16 +9,20 @@ import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.json.JsonException;
 
 /**
  * Диалог в JSON-файле: чтобы он переживал перезапуск EDT.
  *
- * <p>Формат: {@code {"version":1,"messages":[{"role":"USER","status":"DONE","time":"…","text":"…"}]}}.
+ * <p>Формат: {@code {"version":1,"messages":[{"role":"USER","status":"DONE","time":"…","text":"…","context":[…]}]}}.
+ * Поля {@code context} (фрагменты кода сообщения) и {@code tools} (вызовы
+ * инструментов в ответе) необязательные: файлы без них читаются как есть.
  */
 public final class ChatHistoryFile {
 
@@ -57,8 +61,26 @@ public final class ChatHistoryFile {
     static String encode(List<ChatMessage> messages) {
         List<Object> items = new ArrayList<>();
         for (ChatMessage message : messages) {
-            items.add(Json.object("role", message.role().name(), "status", message.status().name(),
-                    "time", message.time().toString(), "text", message.text()));
+            Map<String, Object> item = new LinkedHashMap<>(Json.object("role", message.role().name(), "status",
+                    message.status().name(), "time", message.time().toString(), "text", message.text()));
+            if (!message.context().isEmpty()) {
+                List<Object> context = new ArrayList<>();
+                for (ContextItem part : message.context()) {
+                    context.add(Json.object("project", part.project(), "path", part.path(), "object", part.objectName(),
+                            "firstLine", part.firstLine(), "lastLine", part.lastLine(), "totalLines", part.totalLines(),
+                            "omittedLines", part.omittedLines(), "text", part.text()));
+                }
+                item.put("context", context);
+            }
+            if (!message.tools().isEmpty()) {
+                List<Object> tools = new ArrayList<>();
+                for (ToolUse use : message.tools()) {
+                    tools.add(Json.object("id", use.id(), "name", use.name(), "summary", use.summary(), "outcome", use.outcome(),
+                            "status", use.status().name()));
+                }
+                item.put("tools", tools);
+            }
+            items.add(item);
         }
         return Json.write(Json.object("version", VERSION, "messages", items));
     }
@@ -79,11 +101,44 @@ public final class ChatHistoryFile {
                 String status = Json.stringAt(item, "status");
                 String time = Json.stringAt(item, "time");
                 messages.add(new ChatMessage(ChatRole.valueOf(role), body, time == null ? Instant.EPOCH : Instant.parse(time),
-                        status == null ? ChatMessage.Status.DONE : ChatMessage.Status.valueOf(status)));
+                        status == null ? ChatMessage.Status.DONE : ChatMessage.Status.valueOf(status), context(item), tools(item)));
             }
             return messages;
         } catch (JsonException | IllegalArgumentException | DateTimeParseException e) {
             throw new IOException("Файл диалога повреждён: " + e.getMessage(), e);
         }
+    }
+
+    private static List<ContextItem> context(Object message) throws IOException {
+        List<ContextItem> context = new ArrayList<>();
+        for (Object part : Json.asList(Json.at(message, "context"))) {
+            String project = Json.stringAt(part, "project");
+            String path = Json.stringAt(part, "path");
+            String text = Json.stringAt(part, "text");
+            if (project == null || path == null || text == null) {
+                throw new IOException("В сохранённом фрагменте кода нет проекта, пути или текста");
+            }
+            context.add(new ContextItem(project, path, Json.stringAt(part, "object"), number(part, "firstLine"),
+                    number(part, "lastLine"), number(part, "totalLines"), text, number(part, "omittedLines")));
+        }
+        return context;
+    }
+
+    private static List<ToolUse> tools(Object message) throws IOException {
+        List<ToolUse> tools = new ArrayList<>();
+        for (Object use : Json.asList(Json.at(message, "tools"))) {
+            String name = Json.stringAt(use, "name");
+            if (name == null) {
+                throw new IOException("В сохранённом вызове инструмента нет имени");
+            }
+            String status = Json.stringAt(use, "status");
+            tools.add(new ToolUse(Json.stringAt(use, "id"), name, Json.stringAt(use, "summary"), Json.stringAt(use, "outcome"),
+                    status == null ? ToolUse.Status.DONE : ToolUse.Status.valueOf(status)));
+        }
+        return tools;
+    }
+
+    private static int number(Object part, String key) {
+        return Json.at(part, key) instanceof Number number ? number.intValue() : 0;
     }
 }

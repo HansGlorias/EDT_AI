@@ -36,12 +36,15 @@ import org.eclipse.ui.IWorkbenchPreferencePage;
 
 import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.llm.ModelConnection;
+import io.github.hansglorias.edtai.core.mcp.McpException;
+import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.settings.SettingsValidator;
 import io.github.hansglorias.edtai.core.tls.PemCertificates;
+import io.github.hansglorias.edtai.core.tls.TrustSettings;
 
 /**
  * Window → Preferences → EDT AI: подключение к модели, токен, сертификаты,
@@ -59,6 +62,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Text model;
     private Text maxTokens;
     private Text systemPrompt;
+    private Text contextLimit;
+    private Button toolsEnabled;
     private Text token;
     private Label tokenState;
     private Button removeToken;
@@ -72,6 +77,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private CheckboxTableViewer serverViewer;
     private Button editServer;
     private Button removeServer;
+    private Button checkServer;
+    private Label serverResult;
 
     @Override
     public void init(IWorkbench workbench) {
@@ -130,6 +137,22 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 + " «Restore Defaults» возвращает промпт по умолчанию.");
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, systemPrompt.getLineHeight() * 4)
                 .applyTo(systemPrompt);
+
+        label(group, "Лимит контекста, символов:");
+        contextLimit = new Text(group, SWT.BORDER);
+        contextLimit.setMessage(String.valueOf(AiSettings.DEFAULT_CONTEXT_LIMIT));
+        contextLimit.setToolTipText("Сколько символов кода из EDT прикреплять к одному сообщению. Что не влезло —"
+                + " обрезается по строкам. Пусто — " + AiSettings.DEFAULT_CONTEXT_LIMIT + ".");
+        GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(contextLimit);
+        contextLimit.addModifyListener(event -> validate());
+
+        new Label(group, SWT.NONE);
+        toolsEnabled = new Button(group, SWT.CHECK);
+        toolsEnabled.setText("Инструменты: модель сама читает проект и вызывает MCP-серверы");
+        toolsEnabled.setToolTipText("Встроенные — только чтение: сведения о проекте, список объектов, чтение модуля, поиск"
+                + " по коду. Инструменты MCP-серверов — с подтверждением каждого вызова. Выключите, если сервер модели"
+                + " не поддерживает инструменты.");
+        GridDataFactory.fillDefaults().span(2, 1).applyTo(toolsEnabled);
 
         label(group, "Токен:");
         token = new Text(group, SWT.BORDER | SWT.PASSWORD);
@@ -243,7 +266,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
         column("Имя", 140, McpServer::name);
         column("Транспорт", 80, server -> server.transport().label());
-        column("Команда / URL", 260, McpServer::target);
+        column("Команда / URL", 220, McpServer::target);
+        column("Инструменты", 140, server -> server.tools().isEmpty() ? "все" : server.tools());
 
         serverViewer.setContentProvider(ArrayContentProvider.getInstance());
         serverViewer.setCheckStateProvider(new ICheckStateProvider() {
@@ -288,7 +312,47 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 refreshServers();
             }
         });
+        checkServer = button(buttons, "Проверить");
+        checkServer.setToolTipText("Подключиться к выбранному серверу и получить список инструментов");
+        checkServer.addListener(SWT.Selection, event -> checkSelectedServer());
+
+        serverResult = new Label(group, SWT.WRAP);
+        GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, SWT.DEFAULT).applyTo(serverResult);
         updateServerButtons();
+    }
+
+    /** Подключение к выбранному MCP-серверу в фоне; результат — под таблицей. */
+    private void checkSelectedServer() {
+        McpServer server = selectedServer();
+        if (server == null) {
+            return;
+        }
+        checkServer.setEnabled(false);
+        showServerResult("Подключаюсь к «" + server.name() + "»…");
+        TrustSettings trust = TrustSettings.from(current());
+        Display display = checkServer.getDisplay();
+        Thread thread = new Thread(() -> {
+            String result;
+            try (McpHub hub = new McpHub()) {
+                result = "«" + server.name() + "»: " + hub.check(server, trust);
+            } catch (McpException e) {
+                result = "«" + server.name() + "» не работает: " + e.getMessage();
+            }
+            String text = result;
+            display.asyncExec(() -> {
+                if (!serverResult.isDisposed()) {
+                    showServerResult(text);
+                    updateServerButtons();
+                }
+            });
+        }, "EDT AI: проверка MCP-сервера");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void showServerResult(String text) {
+        serverResult.setText(text);
+        serverResult.getShell().layout(new Control[] { serverResult });
     }
 
     private void editSelectedServer() {
@@ -322,6 +386,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         boolean selected = selectedServer() != null;
         editServer.setEnabled(selected);
         removeServer.setEnabled(selected);
+        if (checkServer != null) {
+            checkServer.setEnabled(selected);
+        }
     }
 
     private void fill(AiSettings settings) {
@@ -330,6 +397,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         model.setText(settings.model());
         maxTokens.setText(settings.maxTokens() > 0 ? String.valueOf(settings.maxTokens()) : "");
         systemPrompt.setText(settings.systemPrompt());
+        contextLimit.setText(
+                settings.contextLimit() == AiSettings.DEFAULT_CONTEXT_LIMIT ? "" : String.valueOf(settings.contextLimit()));
+        toolsEnabled.setSelection(settings.toolsEnabled());
         useSystemTrustStore.setSelection(settings.useSystemTrustStore());
         caFile.setText(settings.caCertificateFile());
         servers.clear();
@@ -340,13 +410,17 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     AiSettings current() {
         return new AiSettings(Protocol.values()[Math.max(0, protocol.getSelectionIndex())], baseUrl.getText(),
-                model.getText(), Math.max(0, maxTokensValue()), systemPrompt.getText(), useSystemTrustStore.getSelection(),
-                caFile.getText(), servers);
+                model.getText(), Math.max(0, maxTokensValue()), systemPrompt.getText(), Math.max(0, number(contextLimit)),
+                toolsEnabled.getSelection(), useSystemTrustStore.getSelection(), caFile.getText(), servers);
+    }
+
+    private int maxTokensValue() {
+        return number(maxTokens);
     }
 
     /** @return число из поля, 0 — пусто, -1 — не число */
-    private int maxTokensValue() {
-        String text = maxTokens.getText().strip();
+    private static int number(Text field) {
+        String text = field.getText().strip();
         if (text.isEmpty()) {
             return 0;
         }
@@ -359,10 +433,13 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     }
 
     private void validate() {
-        if (baseUrl == null || maxTokens == null || caFile == null || serverViewer == null) {
+        if (baseUrl == null || maxTokens == null || contextLimit == null || caFile == null || serverViewer == null) {
             return;
         }
         List<String> errors = new ArrayList<>(SettingsValidator.validate(current()));
+        if (number(contextLimit) < 0) {
+            errors.add(0, "Лимит контекста: нужно целое положительное число или пусто");
+        }
         if (maxTokensValue() < 0) {
             errors.add(0, "Макс. токенов ответа: нужно целое положительное число или пусто");
         }
@@ -502,6 +579,22 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     Text systemPromptField() {
         return systemPrompt;
+    }
+
+    Text contextLimitField() {
+        return contextLimit;
+    }
+
+    Button checkServerButton() {
+        return checkServer;
+    }
+
+    Label serverResult() {
+        return serverResult;
+    }
+
+    CheckboxTableViewer serverViewer() {
+        return serverViewer;
     }
 
     Button checkButton() {

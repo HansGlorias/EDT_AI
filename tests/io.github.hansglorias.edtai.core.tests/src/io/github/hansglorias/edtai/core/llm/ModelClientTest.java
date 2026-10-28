@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
@@ -125,6 +127,24 @@ class ModelClientTest {
         Map<String, Object> anthropic = Json.parseObject(server.requests().get(1).body());
         assertEquals(prompt, anthropic.get("system"));
         assertEquals("user", Json.stringAt(anthropic, "messages", 0, "role"));
+    }
+
+    @Test
+    void contextGoesBeforeQuestionInBothProtocols() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(request.path().endsWith("/messages")
+                ? "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+                : "data: [DONE]\n\n"), 0));
+        ContextItem item = ContextItem.of("Демо", "src/Catalogs/Товары/ObjectModule.bsl", 5, 6, 20, "Процедура А()\nКонецПроцедуры");
+        List<ChatMessage> history = List.of(new ChatMessage(ChatRole.USER, "Что делает А?", Instant.now(),
+                ChatMessage.Status.DONE, List.of(item)));
+        String expected = "Справочник.Товары.МодульОбъекта (проект Демо, src/Catalogs/Товары/ObjectModule.bsl), строки 5–6:\n"
+                + "```bsl\nПроцедура А()\nКонецПроцедуры\n```\n\nЧто делает А?";
+
+        await(client.stream(connection(Protocol.OPENAI_COMPATIBLE, ""), history, parts::add));
+        await(client.stream(connection(Protocol.ANTHROPIC, ""), history, parts::add));
+
+        assertEquals(expected, Json.stringAt(Json.parse(server.requests().get(0).body()), "messages", 0, "content"));
+        assertEquals(expected, Json.stringAt(Json.parse(server.requests().get(1).body()), "messages", 0, "content"));
     }
 
     private static ModelConnection withPrompt(ModelConnection connection, String prompt) {

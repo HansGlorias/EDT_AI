@@ -29,25 +29,25 @@ import javax.net.ssl.SSLContext;
  * {@code localhost.p12} — на localhost и 127.0.0.1, {@code wrong-host.p12} —
  * на другое имя, {@code expired.p12} — просрочен.
  */
-final class FakeModelServer implements AutoCloseable {
+public final class FakeModelServer implements AutoCloseable {
 
     static final String KEYSTORE_PASSWORD = "test-password";
 
     private static final int TLS_HANDSHAKE = 0x16;
 
-    record Request(String method, String path, Map<String, String> headers, String body) {
-        String header(String name) {
+    public record Request(String method, String path, Map<String, String> headers, String body) {
+        public String header(String name) {
             return headers.get(name.toLowerCase(Locale.ROOT));
         }
     }
 
     @FunctionalInterface
-    interface Handler {
+    public interface Handler {
         void handle(Request request, Response response) throws Exception;
     }
 
     /** Ответ: заголовки, потом тело частями (chunked), каждая часть сразу отправляется. */
-    static final class Response {
+    public static final class Response {
 
         private final OutputStream out;
 
@@ -55,16 +55,23 @@ final class FakeModelServer implements AutoCloseable {
             this.out = out;
         }
 
-        void start(int status, String contentType) throws IOException {
-            String head = "HTTP/1.1 " + status + " X\r\n"
+        public void start(int status, String contentType) throws IOException {
+            start(status, contentType, Map.of());
+        }
+
+        /** Начало ответа с дополнительными заголовками: например, {@code Mcp-Session-Id}. */
+        public void start(int status, String contentType, Map<String, String> headers) throws IOException {
+            StringBuilder head = new StringBuilder("HTTP/1.1 " + status + " X\r\n"
                     + "Content-Type: " + contentType + "\r\n"
                     + "Transfer-Encoding: chunked\r\n"
-                    + "Connection: close\r\n\r\n";
-            out.write(head.getBytes(StandardCharsets.US_ASCII));
+                    + "Connection: close\r\n");
+            headers.forEach((name, value) -> head.append(name).append(": ").append(value).append("\r\n"));
+            head.append("\r\n");
+            out.write(head.toString().getBytes(StandardCharsets.US_ASCII));
             out.flush();
         }
 
-        void write(String part) throws IOException {
+        public void write(String part) throws IOException {
             byte[] bytes = part.getBytes(StandardCharsets.UTF_8);
             if (bytes.length == 0) {
                 return;
@@ -75,20 +82,20 @@ final class FakeModelServer implements AutoCloseable {
             out.flush();
         }
 
-        void end() throws IOException {
+        public void end() throws IOException {
             out.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
             out.flush();
         }
 
         /** Весь ответ разом. */
-        void send(int status, String contentType, String body) throws IOException {
+        public void send(int status, String contentType, String body) throws IOException {
             start(status, contentType);
             write(body);
             end();
         }
 
         /** Поток SSE: каждая строка списка — отдельная порция, между порциями пауза. */
-        void sse(List<String> parts, long pauseMillis) throws Exception {
+        public void sse(List<String> parts, long pauseMillis) throws Exception {
             start(200, "text/event-stream");
             for (String part : parts) {
                 write(part);
@@ -113,12 +120,12 @@ final class FakeModelServer implements AutoCloseable {
         thread.start();
     }
 
-    static FakeModelServer http() throws IOException {
+    public static FakeModelServer http() throws IOException {
         return new FakeModelServer(new ServerSocket(0, 50, InetAddress.getLoopbackAddress()), false);
     }
 
     /** @param keystore имя хранилища ключей рядом с классом, например {@code localhost.p12} */
-    static FakeModelServer https(String keystore) throws Exception {
+    public static FakeModelServer https(String keystore) throws Exception {
         KeyStore store = KeyStore.getInstance("PKCS12");
         try (InputStream in = FakeModelServer.class.getResourceAsStream(keystore)) {
             store.load(in, KEYSTORE_PASSWORD.toCharArray());
@@ -130,17 +137,17 @@ final class FakeModelServer implements AutoCloseable {
         return new FakeModelServer(context.getServerSocketFactory().createServerSocket(0, 50, InetAddress.getLoopbackAddress()), true);
     }
 
-    FakeModelServer handler(Handler value) {
+    public FakeModelServer handler(Handler value) {
         this.handler = value;
         return this;
     }
 
     /** Адрес сервера: {@code http://localhost:порт}. */
-    String url() {
+    public String url() {
         return (tls ? "https" : "http") + "://localhost:" + socket.getLocalPort();
     }
 
-    List<Request> requests() {
+    public List<Request> requests() {
         return List.copyOf(requests);
     }
 

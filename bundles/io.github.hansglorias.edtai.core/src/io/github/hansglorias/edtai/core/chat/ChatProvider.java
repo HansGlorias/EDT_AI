@@ -21,4 +21,13 @@ public interface ChatProvider {
      * @return полный текст ответа
      */
     CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText);
+
+    /**
+     * То же, но провайдер может вызывать инструменты и сообщать о них в
+     * {@code onTool}: сначала со статусом {@link ToolUse.Status#RUNNING}, потом
+     * с итогом, с тем же {@link ToolUse#id()}.
+     */
+    default CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool) {
+        return reply(history, onText);
+    }
 }

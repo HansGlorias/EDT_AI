@@ -49,7 +49,9 @@ final class ModelErrors {
                     : "Сервер ответил HTTP " + status + ".";
         };
         String server = serverText(body);
-        return new ModelException(server == null ? text : text + " Ответ сервера: «" + server + "»");
+        // vLLM без --enable-auto-tool-choice, старые шлюзы: 400/422 с упоминанием tools в тексте ошибки.
+        boolean rejectsTools = (status == 400 || status == 422) && body != null && body.toLowerCase(Locale.ROOT).contains("tool");
+        return new ModelException(server == null ? text : text + " Ответ сервера: «" + server + "»", null, rejectsTools);
     }
 
     /**

@@ -7,7 +7,8 @@ import java.util.List;
  * Сериализация списка MCP-серверов в одну строку preferences.
  *
  * <p>Одна строка на сервер, поля через табуляцию:
- * {@code enabled<TAB>transport<TAB>name<TAB>target}. Обратная косая черта,
+ * {@code enabled<TAB>transport<TAB>name<TAB>target<TAB>tools}; записи без
+ * {@code tools} (до этапа 6) читаются. Обратная косая черта,
  * табуляция и переводы строк в значениях экранируются.
  */
 public final class McpServersCodec {
@@ -26,7 +27,8 @@ public final class McpServersCodec {
             out.append(server.enabled() ? '1' : '0').append(SEPARATOR)
                     .append(server.transport().name()).append(SEPARATOR)
                     .append(escape(server.name())).append(SEPARATOR)
-                    .append(escape(server.target()));
+                    .append(escape(server.target())).append(SEPARATOR)
+                    .append(escape(server.tools()));
         }
         return out.toString();
     }
@@ -44,15 +46,16 @@ public final class McpServersCodec {
                 continue;
             }
             String[] fields = line.split(String.valueOf(SEPARATOR), -1);
-            if (fields.length != 4) {
-                throw new IllegalArgumentException("Повреждена запись MCP-сервера: ожидалось 4 поля, получено " + fields.length);
+            if (fields.length != 4 && fields.length != 5) {
+                throw new IllegalArgumentException("Повреждена запись MCP-сервера: ожидалось 5 полей, получено " + fields.length);
             }
             boolean enabled = switch (fields[0]) {
                 case "1" -> true;
                 case "0" -> false;
                 default -> throw new IllegalArgumentException("Повреждена запись MCP-сервера: флаг «" + fields[0] + "»");
             };
-            servers.add(new McpServer(unescape(fields[2]), McpTransport.parse(fields[1]), unescape(fields[3]), enabled));
+            servers.add(new McpServer(unescape(fields[2]), McpTransport.parse(fields[1]), unescape(fields[3]), enabled,
+                    fields.length == 5 ? unescape(fields[4]) : ""));
         }
         return servers;
     }
