@@ -27,11 +27,13 @@ import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
 import org.eclipse.swt.widgets.TableItem;
 import org.eclipse.swt.widgets.Text;
+import org.eclipse.swt.widgets.ToolBar;
+import org.eclipse.swt.widgets.ToolItem;
 
 import io.github.hansglorias.edtai.core.chat.ChatStore;
 
 /**
- * Боковая панель вида чата: поиск, список диалогов, последний изменённый —
+ * Боковая панель вида чата: «Новый чат», поиск, список диалогов, последний изменённый —
  * сверху, открытый выделен. Щелчок открывает диалог, F2 — переименовать,
  * контекстное меню — «Открыть», «Переименовать…», «Экспорт в Markdown…»,
  * «Удалить».
@@ -54,10 +56,13 @@ final class ChatHistoryPanel {
 
         /** Запрос поиска изменился — показать найденное. */
         void searchChanged();
+
+        void newChat();
     }
 
     private final Composite panel;
     private final Text search;
+    private final ToolItem newChat;
     private final Label nothing;
     private final Table table;
     private final TableColumn title;
@@ -71,10 +76,19 @@ final class ChatHistoryPanel {
         this.callbacks = callbacks;
         panel = new Composite(parent, SWT.NONE);
         GridLayoutFactory.fillDefaults().spacing(0, 4).applyTo(panel);
-        Label header = new Label(panel, SWT.NONE);
+        Composite top = new Composite(panel, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(top);
+        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(top);
+        Label header = new Label(top, SWT.NONE);
         header.setText("Чаты");
         header.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
-        GridDataFactory.fillDefaults().indent(4, 0).applyTo(header);
+        GridDataFactory.fillDefaults().grab(true, false).align(SWT.FILL, SWT.CENTER).indent(4, 0).applyTo(header);
+        ToolBar tools = new ToolBar(top, SWT.FLAT);
+        ToolItem newChat = new ToolItem(tools, SWT.PUSH);
+        newChat.setImage(Icons.image(Icons.NEW_CHAT));
+        newChat.setToolTipText("Новый чат");
+        newChat.addListener(SWT.Selection, event -> callbacks.newChat());
+        this.newChat = newChat;
         search = new Text(panel, SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL);
         search.setMessage("Поиск по чатам");
         search.setToolTipText("Все слова — в названии или сообщениях чата");
@@ -129,6 +143,11 @@ final class ChatHistoryPanel {
         });
 
         Menu menu = new Menu(table);
+        MenuItem create = new MenuItem(menu, SWT.PUSH);
+        create.setText("Новый чат");
+        create.setImage(Icons.image(Icons.NEW_CHAT));
+        create.addListener(SWT.Selection, event -> callbacks.newChat());
+        new MenuItem(menu, SWT.SEPARATOR);
         List<MenuItem> items = List.of(item(menu, "Открыть", callbacks::open), item(menu, "Переименовать…\tF2", callbacks::rename),
                 item(menu, "Экспорт в Markdown…", callbacks::export), item(menu, "Удалить", callbacks::delete));
         menu.addListener(SWT.Show, event -> items.forEach(item -> item.setEnabled(selected() != null)));
@@ -195,6 +214,11 @@ final class ChatHistoryPanel {
             titles.add(item.getText(0));
         }
         return titles;
+    }
+
+    /** «Новый чат» в заголовке панели, как щелчок. */
+    void clickNewChat() {
+        newChat.notifyListeners(SWT.Selection, new Event());
     }
 
     void search(String query) {

@@ -96,6 +96,7 @@ import org.eclipse.ui.IViewSite;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.actions.ActionFactory;
 import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.progress.IWorkbenchSiteProgressService;
@@ -418,6 +419,12 @@ public class ChatView extends ViewPart {
             }
 
             @Override
+            public void newChat() {
+                ChatView.this.newChat();
+                input.setFocus();
+            }
+
+            @Override
             public void delete(String id) {
                 if (id.equals(chatId)) {
                     deleteChat();
@@ -472,7 +479,8 @@ public class ChatView extends ViewPart {
 
     private void createHistory(Composite parent) {
         history = new StyledText(parent, SWT.MULTI | SWT.V_SCROLL | SWT.WRAP | SWT.READ_ONLY | SWT.BORDER);
-        history.setMargins(8, 8, 8, 8);
+        history.setMargins(12, 10, 12, 10);
+        history.setLineSpacing(2);
         renderer = new MessageRenderer(history, new MessageRenderer.Callbacks() {
             @Override
             public void copy(String text) {
@@ -630,6 +638,7 @@ public class ChatView extends ViewPart {
             updateInputHeight();
         });
         input.addListener(SWT.Resize, event -> updateInputHeight());
+        input.setMenu(inputMenu());
         inputAssist = new InputAssist(input, file -> attach(AttachedContext.wholeFile(file)));
         // Пока пользователь правил модуль, строки фрагментов могли сдвинуться.
         input.addListener(SWT.FocusIn, event -> {
@@ -639,7 +648,7 @@ public class ChatView extends ViewPart {
         });
 
         Button attachButton = new Button(bottom, SWT.PUSH);
-        attachButton.setImage(PlatformUI.getWorkbench().getSharedImages().getImage(ISharedImages.IMG_OBJ_FILE));
+        attachButton.setImage(Icons.image(Icons.ATTACH));
         attachButton.setToolTipText("Приложить файлы или скриншоты (картинку можно вставить в поле Ctrl+V или перетащить файл)");
         GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).applyTo(attachButton);
         attachButton.addListener(SWT.Selection, event -> chooseFiles());
@@ -663,10 +672,11 @@ public class ChatView extends ViewPart {
         int width = 0;
         for (String text : new String[] { SEND, STOP }) {
             sendButton.setText(text);
-            sendButton.setImage(STOP.equals(text) ? stopImage() : null);
+            sendButton.setImage(STOP.equals(text) ? stopImage() : Icons.image(Icons.SEND));
             width = Math.max(width, sendButton.computeSize(SWT.DEFAULT, SWT.DEFAULT).x);
         }
-        sendButton.setImage(null);
+        // Значок есть всегда: на Windows кнопка, у которой убрали картинку, оставляет под неё место и текст съезжает.
+        sendButton.setImage(Icons.image(Icons.SEND));
         GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).hint(width, SWT.DEFAULT).applyTo(sendButton);
         sendButton.addListener(SWT.Selection, event -> sendOrStop());
         updateInputHeight();
@@ -682,7 +692,7 @@ public class ChatView extends ViewPart {
                 showHistoryPanel(isChecked());
             }
         };
-        historyAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_OBJ_FOLDER));
+        historyAction.setImageDescriptor(Icons.descriptor(Icons.HISTORY));
         historyAction.setChecked(historyShown);
         toolBar.add(historyAction);
 
@@ -693,7 +703,7 @@ public class ChatView extends ViewPart {
                 input.setFocus();
             }
         };
-        newChat.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_TOOL_NEW_WIZARD));
+        newChat.setImageDescriptor(Icons.descriptor(Icons.NEW_CHAT));
         toolBar.add(newChat);
 
         Action attachModule = new Action("Прикрепить модуль…") {
@@ -722,10 +732,17 @@ public class ChatView extends ViewPart {
         };
         autoAction.setToolTipText("Авторежим: модель вызывает инструменты MCP без вопроса (правка модулей и git — всегда без"
                 + " вопроса). Команда /auto");
-        autoAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_ELCL_SYNCED));
+        autoAction.setImageDescriptor(Icons.descriptor(Icons.AUTO));
         autoAction.setChecked(isAutoApprove());
         toolBar.add(autoAction);
         toolBar.add(preferencesAction);
+
+        getViewSite().getActionBars().setGlobalActionHandler(ActionFactory.PASTE.getId(), new Action() {
+            @Override
+            public void run() {
+                paste();
+            }
+        });
 
         IMenuManager menu = getViewSite().getActionBars().getMenuManager();
         MenuManager historyMenu = new MenuManager("История чатов");
@@ -1341,6 +1358,55 @@ public class ChatView extends ViewPart {
                 : "Авторежим выключен: перед вызовом инструмента MCP — вопрос");
     }
 
+    /**
+     * Ctrl+V в EDT — команда «Вставить» верстака: до поля ввода нажатие не
+     * доходит, команда сама вставляет текст. Поэтому у вида свой обработчик:
+     * в поле ввода картинка или файлы из буфера прикладываются, текст —
+     * вставляется; в других полях вида — обычная вставка.
+     */
+    void paste() {
+        Control focus = input.getDisplay().getFocusControl();
+        if (focus == input) {
+            if (!pasteAttachments()) {
+                input.paste();
+            }
+        } else if (focus instanceof Text text) {
+            text.paste();
+        }
+    }
+
+    /** Меню поля ввода: «Вставить» умеет картинки и файлы, рядом — «Приложить файлы…». */
+    private Menu inputMenu() {
+        Menu menu = new Menu(input);
+        MenuItem cut = new MenuItem(menu, SWT.PUSH);
+        cut.setText("Вырезать");
+        cut.addListener(SWT.Selection, event -> input.cut());
+        MenuItem copy = new MenuItem(menu, SWT.PUSH);
+        copy.setText("Копировать");
+        copy.addListener(SWT.Selection, event -> input.copy());
+        MenuItem paste = new MenuItem(menu, SWT.PUSH);
+        paste.setText("Вставить\tCtrl+V");
+        paste.addListener(SWT.Selection, event -> {
+            if (!pasteAttachments()) {
+                input.paste();
+            }
+        });
+        MenuItem selectAll = new MenuItem(menu, SWT.PUSH);
+        selectAll.setText("Выделить всё");
+        selectAll.addListener(SWT.Selection, event -> input.selectAll());
+        new MenuItem(menu, SWT.SEPARATOR);
+        MenuItem attach = new MenuItem(menu, SWT.PUSH);
+        attach.setText("Приложить файлы…");
+        attach.setImage(Icons.image(Icons.ATTACH));
+        attach.addListener(SWT.Selection, event -> chooseFiles());
+        menu.addListener(SWT.Show, event -> {
+            boolean selected = input.getSelectionCount() > 0;
+            cut.setEnabled(selected);
+            copy.setEnabled(selected);
+        });
+        return menu;
+    }
+
     /** Диалог выбора файлов: картинки и текстовые файлы. */
     private void chooseFiles() {
         FileDialog dialog = new FileDialog(getSite().getShell(), SWT.OPEN | SWT.MULTI);
@@ -1843,7 +1909,7 @@ public class ChatView extends ViewPart {
         if (!Objects.equals(sendButton.getText(), text)) {
             sendButton.setText(text);
             // «Стоп» с красным значком: видно, что идёт ответ и его можно остановить.
-            sendButton.setImage(busy ? stopImage() : null);
+            sendButton.setImage(busy ? stopImage() : Icons.image(Icons.SEND));
         }
         sendButton.setEnabled(busy || !input.getText().isBlank());
     }
