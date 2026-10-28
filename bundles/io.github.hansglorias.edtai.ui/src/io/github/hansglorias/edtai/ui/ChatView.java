@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -47,6 +48,7 @@ import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.action.MenuManager;
 import org.eclipse.jface.action.Separator;
+import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
@@ -73,6 +75,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Menu;
@@ -93,6 +96,7 @@ import org.osgi.framework.FrameworkUtil;
 
 import io.github.hansglorias.edtai.core.chat.ChatHistoryFile;
 import io.github.hansglorias.edtai.core.chat.ChatListener;
+import io.github.hansglorias.edtai.core.chat.ChatMarkdown;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ReplyActivity;
 import io.github.hansglorias.edtai.core.chat.SlashCommand;
@@ -363,6 +367,21 @@ public class ChatView extends ViewPart {
             @Override
             public void open(String id) {
                 openChat(id);
+            }
+
+            @Override
+            public void rename(String id) {
+                renameChat(id);
+            }
+
+            @Override
+            public void export(String id) {
+                exportChat(id);
+            }
+
+            @Override
+            public void searchChanged() {
+                refreshHistoryPanel();
             }
 
             @Override
@@ -653,6 +672,18 @@ public class ChatView extends ViewPart {
         historyMenu.add(new Action("…") {
         });
         menu.add(historyMenu);
+        menu.add(new Action("Переименовать этот чат…") {
+            @Override
+            public void run() {
+                renameChat(chatId);
+            }
+        });
+        menu.add(new Action("Экспорт чата в Markdown…") {
+            @Override
+            public void run() {
+                exportChat(chatId);
+            }
+        });
         menu.add(new Action("Удалить этот чат") {
             @Override
             public void run() {
@@ -739,6 +770,82 @@ public class ChatView extends ViewPart {
         refreshHistoryPanel();
     }
 
+    /** Сообщения чата: открытого — из вида, остальных — из файла; null — не прочитать или пуст. */
+    private List<ChatMessage> messagesOf(String id) {
+        List<ChatMessage> messages;
+        try {
+            messages = id.equals(chatId) ? session.messages() : chats.file(id).load();
+        } catch (IOException e) {
+            showNotice("Не удалось прочитать чат: " + e.getMessage());
+            return null;
+        }
+        if (messages.isEmpty()) {
+            showNotice("В чате ещё нет сообщений");
+            return null;
+        }
+        return messages;
+    }
+
+    /** Даёт чату название; пустое — снова начало первого вопроса. */
+    private void renameChat(String id) {
+        List<ChatMessage> messages = messagesOf(id);
+        String title = messages == null ? null : askTitle.apply(chats.title(id, messages));
+        if (title == null) {
+            return;
+        }
+        try {
+            chats.rename(id, title);
+        } catch (IOException e) {
+            showNotice("Не удалось переименовать чат: " + e.getMessage());
+        }
+        refreshHistoryPanel();
+    }
+
+    /** Сохраняет чат в Markdown-файл, который выберет пользователь. */
+    private void exportChat(String id) {
+        List<ChatMessage> messages = messagesOf(id);
+        if (messages == null) {
+            return;
+        }
+        String title = chats.title(id, messages);
+        Path target = chooseExportFile.apply(exportName(title));
+        if (target == null) {
+            return;
+        }
+        try {
+            Files.writeString(target, ChatMarkdown.export(title, messages, ZoneId.systemDefault()), StandardCharsets.UTF_8);
+            showNotice("Чат сохранён: " + target);
+        } catch (IOException e) {
+            showNotice("Не удалось сохранить чат: " + e.getMessage());
+        }
+    }
+
+    /** Имя файла по названию чата: без символов, запрещённых в Windows. */
+    static String exportName(String title) {
+        String name = title.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").replace("…", "").strip()
+                .replaceAll("[. ]+$", "");
+        name = name.length() > 80 ? name.substring(0, 80).strip() : name;
+        return (name.isEmpty() ? "chat" : name) + ".md";
+    }
+
+    /** Новое название чата, null — отмена; тесты подменяют. */
+    Function<String, String> askTitle = current -> {
+        InputDialog dialog = new InputDialog(getSite().getShell(), "Переименовать чат",
+                "Название чата (пустое — по первому вопросу):", current, null);
+        return dialog.open() == Window.OK ? dialog.getValue() : null;
+    };
+
+    /** Куда сохранить чат, null — отмена; тесты подменяют. */
+    Function<String, Path> chooseExportFile = name -> {
+        FileDialog dialog = new FileDialog(getSite().getShell(), SWT.SAVE);
+        dialog.setText("Экспорт чата в Markdown");
+        dialog.setFilterExtensions(new String[] { "*.md", "*.*" });
+        dialog.setFileName(name);
+        dialog.setOverwrite(true);
+        String path = dialog.open();
+        return path == null ? null : Path.of(path);
+    };
+
     /** Показывает или прячет боковую панель со списком чатов. */
     void showHistoryPanel(boolean shown) {
         historyShown = shown;
@@ -777,7 +884,7 @@ public class ChatView extends ViewPart {
             return;
         }
         try {
-            historyPanel.show(chats.list(), chatId);
+            historyPanel.show(chats.search(historyPanel.query()), chatId);
         } catch (IOException e) {
             historyPanel.show(List.of(), chatId);
         }
