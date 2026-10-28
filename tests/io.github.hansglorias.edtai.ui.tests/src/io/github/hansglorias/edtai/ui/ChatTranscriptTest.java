@@ -289,6 +289,52 @@ class ChatTranscriptTest extends AbstractChatTest {
         assertTrue(reopened.history().getText().contains("первый чат"), "открывается чат, открытый в прошлый раз");
     }
 
+    @Test
+    void chatsAreRenamedSearchedAndExported() throws Exception {
+        answering(List.of("Используйте ", "ТекущаяДатаСеанса()."));
+        ChatView view = showView();
+        ask(view, "как получить дату");
+        view.newChatForTest();
+        settle();
+        ask(view, "ревью модуля");
+        view.showHistoryPanel(true);
+        ChatHistoryPanel panel = view.historyPanel();
+        assertEquals(List.of("ревью модуля", "как получить дату"), panel.titles());
+
+        view.askTitle = current -> {
+            assertEquals("как получить дату", current);
+            return "Даты сеанса";
+        };
+        panel.runMenuItem(1, "Переименовать");
+        assertEquals(List.of("ревью модуля", "Даты сеанса"), panel.titles(), "порядок не меняется");
+
+        panel.search("получить ДАТУ");
+        waitUntil(() -> panel.titles().size() == 1, () -> panel.titles().toString());
+        assertEquals(List.of("Даты сеанса"), panel.titles(), "по тексту вопроса, без учёта регистра");
+        panel.search("нет такого");
+        waitUntil(panel::isNothingFound, () -> panel.titles().toString());
+        panel.search("");
+        waitUntil(() -> panel.titles().size() == 2, () -> panel.titles().toString());
+        assertFalse(panel.isNothingFound());
+
+        java.nio.file.Path target = Files.createTempDirectory("edtai-export").resolve("chat.md");
+        List<String> names = new ArrayList<>();
+        view.chooseExportFile = name -> {
+            names.add(name);
+            return target;
+        };
+        panel.runMenuItem(1, "Экспорт");
+        assertEquals(List.of("Даты сеанса.md"), names);
+        String markdown = Files.readString(target, StandardCharsets.UTF_8);
+        assertTrue(markdown.startsWith("# Даты сеанса\n\n## Вопрос · "), markdown);
+        assertTrue(markdown.contains("как получить дату\n\n## Ответ · "), markdown);
+        assertTrue(markdown.endsWith("Используйте ТекущаяДатаСеанса().\n"), markdown);
+        assertTrue(view.status().getText().contains("Чат сохранён"), view.status().getText());
+
+        assertEquals("a_b_c_.md", ChatView.exportName("a/b:c?…..."));
+        assertEquals("chat.md", ChatView.exportName("..."));
+    }
+
     private static String press(ChatView view, int keyCode) {
         view.onInputKey(key(keyCode, 0));
         return view.input().getText();

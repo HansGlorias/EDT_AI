@@ -50,6 +50,44 @@ class ChatStoreTest {
     }
 
     @Test
+    void chatsAreRenamedAndSearched() throws Exception {
+        ChatStore store = new ChatStore(temp.resolve("chats"));
+        String first = store.newId();
+        store.file(first).save(List.of(ChatMessage.of(ChatRole.USER, "Как получить текущую дату?"),
+                ChatMessage.of(ChatRole.ASSISTANT, "Используйте ТекущаяДатаСеанса().")));
+        Files.setLastModifiedTime(store.file(first).path(), FileTime.from(Instant.parse("2026-10-01T10:00:00Z")));
+        String second = store.newId();
+        store.file(second).save(List.of(ChatMessage.of(ChatRole.USER, "Ревью модуля проведения")));
+        FileTime changed = Files.getLastModifiedTime(store.file(first).path());
+
+        store.rename(first, "  Даты\n и   ёлки ");
+        assertEquals(List.of("Ревью модуля проведения", "Даты и ёлки"), store.list().stream().map(ChatStore.Entry::title).toList());
+        assertEquals(changed, Files.getLastModifiedTime(store.file(first).path()), "переименование не поднимает чат в списке");
+        assertEquals("Даты и ёлки", store.title(first, List.of()));
+        assertEquals(2, store.list().size(), "файл названий в списке не виден");
+
+        assertEquals(List.of(first), ids(store.search("текущаяДАТАсеанса")), "по тексту ответа, без учёта регистра");
+        assertEquals(List.of(first), ids(store.search("елки")), "по названию, ё = е");
+        assertEquals(List.of(first), ids(store.search("дату   сеанса")), "все слова, в разных сообщениях");
+        assertEquals(List.of(), ids(store.search("дату ревью")));
+        assertEquals(List.of(second, first), ids(store.search("  ")));
+
+        store.rename(first, " ");
+        assertEquals("Как получить текущую дату?", store.list().get(1).title(), "пустое название — снова по вопросу");
+
+        store.rename(second, "Ревью");
+        store.delete(second);
+        assertFalse(Files.readString(temp.resolve("chats/titles.json")).contains(second), "название удалённого чата забыто");
+
+        Files.writeString(temp.resolve("chats/titles.json"), "{не json");
+        assertEquals("Как получить текущую дату?", store.list().get(0).title(), "битый файл названий не мешает");
+    }
+
+    private static List<String> ids(List<ChatStore.Entry> entries) {
+        return entries.stream().map(ChatStore.Entry::id).toList();
+    }
+
+    @Test
     void legacyChatIsMigratedAndBrokenFilesSkipped() throws Exception {
         Path legacy = temp.resolve("chat.json");
         new ChatHistoryFile(legacy).save(List.of(ChatMessage.of(ChatRole.USER, "старый диалог")));
