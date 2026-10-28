@@ -46,6 +46,13 @@ final class FakeMcpServer implements AutoCloseable {
         results.put(name, result);
     }
 
+    /** Инструмент с подсказкой {@code annotations.readOnlyHint}. */
+    void tool(String name, boolean readOnly, Function<Map<String, Object>, Object> result) {
+        tools.add(Json.object("name", name, "description", name, "inputSchema", Json.object("type", "object"), "annotations",
+                Json.object("readOnlyHint", readOnly)));
+        results.put(name, result);
+    }
+
     /** Результат вызова: текст Markdown во встроенном ресурсе, как у EDT-MCP. */
     static Object resource(String markdown) {
         return Json.object("content", List.of(Json.object("type", "resource", "resource",

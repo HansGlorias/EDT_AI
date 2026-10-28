@@ -20,6 +20,8 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.ActionContributionItem;
 import org.eclipse.jface.action.IContributionItem;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.widgets.Event;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +31,7 @@ import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
+import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 
 /**
  * Инструменты, этап 5 (MVP): модель вызывает инструмент чтения проекта,
@@ -130,6 +133,33 @@ class ChatToolsTest extends AbstractChatTest {
         assertTrue(transcript.contains(MessageRenderer.HIDE_CALLS + "\n" + MessageRenderer.TOOL + "Ищет"), transcript);
         view.linkAction(MessageRenderer.HIDE_CALLS).run();
         assertFalse(view.history().getText().contains("Ищет"));
+    }
+
+    @Test
+    void readOnlyModeDropsEditingTools() throws Exception {
+        answering(List.of("Покажу исправление кодом."));
+        configure(server);
+        ChatView view = showView();
+        assertFalse(view.readOnlyButton().getSelection());
+
+        view.readOnlyButton().setSelection(true);
+        view.readOnlyButton().notifyListeners(SWT.Selection, new Event());
+        assertTrue(view.status().getText().startsWith("Только вопросы: модель не меняет проект"), view.status().getText());
+        ask(view, "Исправь модуль Тест");
+
+        Map<String, Object> request = Json.parseObject(server.requests().get(0).body());
+        List<String> names = Json.asList(request.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
+        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "git_status", "git_diff", "git_log"), names);
+        String system = Json.stringAt(Json.asList(request.get("messages")).get(0), "content");
+        assertTrue(system.contains(ProjectBrief.READ_ONLY_RULES), system);
+
+        view.input().setText("/readonly");
+        view.send();
+        assertFalse(view.readOnlyButton().getSelection(), "команда переключает режим");
+        ask(view, "А теперь исправь");
+        Map<String, Object> second = Json.parseObject(server.requests().get(1).body());
+        assertTrue(Json.write(second.get("tools")).contains("edit_module"));
+        assertFalse(Json.stringAt(Json.asList(second.get("messages")).get(0), "content").contains("Режим «только вопросы»"));
     }
 
     @Test

@@ -58,6 +58,7 @@ abstract class AbstractChatTest {
         page.getWorkbenchWindow().getShell().setBounds(0, 0, 720, 780);
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
         deleteChats();
         Platform.addLogListener(logListener);
     }
@@ -74,6 +75,7 @@ abstract class AbstractChatTest {
         }
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
         deleteChats();
         Platform.removeLogListener(logListener);
         assertEquals(List.of(), loggedErrors.stream().map(AbstractChatTest::describe).toList());

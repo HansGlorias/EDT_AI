@@ -78,6 +78,29 @@ class McpHubTest {
         ToolException error = assertThrows(ToolException.class, () -> tools.get("broken").call(Map.of()));
         assertEquals("{\"success\": false, \"error\": \"нет проекта\"}", error.getMessage());
         assertEquals(List.of(), problems);
+        assertFalse(read.modifies(), "по имени: читающий глагол");
+        assertFalse(tools.get("get_edt_version").modifies());
+        assertTrue(tools.get("broken").modifies(), "незнакомое имя — правка");
+    }
+
+    @Test
+    void readOnlyHintDecidesOverName() throws Exception {
+        server.tool("update_index", true, arguments -> Json.object("content", List.of()));
+        server.tool("get_and_fix", false, arguments -> Json.object("content", List.of()));
+        Map<String, Tool> tools = tools(edt(""));
+
+        assertFalse(tools.get("update_index").modifies(), "сервер сказал: только читает");
+        assertTrue(tools.get("get_and_fix").modifies(), "сервер сказал: меняет");
+    }
+
+    @Test
+    void modifyingIsGuessedByVerb() {
+        for (String name : List.of("get_problems", "listObjects", "read-module", "search", "validate_project", "find.usages", "go_to_definition")) {
+            assertFalse(new McpToolInfo(name, "", null).modifies(), name);
+        }
+        for (String name : List.of("create_metadata", "updateModule", "delete", "rename_object", "getter", "run_tests")) {
+            assertTrue(new McpToolInfo(name, "", null).modifies(), name);
+        }
 
         // Второй ответ модели — без нового подключения.
         tools(edt(""));

@@ -259,6 +259,11 @@ public final class GitTools {
      * удаляются. Необратимо, поэтому с подтверждением (в авторежиме — без).
      */
     private final class RestoreTool implements Tool {
+
+        @Override
+        public boolean modifies() {
+            return true;
+        }
         @Override
         public String name() {
             return "git_restore";

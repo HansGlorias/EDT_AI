@@ -26,6 +26,14 @@ public interface Tool {
         return false;
     }
 
+    /**
+     * Меняет проект (модули, метаданные, файлы): в режиме «только вопросы»
+     * такие инструменты модели не передаются.
+     */
+    default boolean modifies() {
+        return false;
+    }
+
     /** Что делается — для ленты, по-русски: «Читает модуль ОбщийМодуль.Х.Модуль». */
     String summary(Map<String, Object> input);
 

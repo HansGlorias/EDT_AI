@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.tools;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -117,6 +118,8 @@ class GitToolsTest {
     void restoreReturnsFilesToLastCommit() throws Exception {
         Tool restore = tools.get("git_restore");
         assertTrue(restore.needsApproval(), "откат необратим — с подтверждением");
+        assertTrue(restore.modifies());
+        assertFalse(tools.get("git_status").modifies());
         Files.delete(project.resolve("src/CommonModules/Общий/Module.bsl"));
         assertEquals("Откатывает в git: src/CommonModules/Общий", restore.summary(Map.of("paths", List.of("src/CommonModules/Общий"))));
 
