@@ -11,6 +11,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
@@ -101,6 +104,39 @@ class McpHubTest {
         assertEquals("mcp__x", McpHub.exposedName(new McpServer("Рабочий", McpTransport.HTTP, "", true), "x", Set.of("x")));
         assertEquals("mcp__x_2", McpHub.exposedName(new McpServer("Рабочий", McpTransport.HTTP, "", true), "x", Set.of("x", "mcp__x")));
         assertEquals("get_module", McpHub.exposedName(edt(""), "get.module", Set.of()));
+    }
+
+    @Test
+    void resetDoesNotWaitForRunningCall() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        server.tool("slow", "Долгая проверка", arguments -> {
+            started.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return FakeMcpServer.resource("готово");
+        });
+        Tool slow = tools(edt("")).get("slow");
+        CompletableFuture<Tool.Result> call = CompletableFuture.supplyAsync(() -> {
+            try {
+                return slow.call(Map.of());
+            } catch (ToolException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertTrue(started.await(5, TimeUnit.SECONDS));
+
+        long start = System.nanoTime();
+        hub.reset();
+        long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+        release.countDown();
+
+        assertTrue(millis < 2000, "reset ждал вызова " + millis + " мс");
+        assertTrue(server.methods.contains("DELETE"), server.methods.toString());
+        assertEquals("готово", call.get(5, TimeUnit.SECONDS).text());
     }
 
     @Test

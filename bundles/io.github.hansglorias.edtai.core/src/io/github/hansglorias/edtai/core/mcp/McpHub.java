@@ -154,7 +154,7 @@ public final class McpHub implements AutoCloseable {
         reset();
     }
 
-    private Connection connect(McpServer server, TrustSettings trust) throws McpException {
+    private synchronized Connection connect(McpServer server, TrustSettings trust) throws McpException {
         Connection current = connections.get(server.name());
         if (current != null && current.server().target().equals(server.target()) && current.trust().equals(trust)) {
             return current;
@@ -172,7 +172,7 @@ public final class McpHub implements AutoCloseable {
         }
     }
 
-    private void forget(String name) {
+    private synchronized void forget(String name) {
         Connection connection = connections.remove(name);
         if (connection != null) {
             connection.client().close();

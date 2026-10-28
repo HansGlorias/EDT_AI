@@ -56,6 +56,7 @@ import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.eclipse.ui.part.ViewPart;
+import org.eclipse.ui.progress.IWorkbenchSiteProgressService;
 import org.eclipse.ui.texteditor.ITextEditor;
 import org.eclipse.ui.texteditor.ITextEditorExtension2;
 import org.osgi.framework.FrameworkUtil;
@@ -171,8 +172,13 @@ public class ChatView extends ViewPart {
     private AiSettings settings = AiSettings.defaults();
 
     private final IPreferenceChangeListener preferenceListener = event -> inUi(() -> {
+        AiSettings previous = settings;
         settings = SettingsStore.workspace().load();
-        mcp.reset();
+        if (!previous.mcpServers().equals(settings.mcpServers())
+                || !TrustSettings.from(previous).equals(TrustSettings.from(settings))) {
+            // Закрытие сессий — запросы по сети, а вызов инструмента может идти минуты: не в UI-потоке.
+            background("EDT AI: переподключение MCP", mcp::reset);
+        }
         contextBar.setLimit(settings.contextLimit());
         updateStatus();
         updateEmptyState();
@@ -190,7 +196,7 @@ public class ChatView extends ViewPart {
         top.setLayout(topLayout);
         createHistory(top);
         createEmptyState(top);
-        approvalBar = new ApprovalBar(parent, () -> root.layout(true, true));
+        approvalBar = new ApprovalBar(parent, this::approvalChanged);
         createContextBar(parent);
         createInput(parent);
 
@@ -391,6 +397,21 @@ public class ChatView extends ViewPart {
         allowedInChat.clear();
     }
 
+    /** Вопрос о вызове появился или снят: перекомпоновать вид; новый вопрос — пометить вкладку вида. */
+    private void approvalChanged() {
+        if (approvalBar == null || status == null) {
+            return; // панель создаётся
+        }
+        root.layout(true, true);
+        updateStatus();
+        if (approvalBar.isShown()) {
+            IWorkbenchSiteProgressService progress = getSite().getService(IWorkbenchSiteProgressService.class);
+            if (progress != null) {
+                progress.warnOfContentChange();
+            }
+        }
+    }
+
     private void openPreferences() {
         PreferencesUtil.createPreferenceDialogOn(getSite().getShell(), AiPreferencePage.ID,
                 new String[] { AiPreferencePage.ID }, null).open();
@@ -403,6 +424,9 @@ public class ChatView extends ViewPart {
         if (enter && (event.stateMask & SWT.SHIFT) == 0) {
             event.doit = false;
             send();
+        } else if (event.keyCode == SWT.ESC && approvalBar.isShown()) {
+            event.doit = false;
+            approvalBar.deny();
         } else if (event.keyCode == SWT.ESC && session.isBusy()) {
             event.doit = false;
             session.cancel();
@@ -780,7 +804,9 @@ public class ChatView extends ViewPart {
         } else if (!settings.isConfigured()) {
             text = "Модель не настроена";
         } else {
-            text = settings.model() + " · " + host(settings.baseUrl()) + (session.isBusy() ? " · генерирует ответ…" : "");
+            String state = approvalBar != null && approvalBar.isShown() ? " · ждёт вашего решения"
+                    : session.isBusy() ? " · генерирует ответ…" : "";
+            text = settings.model() + " · " + host(settings.baseUrl()) + state;
         }
         if (!text.equals(status.getText())) {
             status.setText(text);
@@ -840,6 +866,12 @@ public class ChatView extends ViewPart {
         return decision;
     }
 
+    private static void background(String name, Runnable runnable) {
+        Thread thread = new Thread(runnable, name);
+        thread.setDaemon(true);
+        thread.start();
+    }
+
     private static IEclipsePreferences preferences() {
         return InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
     }
@@ -855,9 +887,7 @@ public class ChatView extends ViewPart {
         session.removeListener(chatListener);
         session.cancel();
         // Закрытие сессий MCP — запросы по сети, не в UI-потоке.
-        Thread closing = new Thread(mcp::close, "EDT AI: закрытие MCP");
-        closing.setDaemon(true);
-        closing.start();
+        background("EDT AI: закрытие MCP", mcp::close);
         List<ChatMessage> messages = session.messages();
         if (!messages.equals(saved)) {
             saveHistory(messages);

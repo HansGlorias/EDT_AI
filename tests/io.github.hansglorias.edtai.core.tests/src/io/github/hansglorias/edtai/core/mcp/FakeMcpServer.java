@@ -58,6 +58,7 @@ final class FakeMcpServer implements AutoCloseable {
             return;
         }
         if (request.method().equals("DELETE")) {
+            methods.add("DELETE");
             response.send(200, "text/plain", "");
             return;
         }

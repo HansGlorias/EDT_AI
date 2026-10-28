@@ -10,6 +10,8 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
 
@@ -18,8 +20,10 @@ import io.github.hansglorias.edtai.core.tools.ToolApprover.Decision;
 
 /**
  * Панель над полем ввода: модель хочет вызвать инструмент MCP-сервера —
- * «Разрешить», «Разрешать в этом чате» или «Отклонить». Видна, только
- * пока есть вопрос.
+ * «Разрешить», «Разрешать в этом чате» или «Отклонить» (Esc). Видна,
+ * только пока есть вопрос. Фокус на «Разрешить» переходит, только если он
+ * уже был в виде чата: иначе случайный пробел в редакторе разрешил бы
+ * вызов, которого пользователь не видел.
  */
 final class ApprovalBar {
 
@@ -72,6 +76,12 @@ final class ApprovalBar {
         Button button = new Button(parent, SWT.PUSH);
         button.setText(text);
         button.addListener(SWT.Selection, event -> decide(decision));
+        button.addListener(SWT.Traverse, event -> {
+            if (event.detail == SWT.TRAVERSE_ESCAPE) {
+                event.doit = false;
+                decide(Decision.DENY);
+            }
+        });
         return button;
     }
 
@@ -83,10 +93,18 @@ final class ApprovalBar {
         pending = decision;
         message.setText("Модель вызывает инструмент: " + use.summary());
         message.setToolTipText(use.name());
-        arguments.setText(json.length() > MAX_ARGUMENTS ? json.substring(0, MAX_ARGUMENTS) + "…" : json);
+        String shown = json == null ? "" : json.strip();
+        boolean empty = shown.isEmpty() || shown.matches("\\{\\s*}");
+        arguments.setText(empty ? "" : shown.length() > MAX_ARGUMENTS ? shown.substring(0, MAX_ARGUMENTS) + "…" : shown);
+        arguments.setVisible(!empty);
+        ((GridData) arguments.getLayoutData()).exclude = empty;
+        boolean focusHere = isInside(bar.getDisplay().getFocusControl(), bar.getParent());
         setVisible(true);
-        allow.setFocus();
-        decision.whenComplete((value, error) -> bar.getDisplay().asyncExec(() -> {
+        if (focusHere) {
+            allow.setFocus();
+        }
+        Display display = bar.getDisplay();
+        decision.whenComplete((value, error) -> display.asyncExec(() -> {
             if (!bar.isDisposed() && pending == decision) {
                 pending = null;
                 setVisible(false);
@@ -99,6 +117,20 @@ final class ApprovalBar {
         if (pending != null) {
             pending.complete(Decision.DENY);
         }
+    }
+
+    /** «Отклонить»: Esc в поле ввода, пока есть вопрос. */
+    void deny() {
+        decide(Decision.DENY);
+    }
+
+    private static boolean isInside(Control control, Composite parent) {
+        for (Control current = control; current != null; current = current.getParent()) {
+            if (current == parent) {
+                return true;
+            }
+        }
+        return false;
     }
 
     boolean isShown() {
@@ -132,6 +164,10 @@ final class ApprovalBar {
 
     String argumentsText() {
         return arguments.getText();
+    }
+
+    boolean argumentsShown() {
+        return arguments.getVisible();
     }
 
     Button allowButton() {

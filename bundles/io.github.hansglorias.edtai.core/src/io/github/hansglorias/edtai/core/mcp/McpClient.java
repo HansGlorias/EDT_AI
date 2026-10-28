@@ -28,7 +28,8 @@ import io.github.hansglorias.edtai.core.llm.SseParser;
  * Клиент MCP по Streamable HTTP: JSON-RPC 2.0 запросами POST, ответ —
  * JSON или поток SSE. Сессия — заголовок {@code Mcp-Session-Id}: если сервер
  * её забыл (HTTP 404), клиент подключается заново и повторяет запрос.
- * Вызовы последовательные: один запрос к серверу за раз.
+ * Вызовы последовательные: один запрос к серверу за раз; {@link #close()}
+ * не ждёт текущего вызова.
  */
 public final class McpClient implements AutoCloseable {
 
@@ -42,10 +43,10 @@ public final class McpClient implements AutoCloseable {
     private final Duration timeout;
 
     private long nextId = 1;
-    private String sessionId;
-    private String protocolVersion;
+    private volatile String sessionId;
+    private volatile String protocolVersion;
     private String serverName = "";
-    private boolean initialized;
+    private volatile boolean initialized;
 
     /** @param timeout сколько ждать ответа на один запрос: вызов инструмента может работать долго */
     public McpClient(URI uri, HttpClient http, Duration timeout) {
@@ -102,20 +103,26 @@ public final class McpClient implements AutoCloseable {
         return McpCallResult.of(request("tools/call", Json.object("name", name, "arguments", arguments)));
     }
 
-    /** Завершает сессию на сервере, если она есть. Ошибки не важны. */
+    /**
+     * Завершает сессию на сервере, если она есть. Ошибки не важны. Не ждёт
+     * вызова, который сейчас выполняется: его ответ сервер пришлёт уже в
+     * закрытую сессию.
+     */
     @Override
-    public synchronized void close() {
-        if (sessionId != null) {
+    public void close() {
+        String session = sessionId;
+        sessionId = null;
+        initialized = false;
+        if (session != null) {
             try {
-                http.send(builder().DELETE().build(), HttpResponse.BodyHandlers.discarding());
+                HttpRequest.Builder request = builder().header("Mcp-Session-Id", session).DELETE();
+                http.send(request.build(), HttpResponse.BodyHandlers.discarding());
             } catch (IOException e) {
                 // Сервер мог уже закрыться.
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
-        sessionId = null;
-        initialized = false;
     }
 
     // ---- JSON-RPC ----
