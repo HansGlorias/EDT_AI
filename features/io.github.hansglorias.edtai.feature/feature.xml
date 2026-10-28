@@ -6,7 +6,7 @@
       provider-name="EDT AI">
 
    <description>
-      Чат с языковой моделью для 1C:EDT. Этап 1: каркас — вид «AI Chat» с эхо-ответами и страница настроек.
+      Чат с языковой моделью для 1C:EDT: OpenAI-совместимый протокол и Anthropic Messages, ответ по мере генерации, корпоративный CA, токен в Secure Storage.
    </description>
 
    <copyright>

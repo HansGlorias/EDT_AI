@@ -4,10 +4,13 @@ import java.nio.file.Path;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.Function;
 
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.jface.dialogs.Dialog;
+import org.eclipse.jface.dialogs.IMessageProvider;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
 import org.eclipse.jface.preference.PreferencePage;
@@ -22,6 +25,7 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
@@ -30,6 +34,8 @@ import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 
+import io.github.hansglorias.edtai.core.llm.ModelClient;
+import io.github.hansglorias.edtai.core.llm.ModelConnection;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.Protocol;
@@ -51,10 +57,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Combo protocol;
     private Text baseUrl;
     private Text model;
+    private Text maxTokens;
     private Text token;
     private Label tokenState;
     private Button removeToken;
     private boolean tokenRemovalRequested;
+    private Button checkButton;
+    private Label checkResult;
+    private CompletableFuture<String> check;
     private Button useSystemTrustStore;
     private Text caFile;
     private Label caState;
@@ -64,7 +74,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     @Override
     public void init(IWorkbench workbench) {
-        setDescription("Подключение к языковой модели. Пока чат отвечает эхом, настройки только сохраняются.");
+        setDescription("Подключение к языковой модели, сертификаты и MCP-серверы.");
     }
 
     @Override
@@ -95,13 +105,22 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
         label(group, "Адрес:");
         baseUrl = new Text(group, SWT.BORDER);
-        baseUrl.setMessage("https://llm.example.invalid");
+        baseUrl.setMessage("https://llm.example.invalid или http://localhost:11434");
+        baseUrl.setToolTipText("Адрес сервера (https://сервер), адрес с версией API (https://сервер/v1)"
+                + " или полный адрес метода — подойдёт любой.");
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).applyTo(baseUrl);
         baseUrl.addModifyListener(event -> validate());
 
         label(group, "Модель:");
         model = new Text(group, SWT.BORDER);
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).applyTo(model);
+
+        label(group, "Макс. токенов ответа:");
+        maxTokens = new Text(group, SWT.BORDER);
+        maxTokens.setMessage("по умолчанию");
+        maxTokens.setToolTipText("Пусто — по умолчанию: для Anthropic " + 8192 + ", для OpenAI-совместимого не передаётся.");
+        GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(maxTokens);
+        maxTokens.addModifyListener(event -> validate());
 
         label(group, "Токен:");
         token = new Text(group, SWT.BORDER | SWT.PASSWORD);
@@ -123,6 +142,52 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         new Label(group, SWT.NONE);
         tokenState = new Label(group, SWT.WRAP);
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).applyTo(tokenState);
+
+        checkButton = new Button(group, SWT.PUSH);
+        checkButton.setText("Проверить подключение");
+        GridDataFactory.fillDefaults().applyTo(checkButton);
+        checkButton.addListener(SWT.Selection, event -> checkConnection());
+        checkResult = new Label(group, SWT.WRAP);
+        GridDataFactory.fillDefaults().grab(true, false).hint(300, SWT.DEFAULT).span(2, 1).applyTo(checkResult);
+    }
+
+    /** Короткий запрос к модели с текущими значениями полей, ещё не сохранёнными. */
+    private void checkConnection() {
+        AiSettings settings = current();
+        if (!isValid()) {
+            showCheckResult("Сначала исправьте ошибку в настройках.");
+            return;
+        }
+        if (!settings.isConfigured()) {
+            showCheckResult("Укажите адрес сервера и модель.");
+            return;
+        }
+        String tokenValue;
+        try {
+            tokenValue = !token.getText().isEmpty() ? token.getText()
+                    : tokenRemovalRequested || !store.hasToken() ? "" : store.loadToken();
+        } catch (Exception e) {
+            showCheckResult("Не удалось прочитать токен из Secure Storage: " + e.getMessage());
+            return;
+        }
+        checkButton.setEnabled(false);
+        showCheckResult("Проверяю…");
+        Display display = checkButton.getDisplay();
+        check = new ModelClient().check(ModelConnection.of(settings, tokenValue));
+        check.whenComplete((result, error) -> display.asyncExec(() -> {
+            if (checkButton.isDisposed()) {
+                return;
+            }
+            checkButton.setEnabled(true);
+            Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
+            showCheckResult(cause == null ? result : "Не работает: " + cause.getMessage());
+        }));
+    }
+
+    private void showCheckResult(String text) {
+        checkResult.setText(text);
+        checkResult.getParent().layout(true);
+        checkResult.getShell().layout(new Control[] { checkResult });
     }
 
     private void createCertificatesGroup(Composite page) {
@@ -254,6 +319,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         protocol.select(settings.protocol().ordinal());
         baseUrl.setText(settings.baseUrl());
         model.setText(settings.model());
+        maxTokens.setText(settings.maxTokens() > 0 ? String.valueOf(settings.maxTokens()) : "");
         useSystemTrustStore.setSelection(settings.useSystemTrustStore());
         caFile.setText(settings.caCertificateFile());
         servers.clear();
@@ -264,15 +330,33 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     AiSettings current() {
         return new AiSettings(Protocol.values()[Math.max(0, protocol.getSelectionIndex())], baseUrl.getText(),
-                model.getText(), useSystemTrustStore.getSelection(), caFile.getText(), servers);
+                model.getText(), Math.max(0, maxTokensValue()), useSystemTrustStore.getSelection(), caFile.getText(), servers);
+    }
+
+    /** @return число из поля, 0 — пусто, -1 — не число */
+    private int maxTokensValue() {
+        String text = maxTokens.getText().strip();
+        if (text.isEmpty()) {
+            return 0;
+        }
+        try {
+            int value = Integer.parseInt(text);
+            return value > 0 ? value : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     private void validate() {
-        if (baseUrl == null || caFile == null || serverViewer == null) {
+        if (baseUrl == null || maxTokens == null || caFile == null || serverViewer == null) {
             return;
         }
-        List<String> errors = SettingsValidator.validate(current());
+        List<String> errors = new ArrayList<>(SettingsValidator.validate(current()));
+        if (maxTokensValue() < 0) {
+            errors.add(0, "Макс. токенов ответа: нужно целое положительное число или пусто");
+        }
         setErrorMessage(errors.isEmpty() ? null : errors.get(0));
+        setMessage(SettingsValidator.plainHttpWarning(baseUrl.getText()), IMessageProvider.WARNING);
         setValid(errors.isEmpty());
     }
 
@@ -319,6 +403,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     }
 
     @Override
+    public void dispose() {
+        if (check != null) {
+            check.cancel(true);
+        }
+        super.dispose();
+    }
+
+    @Override
     protected void performDefaults() {
         fill(AiSettings.defaults());
         validate();
@@ -328,9 +420,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     @Override
     public boolean performOk() {
         AiSettings settings = current();
-        List<String> errors = SettingsValidator.validate(settings);
-        if (!errors.isEmpty()) {
-            setErrorMessage(errors.get(0));
+        validate();
+        if (!isValid()) {
             return false;
         }
         try {
@@ -381,5 +472,27 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         button.setText(text);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(button);
         return button;
+    }
+
+    // ---- для тестов ----
+
+    Text baseUrlField() {
+        return baseUrl;
+    }
+
+    Text modelField() {
+        return model;
+    }
+
+    Text maxTokensField() {
+        return maxTokens;
+    }
+
+    Button checkButton() {
+        return checkButton;
+    }
+
+    Label checkResult() {
+        return checkResult;
     }
 }

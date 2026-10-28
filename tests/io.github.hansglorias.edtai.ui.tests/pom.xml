@@ -45,6 +45,9 @@
           <useUIThread>true</useUIThread>
           <application>org.eclipse.ui.ide.workbench</application>
           <argLine>${ui.test.vmargs}</argLine>
+          <systemProperties>
+            <edtai.screenshots>${project.build.directory}/screenshots</edtai.screenshots>
+          </systemProperties>
         </configuration>
       </plugin>
     </plugins>
