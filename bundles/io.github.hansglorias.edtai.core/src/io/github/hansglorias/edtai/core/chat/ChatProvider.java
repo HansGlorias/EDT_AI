@@ -30,4 +30,19 @@ public interface ChatProvider {
     default CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool) {
         return reply(history, onText);
     }
+
+    /**
+     * Сколько первых сообщений истории сжать в краткое содержание перед
+     * ответом, потому что история перестаёт помещаться в окно модели.
+     *
+     * @return 0 — сжимать не нужно
+     */
+    default int compactCount(List<ChatMessage> history) {
+        return 0;
+    }
+
+    /** Краткое содержание сообщений, сделанное моделью. */
+    default CompletableFuture<String> summarize(List<ChatMessage> messages) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Сжатие истории не поддерживается"));
+    }
 }

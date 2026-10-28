@@ -1,5 +1,6 @@
 package io.github.hansglorias.edtai.core.llm;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -8,6 +9,7 @@ import java.util.function.Consumer;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatProvider;
+import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
@@ -116,6 +118,76 @@ public final class ModelChatProvider implements ChatProvider {
             }
         });
         return reply;
+    }
+
+    /**
+     * Сжимать, когда история занимает больше половины бюджета запроса
+     * (остальное — системный промпт, инструменты и их результаты). Сжимаются
+     * целые обмены от начала; остаются последние, занимающие до четверти
+     * бюджета, и всегда последний вопрос.
+     */
+    @Override
+    public int compactCount(List<ChatMessage> history) {
+        ModelConnection connection;
+        try {
+            connection = source.get();
+        } catch (Exception e) {
+            return 0;
+        }
+        int budget = RequestBudget.chars(connection);
+        if (history.size() < 3 || RequestBudget.size(connection, history, List.of(), List.of()) <= budget / 2) {
+            return 0;
+        }
+        int keep = history.size() - 1;
+        while (keep > 0 && RequestBudget.size(connection, history.subList(keep - 1, history.size()), List.of(), List.of()) <= budget / 4) {
+            keep--;
+        }
+        while (keep < history.size() - 1 && history.get(keep).role() != ChatRole.USER) {
+            keep++;
+        }
+        return keep >= 2 ? keep : 0;
+    }
+
+    @Override
+    public CompletableFuture<String> summarize(List<ChatMessage> messages) {
+        ModelConnection connection;
+        try {
+            connection = source.get();
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
+        String transcript = transcript(messages, RequestBudget.chars(connection) * 6 / 10);
+        ChatMessage prompt = ChatMessage.of(ChatRole.USER, SUMMARY_PROMPT + "\n\n" + transcript);
+        return client.stream(connection.withMaxTokens(SUMMARY_TOKENS), List.of(prompt), part -> { });
+    }
+
+    static final String SUMMARY_PROMPT = "Сожми переписку ниже в краткое содержание, по которому можно продолжить работу"
+            + " (до 400 слов): что просил пользователь и зачем; принятые решения и договорённости; какие модули, объекты"
+            + " метаданных и формы обсуждали и меняли (с путями); результаты и выводы; что осталось сделать. По делу, без"
+            + " вступлений и без кода, кроме коротких имён.";
+    private static final int SUMMARY_TOKENS = 2048;
+    private static final int MAX_MESSAGE = 4000;
+
+    /** Переписка текстом; не влезает в {@code limit} — без самого начала. */
+    static String transcript(List<ChatMessage> messages, int limit) {
+        List<String> parts = new ArrayList<>();
+        for (ChatMessage message : messages) {
+            String who = switch (message.role()) {
+                case USER -> "Пользователь";
+                case ASSISTANT -> "Ассистент";
+                default -> "Ранее";
+            };
+            String text = message.modelText();
+            if (text.length() > MAX_MESSAGE) {
+                text = text.substring(0, MAX_MESSAGE) + " …(обрезано)";
+            }
+            parts.add(who + ": " + text);
+        }
+        StringBuilder result = new StringBuilder();
+        for (int i = parts.size() - 1; i >= 0 && result.length() + parts.get(i).length() < limit; i--) {
+            result.insert(0, parts.get(i) + "\n\n");
+        }
+        return result.toString().strip();
     }
 
     /** Сведения о проекте в конце системного промпта. */

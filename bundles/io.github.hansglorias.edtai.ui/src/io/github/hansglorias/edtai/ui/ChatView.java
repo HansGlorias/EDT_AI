@@ -10,15 +10,20 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import org.eclipse.compare.CompareUI;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Platform;
@@ -31,6 +36,7 @@ import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.action.MenuManager;
 import org.eclipse.jface.action.Separator;
+import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
 import org.eclipse.jface.resource.JFaceResources;
@@ -61,6 +67,8 @@ import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IMemento;
+import org.eclipse.ui.IViewSite;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
@@ -88,6 +96,8 @@ import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
 import io.github.hansglorias.edtai.core.tools.EditTools;
+import io.github.hansglorias.edtai.core.tools.TextChange;
+import io.github.hansglorias.edtai.core.tools.ToolException;
 import io.github.hansglorias.edtai.core.tools.GitTools;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
@@ -113,6 +123,8 @@ public class ChatView extends ViewPart {
     static final String HISTORY_FILE = "chat.json";
     static final String CHATS_DIRECTORY = "chats";
     private static final int HISTORY_MENU = 30;
+    private static final String MEMENTO_HISTORY = "historyShown";
+    private static final String MEMENTO_HISTORY_WIDTH = "historyWidth";
     private static final DateTimeFormatter CHAT_TIME = DateTimeFormatter.ofPattern("dd.MM HH:mm");
     static final String REVIEW_CHANGES = "Ревью моих изменений";
     static final String COMMIT_MESSAGE = "Сообщение коммита";
@@ -151,7 +163,15 @@ public class ChatView extends ViewPart {
     private String chatId;
 
     private Composite root;
+    /** Правки модели в идущем ответе; по его окончании — в {@link #changes}. */
+    private final List<EditTools.Change> pendingChanges = new CopyOnWriteArrayList<>();
+    /** Правки модели по ответам (до перезапуска EDT): ключ — {@link #changeKey}. */
+    private final Map<String, List<EditTools.Change>> changes = new HashMap<>();
     private SashForm sash;
+    /** Видна ли панель чатов и как поделена ширина: запоминаются между запусками (состояние вида). */
+    private boolean historyShown;
+    private int[] historyWeights = { 30, 70 };
+    private Action historyAction;
     private ChatHistoryPanel historyPanel;
     private Composite top;
     private StackLayout topLayout;
@@ -204,7 +224,10 @@ public class ChatView extends ViewPart {
         public void busyChanged(boolean busy) {
             scheduleRefresh();
             if (!busy) {
-                inUi(() -> approvalBar.dismiss());
+                inUi(() -> {
+                    attachChanges();
+                    approvalBar.dismiss();
+                });
             }
         }
     };
@@ -257,8 +280,8 @@ public class ChatView extends ViewPart {
             }
         });
         top = new Composite(sash, SWT.NONE);
-        sash.setWeights(new int[] { 30, 70 });
-        sash.setMaximizedControl(top);
+        sash.setWeights(historyWeights);
+        sash.setMaximizedControl(historyShown ? null : top);
         topLayout = new StackLayout();
         top.setLayout(topLayout);
         createHistory(top);
@@ -281,6 +304,7 @@ public class ChatView extends ViewPart {
         updateEmptyState();
         updateSendButton();
         refresh();
+        refreshHistoryPanel();
     }
 
     private void createHistory(Composite parent) {
@@ -312,6 +336,16 @@ public class ChatView extends ViewPart {
             @Override
             public void open(String url) {
                 openLink(url);
+            }
+
+            @Override
+            public void showChanges(ChatMessage answer) {
+                ChatView.this.showChanges(answer);
+            }
+
+            @Override
+            public void revertChanges(ChatMessage answer) {
+                ChatView.this.revertChanges(answer);
             }
 
             @Override
@@ -429,14 +463,15 @@ public class ChatView extends ViewPart {
         ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
         IToolBarManager toolBar = getViewSite().getActionBars().getToolBarManager();
 
-        Action history = new Action("История чатов", IAction.AS_CHECK_BOX) {
+        historyAction = new Action("История чатов", IAction.AS_CHECK_BOX) {
             @Override
             public void run() {
                 showHistoryPanel(isChecked());
             }
         };
-        history.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_OBJ_FOLDER));
-        toolBar.add(history);
+        historyAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_OBJ_FOLDER));
+        historyAction.setChecked(historyShown);
+        toolBar.add(historyAction);
 
         Action newChat = new Action("Новый чат") {
             @Override
@@ -559,8 +594,34 @@ public class ChatView extends ViewPart {
 
     /** Показывает или прячет боковую панель со списком чатов. */
     void showHistoryPanel(boolean shown) {
+        historyShown = shown;
+        if (historyAction != null) {
+            historyAction.setChecked(shown);
+        }
         sash.setMaximizedControl(shown ? null : top);
         refreshHistoryPanel();
+    }
+
+    @Override
+    public void init(IViewSite site, IMemento memento) throws PartInitException {
+        super.init(site, memento);
+        if (memento != null) {
+            historyShown = Boolean.TRUE.equals(memento.getBoolean(MEMENTO_HISTORY));
+            Integer left = memento.getInteger(MEMENTO_HISTORY_WIDTH);
+            if (left != null && left > 5 && left < 95) {
+                historyWeights = new int[] { left, 100 - left };
+            }
+        }
+    }
+
+    @Override
+    public void saveState(IMemento memento) {
+        super.saveState(memento);
+        memento.putBoolean(MEMENTO_HISTORY, historyShown);
+        if (sash != null && !sash.isDisposed() && historyShown) {
+            int[] weights = sash.getWeights();
+            memento.putInteger(MEMENTO_HISTORY_WIDTH, weights[0] * 100 / Math.max(1, weights[0] + weights[1]));
+        }
     }
 
     /** Обновляет список чатов на панели, если она открыта. */
@@ -573,6 +634,92 @@ public class ChatView extends ViewPart {
         } catch (IOException e) {
             historyPanel.show(List.of(), chatId);
         }
+    }
+
+    // ---- правки модели: дифф и откат ----
+
+    private String changeKey(ChatMessage answer) {
+        return chatId + "|" + answer.time();
+    }
+
+    /** Ответ закончился: его правки — к последнему ответу ассистента. */
+    private void attachChanges() {
+        if (pendingChanges.isEmpty()) {
+            return;
+        }
+        List<ChatMessage> messages = session.messages();
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i).role() == ChatRole.ASSISTANT) {
+                changes.computeIfAbsent(changeKey(messages.get(i)), key -> new ArrayList<>()).addAll(pendingChanges);
+                break;
+            }
+        }
+        pendingChanges.clear();
+        scheduleRefresh();
+    }
+
+    /** Файлы, изменённые в ответе: путь → [до первой правки, после последней]. */
+    private Map<IFile, String[]> changedFiles(ChatMessage answer) {
+        Map<IFile, String[]> files = new LinkedHashMap<>();
+        for (EditTools.Change change : changes.getOrDefault(changeKey(answer), List.of())) {
+            IFile file = ResourcesPlugin.getWorkspace().getRoot().getProject(change.project()).getFile(change.path());
+            files.computeIfAbsent(file, key -> new String[] { change.before(), change.after() })[1] = change.after();
+        }
+        return files;
+    }
+
+    void showChanges(ChatMessage answer) {
+        for (Map.Entry<IFile, String[]> entry : changedFiles(answer).entrySet()) {
+            String now;
+            try {
+                now = EclipseWorkspaceFiles.text(entry.getKey());
+            } catch (Exception e) {
+                showNotice("Не удалось прочитать " + entry.getKey().getName() + ": " + e.getMessage());
+                continue;
+            }
+            CompareUI.openCompareEditor(new ModelChangesCompare(entry.getKey(), now, entry.getValue()[0]));
+        }
+    }
+
+    /**
+     * Возвращает модули, как были до ответа. Если после правок модели файл
+     * меняли, — спрашивает: откат затрёт эти изменения.
+     */
+    void revertChanges(ChatMessage answer) {
+        Map<IFile, String[]> files = changedFiles(answer);
+        boolean changedSince = false;
+        for (Map.Entry<IFile, String[]> entry : files.entrySet()) {
+            try {
+                changedSince |= !EclipseWorkspaceFiles.text(entry.getKey()).equals(entry.getValue()[1]);
+            } catch (Exception e) {
+                changedSince = true;
+            }
+        }
+        if (changedSince && !confirmRevert()) {
+            return;
+        }
+        EclipseWorkspaceFiles workspace = EclipseWorkspaceFiles.current();
+        int reverted = 0;
+        for (Map.Entry<IFile, String[]> entry : files.entrySet()) {
+            IFile file = entry.getKey();
+            String before = entry.getValue()[0];
+            try {
+                workspace.edit(file.getProject().getName(), file.getProjectRelativePath().toString(),
+                        current -> new TextChange.Replacement(0, current.length(), before));
+                reverted++;
+            } catch (ToolException e) {
+                showNotice("Не удалось откатить " + file.getName() + ": " + e.getMessage());
+            }
+        }
+        changes.remove(changeKey(answer));
+        refresh();
+        showNotice("Правки модели откатены, файлов: " + reverted);
+    }
+
+    /** Для тестов можно подменить. */
+    boolean confirmRevert() {
+        return MessageDialog.openConfirm(getSite().getShell(), "Откатить правки",
+                "После правок модели файлы меняли. Откат вернёт их к состоянию до ответа и затрёт эти изменения. Продолжить?");
     }
 
     /** Пункты меню «История чатов»: последние диалоги, открытый отмечен. */
@@ -862,6 +1009,10 @@ public class ChatView extends ViewPart {
         List<Set<MessageRenderer.Action>> actions = new ArrayList<>();
         for (int i = 0; i < messages.size(); i++) {
             actions.add(actions(messages, i, idle));
+            if (idle && messages.get(i).role() == ChatRole.ASSISTANT && changes.containsKey(changeKey(messages.get(i)))) {
+                actions.get(i).add(MessageRenderer.Action.CHANGES);
+                actions.get(i).add(MessageRenderer.Action.REVERT);
+            }
         }
         int first = 0;
         while (first < rendered.size() && first < messages.size()
@@ -1071,7 +1222,7 @@ public class ChatView extends ViewPart {
         }
         EclipseWorkspaceFiles files = EclipseWorkspaceFiles.current();
         List<Tool> tools = new ArrayList<>(ProjectTools.create(files, current::contextLimit));
-        tools.addAll(EditTools.create(files));
+        tools.addAll(EditTools.create(files, pendingChanges::add));
         try {
             tools.addAll(GitTools.create(files, current::contextLimit));
         } catch (LinkageError e) {

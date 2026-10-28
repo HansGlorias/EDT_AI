@@ -443,4 +443,81 @@ class ChatSessionTest {
             reply.completeExceptionally(error);
         }
     }
+
+    @Test
+    void longHistoryIsCompactedIntoSummary() throws Exception {
+        List<List<ChatMessage>> requests = new ArrayList<>();
+        List<List<ChatMessage>> summarized = new ArrayList<>();
+        ChatProvider provider = new ChatProvider() {
+            @Override
+            public String name() {
+                return "сжатие";
+            }
+
+            @Override
+            public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText) {
+                requests.add(history);
+                return CompletableFuture.completedFuture("ответ " + requests.size());
+            }
+
+            @Override
+            public int compactCount(List<ChatMessage> history) {
+                // Сжимаем всё, кроме последнего вопроса, когда без краткого содержания больше трёх сообщений.
+                return history.size() > 3 && history.get(0).role() != ChatRole.SUMMARY ? history.size() - 1 : 0;
+            }
+
+            @Override
+            public CompletableFuture<String> summarize(List<ChatMessage> messages) {
+                summarized.add(messages);
+                return CompletableFuture.completedFuture("кратко: " + messages.size());
+            }
+        };
+        ChatSession session = new ChatSession(provider);
+        session.send("один").get(TIMEOUT, TimeUnit.SECONDS);
+        session.send("два").get(TIMEOUT, TimeUnit.SECONDS);
+        ChatMessage third = session.send("три").get(TIMEOUT, TimeUnit.SECONDS);
+
+        assertEquals("ответ 3", third.text());
+        assertEquals(List.of(4), summarized.stream().map(List::size).toList());
+        List<ChatMessage> messages = session.messages();
+        assertEquals(List.of(ChatRole.USER, ChatRole.ASSISTANT, ChatRole.USER, ChatRole.ASSISTANT, ChatRole.SUMMARY, ChatRole.USER,
+                ChatRole.ASSISTANT), messages.stream().map(ChatMessage::role).toList());
+        assertEquals("кратко: 4", messages.get(4).text());
+        assertEquals("История сжата", messages.get(6).tools().get(0).summary());
+        assertEquals(List.of(ChatRole.SUMMARY, ChatRole.USER), requests.get(2).stream().map(ChatMessage::role).toList(),
+                "модель получает краткое содержание и последний вопрос");
+        assertTrue(messages.get(4).modelText().startsWith(ChatMessage.SUMMARY_PREFIX));
+
+        // Следующий вопрос: история — от краткого содержания, сжимать снова не нужно.
+        session.send("четыре").get(TIMEOUT, TimeUnit.SECONDS);
+        assertEquals(List.of(ChatRole.SUMMARY, ChatRole.USER, ChatRole.ASSISTANT, ChatRole.USER),
+                requests.get(3).stream().map(ChatMessage::role).toList());
+    }
+
+    @Test
+    void failedSummaryDoesNotBreakAnswer() throws Exception {
+        ChatProvider provider = new ChatProvider() {
+            @Override
+            public String name() {
+                return "без сжатия";
+            }
+
+            @Override
+            public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText) {
+                return CompletableFuture.completedFuture("ответ");
+            }
+
+            @Override
+            public int compactCount(List<ChatMessage> history) {
+                return history.size() > 1 ? history.size() - 1 : 0;
+            }
+        };
+        ChatSession session = new ChatSession(provider);
+        session.send("один").get(TIMEOUT, TimeUnit.SECONDS);
+        ChatMessage answer = session.send("два").get(TIMEOUT, TimeUnit.SECONDS);
+
+        assertEquals("ответ", answer.text());
+        assertEquals(ToolUse.Status.FAILED, answer.tools().get(0).status());
+        assertFalse(session.messages().stream().anyMatch(message -> message.role() == ChatRole.SUMMARY));
+    }
 }

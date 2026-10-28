@@ -19,6 +19,8 @@ import io.github.hansglorias.edtai.core.context.ContextItem;
  */
 public final class ChatSession {
 
+    private static final String COMPACT_ID = "compact";
+
     private final ChatProvider provider;
     private final List<ChatMessage> messages = new CopyOnWriteArrayList<>();
     private final List<ChatListener> listeners = new CopyOnWriteArrayList<>();
@@ -123,6 +125,10 @@ public final class ChatSession {
         }
         if (request != null) {
             request.reply.cancel(true);
+            CompletableFuture<String> inner = request.inner;
+            if (inner != null) {
+                inner.cancel(true);
+            }
         }
     }
 
@@ -180,23 +186,81 @@ public final class ChatSession {
         }
     }
 
-    /** Под {@link #lock}. */
-    private CompletableFuture<ChatMessage> request() {
+    /**
+     * Что уходит модели: без ошибок и пустых сообщений, начиная с последнего
+     * краткого содержания. Под {@link #lock}.
+     */
+    private List<ChatMessage> history() {
         List<ChatMessage> history = messages.stream()
                 .filter(message -> message.role() != ChatRole.ERROR && !message.text().isEmpty())
                 .toList();
+        for (int i = history.size() - 1; i >= 0; i--) {
+            if (history.get(i).role() == ChatRole.SUMMARY) {
+                return history.subList(i, history.size());
+            }
+        }
+        return history;
+    }
+
+    /** Под {@link #lock}. */
+    private CompletableFuture<ChatMessage> request() {
+        List<ChatMessage> history = history();
         Request request = new Request();
         current = request;
         listeners.forEach(listener -> listener.busyChanged(true));
 
         CompletableFuture<String> reply;
         try {
-            reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use));
+            int compact = provider.compactCount(history);
+            reply = compact > 0 ? compactThenReply(request, history, compact) : reply(request, history);
         } catch (RuntimeException e) {
             reply = CompletableFuture.failedFuture(e);
         }
         request.reply = reply;
         return reply.handle((answer, error) -> finish(request, answer, error));
+    }
+
+    private CompletableFuture<String> reply(Request request, List<ChatMessage> history) {
+        CompletableFuture<String> reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use));
+        request.inner = reply;
+        return reply;
+    }
+
+    /**
+     * Сначала краткое содержание первых {@code count} сообщений — оно встаёт в
+     * историю после них, — потом ответ. Не удалось сжать — ответ без сжатия.
+     */
+    private CompletableFuture<String> compactThenReply(Request request, List<ChatMessage> history, int count) {
+        ChatMessage last = history.get(count - 1);
+        onTool(request, new ToolUse(COMPACT_ID, "context", "Сжимаю историю диалога", "", ToolUse.Status.RUNNING));
+        CompletableFuture<String> summary = provider.summarize(history.subList(0, count));
+        request.inner = summary;
+        return summary.handle((text, error) -> text).thenCompose(text -> {
+            synchronized (lock) {
+                if (request.finished) {
+                    return CompletableFuture.<String>failedFuture(new CancellationException());
+                }
+                if (text == null || text.isBlank()) {
+                    onTool(request, new ToolUse(COMPACT_ID, "context", "Сжимаю историю диалога", "не удалось, ответ без сжатия",
+                            ToolUse.Status.FAILED));
+                } else {
+                    int at = 0;
+                    for (int i = 0; i < messages.size(); i++) {
+                        if (messages.get(i) == last) {
+                            at = i + 1;
+                        }
+                    }
+                    messages.add(at, new ChatMessage(ChatRole.SUMMARY, text.strip(), Instant.now(), Status.DONE));
+                    if (request.index >= at) {
+                        request.index++;
+                    }
+                    onTool(request, new ToolUse(COMPACT_ID, "context", "История сжата", "сообщений: " + count
+                            + " — модель дальше видит их краткое содержание", ToolUse.Status.DONE));
+                    listeners.forEach(ChatListener::historyChanged);
+                }
+                return reply(request, history());
+            }
+        });
     }
 
     private void onPart(Request request, String part) {
@@ -305,5 +369,7 @@ public final class ChatSession {
         int index = -1;
         boolean finished;
         CompletableFuture<String> reply;
+        /** Запрос, который идёт сейчас: сжатие истории или сам ответ. */
+        volatile CompletableFuture<String> inner;
     }
 }

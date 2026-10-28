@@ -9,7 +9,12 @@ import java.util.List;
 
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
+import org.eclipse.jface.layout.TableColumnLayout;
+import org.eclipse.jface.resource.JFaceResources;
+import org.eclipse.jface.viewers.ColumnPixelData;
+import org.eclipse.jface.viewers.ColumnWeightData;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
@@ -48,16 +53,28 @@ final class ChatHistoryPanel {
     ChatHistoryPanel(Composite parent, Callbacks callbacks) {
         this.callbacks = callbacks;
         panel = new Composite(parent, SWT.NONE);
-        GridLayoutFactory.fillDefaults().spacing(0, 2).applyTo(panel);
+        GridLayoutFactory.fillDefaults().spacing(0, 4).applyTo(panel);
         Label header = new Label(panel, SWT.NONE);
         header.setText("Чаты");
-        GridDataFactory.fillDefaults().indent(4, 2).applyTo(header);
+        header.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
+        GridDataFactory.fillDefaults().indent(4, 0).applyTo(header);
 
-        table = new Table(panel, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL | SWT.BORDER);
-        GridDataFactory.fillDefaults().grab(true, true).applyTo(table);
+        // Таблица — единственный ребёнок своего контейнера: так TableColumnLayout сам делит ширину
+        // и не даёт горизонтальной прокрутки (на Windows иначе колонки «плывут»).
+        Composite holder = new Composite(panel, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, true).applyTo(holder);
+        TableColumnLayout columns = new TableColumnLayout();
+        holder.setLayout(columns);
+        table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL | SWT.BORDER);
         title = new TableColumn(table, SWT.NONE);
         time = new TableColumn(table, SWT.RIGHT);
-        table.addListener(SWT.Resize, event -> layoutColumns());
+        columns.setColumnData(title, new ColumnWeightData(100, 60));
+        GC gc = new GC(table);
+        try {
+            columns.setColumnData(time, new ColumnPixelData(gc.textExtent("00.00 ").x + 8));
+        } finally {
+            gc.dispose();
+        }
         table.addListener(SWT.Selection, event -> {
             String id = selected();
             if (!filling && id != null) {
@@ -103,16 +120,9 @@ final class ChatHistoryPanel {
                     table.setSelection(item);
                 }
             }
-            layoutColumns();
         } finally {
             filling = false;
         }
-    }
-
-    private void layoutColumns() {
-        time.pack();
-        int width = table.getClientArea().width - time.getWidth();
-        title.setWidth(Math.max(40, width));
     }
 
     private String selected() {

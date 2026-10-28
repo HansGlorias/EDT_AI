@@ -34,6 +34,8 @@ final class MessageRenderer {
     static final String COPY = "Копировать";
     static final String RETRY = "Повторить";
     static final String EDIT = "Изменить";
+    static final String CHANGES = "Изменения";
+    static final String REVERT = "Откатить";
     static final String INSERT = "Вставить в редактор";
     static final String CONTEXT = "Контекст: ";
     static final String TOOL = "→ ";
@@ -43,7 +45,8 @@ final class MessageRenderer {
 
     /** Действия у сообщения в строке заголовка. */
     enum Action {
-        COPY(MessageRenderer.COPY), RETRY(MessageRenderer.RETRY), EDIT(MessageRenderer.EDIT);
+        COPY(MessageRenderer.COPY), RETRY(MessageRenderer.RETRY), EDIT(MessageRenderer.EDIT), CHANGES(MessageRenderer.CHANGES),
+        REVERT(MessageRenderer.REVERT);
 
         final String label;
 
@@ -66,6 +69,12 @@ final class MessageRenderer {
 
         /** Открыть файл фрагмента на его строках. */
         void openContext(ContextItem item);
+
+        /** Показать дифф правок модели в этом ответе. */
+        void showChanges(ChatMessage answer);
+
+        /** Вернуть модули, как были до правок модели в этом ответе. */
+        void revertChanges(ChatMessage answer);
     }
 
     private final StyledText history;
@@ -108,6 +117,8 @@ final class MessageRenderer {
         } else {
             if (message.role() == ChatRole.ERROR) {
                 styles.add(style(offset + text.length(), body.length(), errorColor(), SWT.NORMAL));
+            } else if (message.role() == ChatRole.SUMMARY) {
+                styles.add(style(offset + text.length(), body.length(), metaColor(), SWT.ITALIC));
             }
             text.append(body);
         }
@@ -124,6 +135,10 @@ final class MessageRenderer {
             case ASSISTANT -> {
                 name = "Ассистент";
                 nameColor = color(JFacePreferences.COUNTER_COLOR, SWT.COLOR_DARK_BLUE);
+            }
+            case SUMMARY -> {
+                name = "Краткое содержание диалога выше";
+                nameColor = metaColor();
             }
             default -> {
                 name = "Ошибка";
@@ -148,6 +163,8 @@ final class MessageRenderer {
                     case COPY -> () -> callbacks.copy(message.text());
                     case RETRY -> callbacks::retry;
                     case EDIT -> () -> callbacks.edit(index);
+                    case CHANGES -> () -> callbacks.showChanges(message);
+                    case REVERT -> () -> callbacks.revertChanges(message);
                 };
                 StyleRange link = new StyleRange(offset + text.length(), action.label.length(), linkColor(), null);
                 link.data = run;

@@ -136,6 +136,21 @@ class ChatToolsTest extends AbstractChatTest {
         }
         assertTrue(view.history().getText().contains(MessageRenderer.TOOL + "Правит модуль ОбщийМодуль.Тест — строка 2"),
                 view.history().getText());
+
+        // Правки ответа — дифф и откат одной ссылкой.
+        waitUntil(() -> view.linkAction(MessageRenderer.REVERT) != null, () -> view.history().getText());
+        assertTrue(view.linkAction(MessageRenderer.CHANGES) != null);
+        Screenshots.capture(view.control(), "model-edit");
+        view.linkAction(MessageRenderer.CHANGES).run();
+        waitUntil(() -> java.util.Arrays.stream(page.getEditorReferences())
+                .anyMatch(editor -> editor.getTitle().equals("Правки модели: Module.bsl")), () -> "окно сравнения не открылось");
+        page.closeAllEditors(false);
+        view.linkAction(MessageRenderer.REVERT).run();
+        try (var in = file.getContents()) {
+            assertEquals(CODE, new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        }
+        view.refresh();
+        assertNull(view.linkAction(MessageRenderer.REVERT), "второй раз откатывать нечего");
     }
 
     @Test

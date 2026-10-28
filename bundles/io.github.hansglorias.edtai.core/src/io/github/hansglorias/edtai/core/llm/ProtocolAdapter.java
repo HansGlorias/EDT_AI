@@ -75,7 +75,7 @@ abstract class ProtocolAdapter {
             if (message.role() == ChatRole.ERROR || message.text().isEmpty()) {
                 continue;
             }
-            String next = message.role() == ChatRole.USER ? "user" : "assistant";
+            String next = message.role() == ChatRole.USER || message.role() == ChatRole.SUMMARY ? "user" : "assistant";
             if (next.equals(role)) {
                 content.append("\n\n").append(message.modelText());
                 continue;
