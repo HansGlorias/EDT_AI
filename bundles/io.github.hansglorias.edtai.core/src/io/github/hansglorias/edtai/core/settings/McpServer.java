@@ -13,7 +13,7 @@ import java.util.Objects;
  * @param target    командная строка для {@link McpTransport#STDIO} или URL для {@link McpTransport#HTTP}
  * @param enabled   использовать ли сервер
  * @param tools     какие инструменты сервера давать модели: имена через запятую или пробел, {@code *} в конце —
- *                  по началу имени; пусто — все
+ *                  по началу имени; пусто, {@code *}, «все» или «all» — все
  */
 public record McpServer(String name, McpTransport transport, String target, boolean enabled, String tools) {
 
@@ -51,6 +51,10 @@ public record McpServer(String name, McpTransport transport, String target, bool
     private static List<String> patterns(String value) {
         List<String> patterns = new ArrayList<>();
         for (String part : value.split("[,;\\s]+")) {
+            // Таблица настроек пишет «все» у пустого фильтра — это слово и вводят.
+            if (part.equals("*") || part.equalsIgnoreCase("все") || part.equalsIgnoreCase("all")) {
+                return List.of();
+            }
             if (!part.isEmpty()) {
                 patterns.add(part);
             }

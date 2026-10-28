@@ -47,6 +47,11 @@ class McpServersCodecTest {
         assertTrue(some.allowsTool("Search_In_Code"));
         assertFalse(some.allowsTool("read_module_source_2"));
         assertFalse(some.allowsTool("delete_project"));
+        for (String word : List.of("все", "Все", "all", "*", "read_*, все")) {
+            McpServer everything = new McpServer("EDT", McpTransport.HTTP, "", true, word);
+            assertEquals("", everything.tools(), word);
+            assertTrue(everything.allowsTool("write_module_source"), word);
+        }
     }
 
     @Test
