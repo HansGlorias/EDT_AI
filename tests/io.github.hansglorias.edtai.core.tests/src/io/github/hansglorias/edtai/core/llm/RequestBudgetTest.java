@@ -30,6 +30,19 @@ class RequestBudgetTest {
     }
 
     @Test
+    void windowIsGuessedByModelName() {
+        assertEquals(200_000, ModelConnection.guessWindow(Protocol.ANTHROPIC, "claude-sonnet-5-5"));
+        assertEquals(200_000, ModelConnection.guessWindow(Protocol.OPENAI_COMPATIBLE, "anthropic/claude-opus"));
+        assertEquals(128_000, ModelConnection.guessWindow(Protocol.OPENAI_COMPATIBLE, "gpt-4o-mini"));
+        assertEquals(128_000, ModelConnection.guessWindow(Protocol.OPENAI_COMPATIBLE, "o3-mini"));
+        assertEquals(64_000, ModelConnection.guessWindow(Protocol.OPENAI_COMPATIBLE, "deepseek-coder"));
+        assertEquals(32_768, ModelConnection.guessWindow(Protocol.OPENAI_COMPATIBLE, "qwen3-32b"));
+        assertEquals(32_768, ModelConnection.guessWindow(Protocol.OPENAI_COMPATIBLE, "llama-3-8b-instruct"));
+        assertEquals(50_000, new ModelConnection(Protocol.ANTHROPIC, "http://localhost", "claude", "", 0, "",
+                new TrustSettings(false, Optional.empty()), 50_000).window(), "явное значение из настроек важнее");
+    }
+
+    @Test
     void fittingHistoryIsUntouched() {
         List<ChatMessage> history = List.of(user("Вопрос", code(100)), assistant("Ответ"));
         RequestBudget.Fitted fitted = RequestBudget.fit(history, RequestBudgetTest::size, 1000);
@@ -52,8 +65,8 @@ class RequestBudgetTest {
         RequestBudget.Fitted dropped = RequestBudget.fit(history, RequestBudgetTest::size, 310);
         assertEquals(4, dropped.dropped());
         assertEquals(List.of("Третий"), dropped.history().stream().map(ChatMessage::text).toList());
-        assertEquals("Окно модели — код старых сообщений не передан (сообщений — 2), самые старые сообщения не переданы — 4",
-                dropped.notice().label());
+        assertEquals("Диалог длиннее окна модели — модель не видит самые старые сообщения (4) и прикреплённый к старым сообщениям"
+                + " код (2). Начните новый чат или увеличьте «Окно модели» в настройках", dropped.notice().label());
     }
 
     @Test
