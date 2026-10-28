@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.json.Json;
@@ -129,5 +130,11 @@ final class OpenAiAdapter extends ProtocolAdapter {
     private static String arguments(Object call) {
         Object arguments = Json.at(call, "function", "arguments");
         return arguments == null ? null : arguments instanceof String text ? text : Json.write(arguments);
+    }
+
+    @Override
+    Object image(Attachment image) {
+        return Json.object("type", "image_url", "image_url", Json.object("url", "data:" + image.mediaType() + ";base64,"
+                + image.data()));
     }
 }

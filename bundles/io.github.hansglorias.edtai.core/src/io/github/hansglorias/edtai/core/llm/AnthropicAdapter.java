@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.json.Json;
@@ -163,5 +164,11 @@ final class AnthropicAdapter extends ProtocolAdapter {
             content.add(block);
         }
         return List.of(Json.object("role", "user", "content", content));
+    }
+
+    @Override
+    Object image(Attachment image) {
+        return Json.object("type", "image", "source", Json.object("type", "base64", "media_type", image.mediaType(), "data",
+                image.data()));
     }
 }

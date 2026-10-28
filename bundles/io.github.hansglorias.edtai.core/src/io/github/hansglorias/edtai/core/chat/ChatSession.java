@@ -97,12 +97,22 @@ public final class ChatSession {
      * @throws IllegalStateException    если предыдущий запрос ещё не завершён
      */
     public CompletableFuture<ChatMessage> send(String text, List<ContextItem> context) {
+        return send(text, context, List.of());
+    }
+
+    /**
+     * То же с приложенными файлами и скриншотами.
+     *
+     * @throws IllegalArgumentException если текст пустой
+     * @throws IllegalStateException    если предыдущий запрос ещё не завершён
+     */
+    public CompletableFuture<ChatMessage> send(String text, List<ContextItem> context, List<Attachment> attachments) {
         if (text == null || text.isBlank()) {
             throw new IllegalArgumentException("Пустое сообщение");
         }
         synchronized (lock) {
             checkIdle();
-            add(new ChatMessage(ChatRole.USER, text.strip(), Instant.now(), Status.DONE, context));
+            add(new ChatMessage(ChatRole.USER, text.strip(), Instant.now(), Status.DONE, context, List.of(), attachments));
             return request();
         }
     }

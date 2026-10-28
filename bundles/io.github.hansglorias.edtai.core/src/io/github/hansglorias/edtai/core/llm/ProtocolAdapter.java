@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.json.Json;
@@ -78,10 +79,11 @@ abstract class ProtocolAdapter {
      * сообщения не передаются, подряд идущие сообщения одной роли
      * склеиваются: не все серверы принимают их по отдельности.
      */
-    static List<Object> messages(List<ChatMessage> history) {
+    List<Object> messages(List<ChatMessage> history) {
         List<Object> result = new ArrayList<>();
         String role = null;
         StringBuilder content = new StringBuilder();
+        List<Attachment> images = new ArrayList<>();
         for (ChatMessage message : history) {
             if (message.role() == ChatRole.ERROR || message.text().isEmpty()) {
                 continue;
@@ -89,20 +91,37 @@ abstract class ProtocolAdapter {
             String next = message.role() == ChatRole.USER || message.role() == ChatRole.SUMMARY ? "user" : "assistant";
             if (next.equals(role)) {
                 content.append("\n\n").append(message.modelText());
+                images.addAll(message.images());
                 continue;
             }
             if (role != null) {
-                result.add(Json.object("role", role, "content", content.toString()));
+                result.add(message(role, content.toString(), images));
             }
             role = next;
             content.setLength(0);
             content.append(message.modelText());
+            images.clear();
+            images.addAll(message.images());
         }
         if (role != null) {
-            result.add(Json.object("role", role, "content", content.toString()));
+            result.add(message(role, content.toString(), images));
         }
         return result;
     }
+
+    /** Сообщение: только текст или, если есть картинки, — они, затем текст. */
+    private Object message(String role, String text, List<Attachment> images) {
+        if (images.isEmpty()) {
+            return Json.object("role", role, "content", text);
+        }
+        List<Object> content = new ArrayList<>();
+        images.forEach(image -> content.add(image(image)));
+        content.add(Json.object("type", "text", "text", text));
+        return Json.object("role", role, "content", content);
+    }
+
+    /** Блок картинки в формате протокола. */
+    abstract Object image(Attachment image);
 
     /** Текст ошибки из JSON-ответа сервера: разные серверы кладут его в разные поля. */
     static String errorText(Object json) {

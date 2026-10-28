@@ -3,6 +3,7 @@ package io.github.hansglorias.edtai.ui;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.Set;
 
 import org.eclipse.jface.preference.JFacePreferences;
@@ -15,6 +16,7 @@ import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.RGB;
 
 import io.github.hansglorias.edtai.core.chat.AnswerParts;
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
@@ -39,6 +41,7 @@ final class MessageRenderer {
     static final String REVERT = "Откатить";
     static final String INSERT = "Вставить в редактор";
     static final String CONTEXT = "Контекст: ";
+    static final String FILES = "Вложения: ";
     static final String TOOL = "→ ";
     static final String CHANGED = "Изменено: ";
     static final String SHOW_CALLS = "показать";
@@ -120,6 +123,7 @@ final class MessageRenderer {
         }
         header(message, index, actions, offset, text, styles);
         context(message, offset, text, styles);
+        attachments(message, offset, text, styles);
         String body = message.text();
         if (message.role() == ChatRole.ASSISTANT) {
             // Текст и вызовы по порядку, как шёл ответ: видно, что модель делает между абзацами.
@@ -299,6 +303,16 @@ final class MessageRenderer {
             text.append(label);
         }
         text.append('\n');
+    }
+
+    /** Строка «Вложения:» с подписями файлов и скриншотов. */
+    private void attachments(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles) {
+        if (message.attachments().isEmpty()) {
+            return;
+        }
+        String line = FILES + message.attachments().stream().map(Attachment::label).collect(Collectors.joining("; "));
+        styles.add(style(offset + text.length(), line.length(), metaColor(), SWT.NORMAL));
+        text.append(line).append('\n');
     }
 
     private void markdown(RichText rich, int offset, List<StyleRange> styles, List<int[]> codeRanges) {
