@@ -77,6 +77,7 @@ import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
+import io.github.hansglorias.edtai.core.tools.EditTools;
 import io.github.hansglorias.edtai.core.tools.GitTools;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
@@ -891,6 +892,7 @@ public class ChatView extends ViewPart {
         }
         EclipseWorkspaceFiles files = EclipseWorkspaceFiles.current();
         List<Tool> tools = new ArrayList<>(ProjectTools.create(files, current::contextLimit));
+        tools.addAll(EditTools.create(files));
         try {
             tools.addAll(GitTools.create(files, current::contextLimit));
         } catch (LinkageError e) {

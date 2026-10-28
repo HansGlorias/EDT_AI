@@ -11,11 +11,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.filebuffers.FileBuffers;
 import org.eclipse.core.filebuffers.IFileBuffer;
 import org.eclipse.core.filebuffers.ITextFileBuffer;
+import org.eclipse.core.filebuffers.ITextFileBufferManager;
 import org.eclipse.core.filebuffers.LocationKind;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IWorkbenchPage;
@@ -23,6 +25,8 @@ import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.texteditor.ITextEditor;
 
+import io.github.hansglorias.edtai.core.tools.TextChange;
+import io.github.hansglorias.edtai.core.tools.ToolException;
 import io.github.hansglorias.edtai.core.tools.WorkspaceFiles;
 
 /**
@@ -116,6 +120,50 @@ final class EclipseWorkspaceFiles implements WorkspaceFiles {
             }
         });
         return texts;
+    }
+
+    /**
+     * Правка через буфер документа — тот же, что у открытого редактора:
+     * правку видно сразу, Ctrl+Z её отменяет. Если у файла не было
+     * несохранённых правок, он сохраняется (виден в git diff); если были —
+     * правка остаётся в редакторе, чтобы не сохранить чужие правки молча.
+     */
+    @Override
+    public Edit edit(String project, String path, TextChange change) throws ToolException {
+        IFile file = ResourcesPlugin.getWorkspace().getRoot().getProject(project).getFile(path);
+        AtomicReference<Edit> result = new AtomicReference<>();
+        AtomicReference<Exception> failure = new AtomicReference<>();
+        inUi(() -> {
+            ITextFileBufferManager manager = FileBuffers.getTextFileBufferManager();
+            try {
+                manager.connect(file.getFullPath(), LocationKind.IFILE, null);
+                try {
+                    ITextFileBuffer buffer = manager.getTextFileBuffer(file.getFullPath(), LocationKind.IFILE);
+                    boolean dirty = buffer.isDirty();
+                    IDocument document = buffer.getDocument();
+                    TextChange.Replacement replacement = change.compute(document.get());
+                    document.replace(replacement.offset(), replacement.length(), replacement.text());
+                    if (!dirty) {
+                        buffer.commit(null, false);
+                    }
+                    result.set(new Edit(document.get(), replacement, !dirty));
+                } finally {
+                    manager.disconnect(file.getFullPath(), LocationKind.IFILE, null);
+                }
+            } catch (Exception e) {
+                failure.set(e);
+            }
+        });
+        if (failure.get() instanceof ToolException error) {
+            throw error;
+        }
+        if (failure.get() != null) {
+            throw new ToolException("Не удалось изменить " + path + ": " + failure.get().getMessage());
+        }
+        if (result.get() == null) {
+            throw new ToolException("Не удалось изменить " + path + ": EDT закрывается");
+        }
+        return result.get();
     }
 
     /** Выполняет в UI-потоке и ждёт. */

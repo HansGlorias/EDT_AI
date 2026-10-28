@@ -1,0 +1,97 @@
+package io.github.hansglorias.edtai.core.tools;
+
+import static io.github.hansglorias.edtai.core.tools.ProjectTools.PROJECT;
+import static io.github.hansglorias.edtai.core.tools.ProjectTools.schema;
+import static io.github.hansglorias.edtai.core.tools.ProjectTools.string;
+import static io.github.hansglorias.edtai.core.tools.ProjectTools.text;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+import io.github.hansglorias.edtai.core.context.BslModulePath;
+
+/**
+ * Правка модулей моделью — без подтверждения каждой правки: что изменено,
+ * видно в диффе (git) и в редакторе, отменяется Ctrl+Z. Только модули
+ * {@code .bsl}: метаданные мимо EDT не трогаем.
+ */
+public final class EditTools {
+
+    private final WorkspaceFiles files;
+
+    private EditTools(WorkspaceFiles files) {
+        this.files = files;
+    }
+
+    public static List<Tool> create(WorkspaceFiles files) {
+        return List.of(new EditTools(files).new EditModule());
+    }
+
+    private final class EditModule implements Tool {
+        @Override
+        public String name() {
+            return "edit_module";
+        }
+
+        @Override
+        public String description() {
+            return "Меняет модуль BSL: заменяет фрагмент old_text на new_text. old_text — точный текст из модуля (с"
+                    + " отступами, без номеров строк из read_module), встречается в модуле ровно один раз; добавь"
+                    + " соседние строки, если фрагмент неуникален. Сначала прочитай модуль. Для нескольких мест —"
+                    + " несколько вызовов. Метаданные (формы, реквизиты) так не меняются — только код модулей.";
+        }
+
+        @Override
+        public Map<String, Object> inputSchema() {
+            return schema(Map.of("module", string("Модуль: имя в нотации 1С или путь файла в проекте"),
+                    "old_text", string("Точный заменяемый фрагмент модуля"),
+                    "new_text", string("Новый текст фрагмента; пусто — удалить фрагмент"), "project", PROJECT),
+                    List.of("module", "old_text", "new_text"));
+        }
+
+        @Override
+        public String summary(Map<String, Object> input) {
+            return "Правит модуль " + text(input, "module");
+        }
+
+        @Override
+        public Result call(Map<String, Object> input) throws ToolException {
+            String project = ProjectTools.project(files, input);
+            Path root = files.root(project).orElseThrow(() -> new ToolException("Каталог проекта «" + project + "» не найден"));
+            String path = ProjectTools.modulePath(project, text(input, "module"));
+            Path file = root.resolve(path).normalize();
+            if (!file.startsWith(root) || !path.toLowerCase(Locale.ROOT).endsWith(".bsl")) {
+                throw new ToolException("Менять можно только модули .bsl проекта: " + path);
+            }
+            if (!Files.isRegularFile(file)) {
+                throw new ToolException("Модуля " + path + " нет. Новые модули создаются в EDT вместе с объектом метаданных.");
+            }
+            // Текст — как прислала модель, без strip: отступы и переводы строк важны.
+            Object oldText = input.get("old_text");
+            Object newText = input.get("new_text");
+            WorkspaceFiles.Edit edit = files.edit(project, path,
+                    TextChange.replace(oldText == null ? "" : String.valueOf(oldText), newText == null ? "" : String.valueOf(newText)));
+            int first = line(edit.text(), edit.replacement().offset());
+            int last = line(edit.text(), edit.replacement().offset() + Math.max(0, edit.replacement().text().length() - 1));
+            String name = BslModulePath.metadataName(path).orElse(path);
+            String lines = edit.replacement().text().isEmpty() ? "удалено у строки " + first
+                    : first == last ? "строка " + first : "строки " + first + "–" + last;
+            String state = edit.saved() ? "сохранён" : "изменён в редакторе, не сохранён: там были несохранённые правки пользователя";
+            return new Result("Изменено: " + name + ", " + lines + "; файл " + state + ".", lines + (edit.saved() ? "" : ", не сохранён"));
+        }
+    }
+
+    /** Номер строки (с 1) символа {@code offset}. */
+    private static int line(String text, int offset) {
+        int line = 1;
+        for (int i = 0; i < Math.min(offset, text.length()); i++) {
+            if (text.charAt(i) == '\n') {
+                line++;
+            }
+        }
+        return line;
+    }
+}
