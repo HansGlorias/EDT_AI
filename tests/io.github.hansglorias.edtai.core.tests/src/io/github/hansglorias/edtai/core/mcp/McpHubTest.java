@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -15,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.AfterEach;
@@ -222,6 +224,20 @@ class McpHubTest {
         assertTrue(McpHub.isLoopback("127.0.0.1"));
         assertTrue(McpHub.isLoopback("[::1]"));
         assertFalse(McpHub.isLoopback("mcp.example.invalid"));
+    }
+
+    @Test
+    void waitsWhileProjectIsBuilding() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        server.tool("delete_metadata", "Удаляет", arguments -> attempts.incrementAndGet() < 3
+                ? Json.object("isError", true, "content", List.of(Json.object("type", "text", "text",
+                        "Project is building: stage AFTER_BUILD, pipeline READY. Please wait and retry.")))
+                : Json.object("content", List.of(Json.object("type", "text", "text", "Удалено"))));
+        hub.buildRetryDelay = Duration.ofMillis(10);
+
+        assertEquals("Удалено", tools(edt("")).get("delete_metadata").call(Map.of("fqn", "Catalog.Х")).text());
+        assertEquals(3, attempts.get());
+        assertFalse(McpTool.isBuilding("{\"error\": \"нет проекта\"}"));
     }
 
     private McpServer edt(String filter) {

@@ -82,7 +82,7 @@ class ChatToolsTest extends AbstractChatTest {
 
         Map<String, Object> first = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(first.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
-        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "git_status", "git_diff", "git_log"), names);
+        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "git_status", "git_diff", "git_log", "git_restore"), names);
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
         String result = Json.stringAt(messages.get(messages.size() - 1), "content");
         assertTrue(result.contains("ОбщийМодуль.Тест.Модуль (проект " + PROJECT + ", src/CommonModules/Тест/Module.bsl)"), result);

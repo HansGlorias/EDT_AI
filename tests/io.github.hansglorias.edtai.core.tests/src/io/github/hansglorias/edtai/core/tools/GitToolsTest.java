@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,18 +28,22 @@ class GitToolsTest {
 
     private final Map<String, Tool> tools = new HashMap<>();
     private RevCommit first;
+    private Path project;
+    private final List<String> refreshed = new ArrayList<>();
 
     @BeforeEach
     void createRepository() throws Exception {
         // Проект — подкаталог репозитория, как часто бывает с проектами EDT.
-        Path project = temp.resolve("repo/Демо");
+        project = temp.resolve("repo/Демо");
         write(project.resolve(MODULE), "Процедура Сообщить1() Экспорт\n\tСообщить(\"Привет\");\nКонецПроцедуры\n");
         Files.createDirectories(temp.resolve("Вне"));
         try (Git git = Git.init().setDirectory(temp.resolve("repo").toFile()).call()) {
-            // Глобальный ~/.gitconfig машины не должен влиять на тест (подпись коммитов, gpg.format=ssh).
+            // Глобальный ~/.gitconfig машины не должен влиять на тест (подпись коммитов, gpg.format=ssh, переводы строк).
             StoredConfig config = git.getRepository().getConfig();
             config.setString("gpg", null, "format", "openpgp");
             config.setBoolean("commit", null, "gpgsign", false);
+            // На Windows-раннере autocrlf=true: откат записал бы файл с CRLF.
+            config.setBoolean("core", null, "autocrlf", false);
             config.save();
             git.add().addFilepattern(".").call();
             first = commit(git, "Первый модуль");
@@ -62,6 +67,11 @@ class GitToolsTest {
             @Override
             public Optional<String> preferredProject() {
                 return Optional.of("Демо");
+            }
+
+            @Override
+            public void refresh(String name, List<String> paths) {
+                refreshed.add(name + ":" + paths);
             }
         };
         for (Tool tool : GitTools.create(files, () -> 40_000)) {
@@ -101,6 +111,25 @@ class GitToolsTest {
         assertEquals("коммитов: 1", log.outcome());
         assertTrue(log.text().matches("[0-9a-f]{7} \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d Тестов: Прощание вместо приветствия"), log.text());
         assertEquals("коммитов: 2", tools.get("git_log").call(Map.of()).outcome());
+    }
+
+    @Test
+    void restoreReturnsFilesToLastCommit() throws Exception {
+        Tool restore = tools.get("git_restore");
+        assertTrue(restore.needsApproval(), "откат необратим — с подтверждением");
+        Files.delete(project.resolve("src/CommonModules/Общий/Module.bsl"));
+        assertEquals("Откатывает в git: src/CommonModules/Общий", restore.summary(Map.of("paths", List.of("src/CommonModules/Общий"))));
+
+        Tool.Result result = restore.call(Map.of("paths", List.of("src\\CommonModules\\Общий\\")));
+
+        assertEquals("откачено: 1", result.outcome());
+        assertEquals("Процедура Сообщить1() Экспорт\n\tСообщить(\"Пока\");\nКонецПроцедуры\n", Files.readString(project.resolve(MODULE)));
+        assertTrue(Files.exists(project.resolve("src/CommonModules/Новый/Module.bsl")), "новые файлы не удаляются");
+        assertEquals(List.of("Демо:[src/CommonModules/Общий]"), refreshed);
+        assertEquals("изменено файлов: 1", tools.get("git_status").call(Map.of()).outcome());
+
+        assertEquals("Путь вне проекта: ../Вне/x", assertThrows(ToolException.class,
+                () -> restore.call(Map.of("paths", List.of("../Вне/x")))).getMessage());
     }
 
     @Test
