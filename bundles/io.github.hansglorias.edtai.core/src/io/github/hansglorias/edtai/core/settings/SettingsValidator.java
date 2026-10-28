@@ -29,6 +29,9 @@ public final class SettingsValidator {
                 errors.add("Адрес сервера: " + error);
             }
         }
+        if (settings.maxTokens() > AiSettings.MAX_TOKENS_LIMIT) {
+            errors.add("Макс. токенов ответа: не больше " + AiSettings.MAX_TOKENS_LIMIT);
+        }
         if (!settings.caCertificateFile().isEmpty()) {
             String error = checkReadableFile(settings.caCertificateFile());
             if (error != null) {
@@ -84,6 +87,29 @@ public final class SettingsValidator {
             return "в адресе нет имени хоста";
         }
         return null;
+    }
+
+    /**
+     * Предупреждение, если токен уйдёт открытым текстом: адрес {@code http://}
+     * не на этот компьютер.
+     *
+     * @return текст предупреждения или {@code null}
+     */
+    public static String plainHttpWarning(String baseUrl) {
+        URI uri;
+        try {
+            uri = new URI(baseUrl.strip());
+        } catch (URISyntaxException e) {
+            return null;
+        }
+        if (!"http".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) {
+            return null;
+        }
+        String host = uri.getHost().toLowerCase(Locale.ROOT);
+        if (host.equals("localhost") || host.startsWith("127.") || host.equals("[::1]") || host.equals("::1")) {
+            return null;
+        }
+        return "Адрес без https: токен и переписка уйдут по сети открытым текстом.";
     }
 
     private static String checkReadableFile(String value) {

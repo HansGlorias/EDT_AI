@@ -5,9 +5,18 @@ package io.github.hansglorias.edtai.core.chat;
  */
 public interface ChatListener {
 
-    void messageAdded(ChatMessage message);
+    /** В конец диалога добавлено сообщение. */
+    default void messageAdded(ChatMessage message) {
+    }
 
-    void cleared();
+    /** Сообщение с номером {@code index} заменено: например, вырос текст ответа. */
+    default void messageUpdated(int index, ChatMessage message) {
+    }
 
-    void busyChanged(boolean busy);
+    /** История изменилась целиком: очистка или повтор запроса. */
+    default void historyChanged() {
+    }
+
+    default void busyChanged(boolean busy) {
+    }
 }
