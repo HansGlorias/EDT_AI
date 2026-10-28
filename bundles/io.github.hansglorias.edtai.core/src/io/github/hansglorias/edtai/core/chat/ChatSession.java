@@ -122,6 +122,44 @@ public final class ChatSession {
         listeners.forEach(ChatListener::historyChanged);
     }
 
+    /**
+     * «Изменить» своё сообщение: убирает его и всё, что после него.
+     *
+     * @return текст убранного сообщения — его возвращают в поле ввода
+     * @throws IllegalStateException    если запрос выполняется
+     * @throws IllegalArgumentException если по этому номеру не сообщение пользователя
+     */
+    public String editFrom(int index) {
+        String text;
+        synchronized (lock) {
+            checkIdle();
+            if (index < 0 || index >= messages.size() || messages.get(index).role() != ChatRole.USER) {
+                throw new IllegalArgumentException("Изменить можно только своё сообщение");
+            }
+            text = messages.get(index).text();
+            messages.subList(index, messages.size()).clear();
+        }
+        listeners.forEach(ChatListener::historyChanged);
+        return text;
+    }
+
+    /**
+     * Заменяет историю сохранённой. Неоконченный ответ становится
+     * остановленным: продолжить его уже нельзя.
+     *
+     * @throws IllegalStateException если запрос выполняется
+     */
+    public void restore(List<ChatMessage> saved) {
+        synchronized (lock) {
+            checkIdle();
+            messages.clear();
+            for (ChatMessage message : saved) {
+                messages.add(message.status() == Status.STREAMING ? message.with(message.text(), Status.STOPPED) : message);
+            }
+        }
+        listeners.forEach(ChatListener::historyChanged);
+    }
+
     private void checkIdle() {
         if (current != null) {
             throw new IllegalStateException("Предыдущий запрос ещё выполняется");

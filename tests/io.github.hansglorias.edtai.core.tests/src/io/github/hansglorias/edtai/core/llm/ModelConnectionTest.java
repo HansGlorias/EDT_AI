@@ -51,7 +51,7 @@ class ModelConnectionTest {
 
     @Test
     void tokenIsNotInToString() {
-        ModelConnection connection = new ModelConnection(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", TOKEN, 0,
+        ModelConnection connection = new ModelConnection(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", TOKEN, 0, "",
                 new TrustSettings(true, Optional.empty()));
 
         assertFalse(connection.toString().contains(TOKEN), connection.toString());
@@ -60,16 +60,16 @@ class ModelConnectionTest {
 
     @Test
     void takesValuesFromSettings() {
-        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, " https://llm.example.invalid ", "m", 100, false, "", List.of());
+        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, " https://llm.example.invalid ", "m", 100, "", false, "", List.of());
 
         ModelConnection connection = ModelConnection.of(settings, " t ");
 
-        assertEquals(new ModelConnection(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", "t", 100,
+        assertEquals(new ModelConnection(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", "t", 100, "",
                 new TrustSettings(false, Optional.empty())), connection);
         assertEquals(16, connection.withMaxTokens(16).maxTokens());
     }
 
     private static String endpoint(Protocol protocol, String base) throws ModelException {
-        return new ModelConnection(protocol, base, "m", "", 0, new TrustSettings(true, Optional.empty())).endpoint().toString();
+        return new ModelConnection(protocol, base, "m", "", 0, "", new TrustSettings(true, Optional.empty())).endpoint().toString();
     }
 }

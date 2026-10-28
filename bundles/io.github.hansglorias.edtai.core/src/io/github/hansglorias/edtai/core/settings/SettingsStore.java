@@ -24,6 +24,7 @@ public final class SettingsStore {
     static final String KEY_BASE_URL = "baseUrl";
     static final String KEY_MODEL = "model";
     static final String KEY_MAX_TOKENS = "maxTokens";
+    static final String KEY_SYSTEM_PROMPT = "systemPrompt";
     static final String KEY_USE_SYSTEM_TRUST_STORE = "useSystemTrustStore";
     static final String KEY_CA_CERTIFICATE_FILE = "caCertificateFile";
     static final String KEY_MCP_SERVERS = "mcpServers";
@@ -57,6 +58,7 @@ public final class SettingsStore {
                 preferences.get(KEY_BASE_URL, ""),
                 preferences.get(KEY_MODEL, ""),
                 preferences.getInt(KEY_MAX_TOKENS, 0),
+                preferences.get(KEY_SYSTEM_PROMPT, AiSettings.DEFAULT_SYSTEM_PROMPT),
                 preferences.getBoolean(KEY_USE_SYSTEM_TRUST_STORE, AiSettings.DEFAULT_USE_SYSTEM_TRUST_STORE),
                 preferences.get(KEY_CA_CERTIFICATE_FILE, ""),
                 servers);
@@ -70,6 +72,13 @@ public final class SettingsStore {
             preferences.putInt(KEY_MAX_TOKENS, settings.maxTokens());
         } else {
             preferences.remove(KEY_MAX_TOKENS);
+        }
+        // Промпт по умолчанию не сохраняем, чтобы его улучшения доходили до пользователя;
+        // пустой сохраняем явно — это «без системного промпта».
+        if (settings.systemPrompt().equals(AiSettings.DEFAULT_SYSTEM_PROMPT)) {
+            preferences.remove(KEY_SYSTEM_PROMPT);
+        } else {
+            preferences.put(KEY_SYSTEM_PROMPT, settings.systemPrompt());
         }
         preferences.putBoolean(KEY_USE_SYSTEM_TRUST_STORE, settings.useSystemTrustStore());
         put(KEY_CA_CERTIFICATE_FILE, settings.caCertificateFile());

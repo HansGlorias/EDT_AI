@@ -41,7 +41,7 @@ class SettingsValidatorTest {
 
     @Test
     void reportsBadBaseUrl() {
-        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "llm", "model", 0, true, "", List.of());
+        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "llm", "model", 0, "", true, "", List.of());
 
         List<String> errors = SettingsValidator.validate(settings);
 
@@ -51,13 +51,13 @@ class SettingsValidatorTest {
 
     @Test
     void limitsMaxTokens() {
-        AiSettings settings = new AiSettings(null, "", "", AiSettings.MAX_TOKENS_LIMIT + 1, true, "", List.of());
+        AiSettings settings = new AiSettings(null, "", "", AiSettings.MAX_TOKENS_LIMIT + 1, "", true, "", List.of());
 
         List<String> errors = SettingsValidator.validate(settings);
 
         assertEquals(1, errors.size());
         assertTrue(errors.get(0).startsWith("Макс. токенов"), errors.get(0));
-        assertTrue(SettingsValidator.validate(new AiSettings(null, "", "", 4096, true, "", List.of())).isEmpty());
+        assertTrue(SettingsValidator.validate(new AiSettings(null, "", "", 4096, "", true, "", List.of())).isEmpty());
     }
 
     @Test
@@ -74,7 +74,7 @@ class SettingsValidatorTest {
 
     @Test
     void reportsMissingCertificateFile() {
-        AiSettings settings = new AiSettings(null, "", "", 0, true, temp.resolve("missing.pem").toString(), List.of());
+        AiSettings settings = new AiSettings(null, "", "", 0, "", true, temp.resolve("missing.pem").toString(), List.of());
 
         List<String> errors = SettingsValidator.validate(settings);
 
@@ -85,7 +85,7 @@ class SettingsValidatorTest {
     @Test
     void acceptsExistingCertificateFile() throws IOException {
         Path file = Files.writeString(temp.resolve("ca.pem"), "-----BEGIN CERTIFICATE-----");
-        AiSettings settings = new AiSettings(null, "", "", 0, true, file.toString(), List.of());
+        AiSettings settings = new AiSettings(null, "", "", 0, "", true, file.toString(), List.of());
 
         assertTrue(SettingsValidator.validate(settings).isEmpty());
     }

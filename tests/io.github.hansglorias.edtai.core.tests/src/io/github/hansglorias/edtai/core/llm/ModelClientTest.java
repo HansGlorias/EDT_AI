@@ -110,6 +110,29 @@ class ModelClientTest {
     }
 
     @Test
+    void systemPromptGoesToBothProtocols() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(request.path().endsWith("/messages")
+                ? "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+                : "data: [DONE]\n\n"), 0));
+        String prompt = "Ты помощник 1С.";
+
+        await(client.stream(withPrompt(connection(Protocol.OPENAI_COMPATIBLE, ""), prompt), HISTORY, parts::add));
+        await(client.stream(withPrompt(connection(Protocol.ANTHROPIC, ""), prompt), HISTORY, parts::add));
+
+        Map<String, Object> openAi = Json.parseObject(server.requests().get(0).body());
+        assertEquals(Map.of("role", "system", "content", prompt), Json.asList(openAi.get("messages")).get(0));
+        assertEquals(4, Json.asList(openAi.get("messages")).size());
+        Map<String, Object> anthropic = Json.parseObject(server.requests().get(1).body());
+        assertEquals(prompt, anthropic.get("system"));
+        assertEquals("user", Json.stringAt(anthropic, "messages", 0, "role"));
+    }
+
+    private static ModelConnection withPrompt(ModelConnection connection, String prompt) {
+        return new ModelConnection(connection.protocol(), connection.baseUrl(), connection.model(), connection.token(),
+                connection.maxTokens(), prompt, connection.trust());
+    }
+
+    @Test
     void anthropicStreamsAnswerByParts() throws Exception {
         server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
                 "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n",
@@ -135,6 +158,7 @@ class ModelClientTest {
         assertNull(request.header("Authorization"));
         Map<String, Object> body = Json.parseObject(request.body());
         assertEquals(8192L, body.get("max_tokens"));
+        assertFalse(body.containsKey("system"));
         assertEquals(Boolean.TRUE, body.get("stream"));
         assertEquals(3, Json.asList(body.get("messages")).size());
     }
@@ -341,7 +365,7 @@ class ModelClientTest {
 
     @Test
     void unreadableCaFileIsExplained() throws Exception {
-        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, "https://localhost:1", "m", "", 0,
+        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, "https://localhost:1", "m", "", 0, "",
                 new TrustSettings(false, Optional.of(temp.resolve("missing.pem"))));
 
         ModelException error = failure(client.stream(connection, HISTORY, parts::add));
@@ -353,7 +377,7 @@ class ModelClientTest {
     @Test
     void missingModelIsReportedBeforeRequest() throws Exception {
         server = FakeModelServer.http();
-        ModelConnection connection = new ModelConnection(Protocol.ANTHROPIC, server.url(), "", "", 0, trust(false));
+        ModelConnection connection = new ModelConnection(Protocol.ANTHROPIC, server.url(), "", "", 0, "", trust(false));
 
         ModelException error = failure(client.stream(connection, HISTORY, parts::add));
 
@@ -378,7 +402,7 @@ class ModelClientTest {
     }
 
     private static ModelConnection connection(Protocol protocol, String url, String token, TrustSettings trust) {
-        return new ModelConnection(protocol, url, "test-model", token, 0, trust);
+        return new ModelConnection(protocol, url, "test-model", token, 0, "", trust);
     }
 
     /** @param testCa доверять тестовому CA, которым выпущены сертификаты фейкового сервера */

@@ -199,6 +199,58 @@ class ChatSessionTest {
     }
 
     @Test
+    void retryRegeneratesFinishedAnswer() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> first = session.send("вопрос");
+        provider.complete("первый ответ");
+        first.get(TIMEOUT, TimeUnit.SECONDS);
+
+        CompletableFuture<ChatMessage> second = session.retry();
+        provider.complete("второй ответ");
+
+        assertEquals("второй ответ", second.get(TIMEOUT, TimeUnit.SECONDS).text());
+        assertEquals(List.of("USER:вопрос", "ASSISTANT:второй ответ"), texts(session.messages()));
+    }
+
+    @Test
+    void editRemovesMessageAndEverythingAfter() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> first = session.send("раз");
+        provider.complete("ответ 1");
+        first.get(TIMEOUT, TimeUnit.SECONDS);
+        CompletableFuture<ChatMessage> second = session.send("два");
+        provider.complete("ответ 2");
+        second.get(TIMEOUT, TimeUnit.SECONDS);
+        List<String> events = record(session);
+
+        assertEquals("два", session.editFrom(2));
+
+        assertEquals(List.of("USER:раз", "ASSISTANT:ответ 1"), texts(session.messages()));
+        assertEquals(List.of("history"), events);
+        assertThrows(IllegalArgumentException.class, () -> session.editFrom(1));
+        assertThrows(IllegalArgumentException.class, () -> session.editFrom(5));
+        session.send("три");
+        assertThrows(IllegalStateException.class, () -> session.editFrom(0));
+    }
+
+    @Test
+    void restoreReplacesHistory() {
+        ChatSession session = new ChatSession(new ManualProvider());
+        List<String> events = record(session);
+        ChatMessage streaming = new ChatMessage(ChatRole.ASSISTANT, "обрыв", java.time.Instant.EPOCH, Status.STREAMING);
+
+        session.restore(List.of(ChatMessage.of(ChatRole.USER, "вопрос"), streaming));
+
+        assertEquals(List.of("USER:вопрос", "ASSISTANT:обрыв"), texts(session.messages()));
+        assertEquals(Status.STOPPED, session.messages().get(1).status());
+        assertEquals(java.time.Instant.EPOCH, session.messages().get(1).time());
+        assertEquals(List.of("history"), events);
+        assertTrue(session.canRetry());
+    }
+
+    @Test
     void retryWithoutUserMessageFails() {
         ChatSession session = new ChatSession(new ManualProvider());
 
