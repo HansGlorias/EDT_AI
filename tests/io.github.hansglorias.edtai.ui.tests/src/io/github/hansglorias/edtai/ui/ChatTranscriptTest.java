@@ -280,6 +280,12 @@ class ChatTranscriptTest extends AbstractChatTest {
         view.historyPanel().select(1);
         settle();
         assertTrue(view.historyFile().path().getFileName().toString().startsWith(first));
+
+        view.historyPanel().clickNewChat();
+        settle();
+        assertTrue(view.isEmptyStateShown(), "«Новый чат» в заголовке панели");
+        view.historyPanel().select(1);
+        settle();
         assertTrue(view.history().getText().contains("первый чат"), view.history().getText());
         assertFalse(view.history().getText().contains("второй чат"));
 

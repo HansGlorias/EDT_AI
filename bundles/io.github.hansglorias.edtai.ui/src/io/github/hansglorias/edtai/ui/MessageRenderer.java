@@ -8,11 +8,13 @@ import java.util.Set;
 
 import org.eclipse.jface.preference.JFacePreferences;
 import org.eclipse.jface.resource.JFaceResources;
+import org.eclipse.jface.resource.FontRegistry;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
+import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.RGB;
 
 import io.github.hansglorias.edtai.core.chat.AnswerParts;
@@ -188,7 +190,9 @@ final class MessageRenderer {
                 nameColor = errorColor();
             }
         }
-        styles.add(style(offset + text.length(), name.length(), nameColor, SWT.BOLD));
+        StyleRange nameStyle = style(offset + text.length(), name.length(), nameColor, SWT.NORMAL);
+        nameStyle.font = nameFont();
+        styles.add(nameStyle);
         text.append(name);
 
         String meta = "  " + TIME.format(message.time()) + switch (message.status()) {
@@ -363,6 +367,22 @@ final class MessageRenderer {
 
     private static StyleRange style(int start, int length, Color foreground, int fontStyle) {
         return new StyleRange(start, length, foreground, null, fontStyle);
+    }
+
+    private static final String NAME_FONT = "io.github.hansglorias.edtai.ui.nameFont";
+
+    /** Имя автора сообщения: жирный шрифт на пункт крупнее текста — сообщения легче различать. */
+    private static Font nameFont() {
+        FontRegistry registry = JFaceResources.getFontRegistry();
+        if (!registry.hasValueFor(NAME_FONT)) {
+            FontData[] data = registry.getFontData(JFaceResources.DEFAULT_FONT);
+            FontData[] larger = new FontData[data.length];
+            for (int i = 0; i < data.length; i++) {
+                larger[i] = new FontData(data[i].getName(), data[i].getHeight() + 1, data[i].getStyle());
+            }
+            registry.put(NAME_FONT, larger);
+        }
+        return registry.getBold(NAME_FONT);
     }
 
     private static Font monospace(boolean bold, boolean italic) {

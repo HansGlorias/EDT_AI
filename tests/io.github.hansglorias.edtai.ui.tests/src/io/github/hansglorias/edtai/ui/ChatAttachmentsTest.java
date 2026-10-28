@@ -10,8 +10,14 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.ImageTransfer;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
+import org.eclipse.ui.IWorkbenchCommandConstants;
+import org.eclipse.ui.handlers.IHandlerService;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.Attachment;
@@ -58,5 +64,31 @@ class ChatAttachmentsTest extends AbstractChatTest {
         List<Attachment> saved = reopened.session().messages().get(0).attachments();
         assertEquals(List.of("log.txt", "image/png"), List.of(saved.get(0).name(), saved.get(1).mediaType()), "вложения сохраняются");
         assertFalse(reopened.pasteAttachments(), "в буфере нет картинок и файлов — обычная вставка текста");
+    }
+
+    @Test
+    void ctrlVGoesThroughWorkbenchPasteCommand() throws Exception {
+        answering(List.of("Ответ."));
+        ChatView view = showView();
+        view.input().setFocus();
+        settle();
+        IHandlerService handlers = view.getSite().getService(IHandlerService.class);
+
+        Clipboard clipboard = new Clipboard(view.input().getDisplay());
+        try {
+            clipboard.setContents(new Object[] { new ImageData(30, 10, 24, new PaletteData(0xFF0000, 0xFF00, 0xFF)) },
+                    new Transfer[] { ImageTransfer.getInstance() });
+            handlers.executeCommand(IWorkbenchCommandConstants.EDIT_PASTE, null);
+            assertEquals(1, view.contextBar().labels().size(), view.contextBar().labels().toString());
+            assertTrue(view.contextBar().labels().get(0).startsWith("скриншот-"));
+            assertEquals("", view.input().getText(), "картинка не вставляется текстом");
+
+            clipboard.setContents(new Object[] { "обычный текст" }, new Transfer[] { TextTransfer.getInstance() });
+            handlers.executeCommand(IWorkbenchCommandConstants.EDIT_PASTE, null);
+            assertEquals("обычный текст", view.input().getText());
+            assertEquals(1, view.contextBar().labels().size());
+        } finally {
+            clipboard.dispose();
+        }
     }
 }
