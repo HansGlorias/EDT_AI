@@ -3,6 +3,7 @@ package io.github.hansglorias.edtai.ui;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import org.eclipse.core.runtime.ILogListener;
 import org.eclipse.core.runtime.IStatus;
@@ -54,7 +56,7 @@ abstract class AbstractChatTest {
         page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
         page.getWorkbenchWindow().getShell().setBounds(0, 0, 720, 780);
         SettingsStore.workspace().save(AiSettings.defaults());
-        Files.deleteIfExists(historyFile());
+        deleteChats();
         Platform.addLogListener(logListener);
     }
 
@@ -69,13 +71,40 @@ abstract class AbstractChatTest {
             server.close();
         }
         SettingsStore.workspace().save(AiSettings.defaults());
-        Files.deleteIfExists(historyFile());
+        deleteChats();
         Platform.removeLogListener(logListener);
         assertEquals(List.of(), loggedErrors.stream().map(AbstractChatTest::describe).toList());
     }
 
-    static Path historyFile() {
-        return Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath().resolve(ChatView.HISTORY_FILE);
+    static Path stateLocation() {
+        return Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath();
+    }
+
+    /** Все сохранённые диалоги одной строкой. */
+    static String savedChats() throws IOException {
+        Path directory = stateLocation().resolve(ChatView.CHATS_DIRECTORY);
+        if (!Files.isDirectory(directory)) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder();
+        try (Stream<Path> files = Files.list(directory)) {
+            for (Path file : files.sorted().toList()) {
+                text.append(Files.readString(file)).append('\n');
+            }
+        }
+        return text.toString();
+    }
+
+    static void deleteChats() throws IOException {
+        Files.deleteIfExists(stateLocation().resolve(ChatView.HISTORY_FILE));
+        Path directory = stateLocation().resolve(ChatView.CHATS_DIRECTORY);
+        if (Files.isDirectory(directory)) {
+            try (Stream<Path> files = Files.list(directory)) {
+                for (Path file : files.toList()) {
+                    Files.delete(file);
+                }
+            }
+        }
     }
 
     ChatView showView() throws Exception {

@@ -246,7 +246,7 @@ class ChatTranscriptTest extends AbstractChatTest {
         ChatView view = showView();
         ask(view, "сохрани меня");
         page.hideView(view);
-        assertTrue(Files.readString(historyFile()).contains("сохрани меня"));
+        assertTrue(savedChats().contains("сохрани меня"));
 
         ChatView reopened = showView();
         settle();
@@ -258,7 +258,31 @@ class ChatTranscriptTest extends AbstractChatTest {
         reopened.session().clear();
         settle();
         assertTrue(reopened.isEmptyStateShown());
-        assertFalse(Files.readString(historyFile()).contains("сохрани меня"));
+        assertFalse(savedChats().contains("сохрани меня"));
+    }
+
+    @Test
+    void newChatKeepsPreviousInHistory() throws Exception {
+        answering(List.of("Ответ."));
+        ChatView view = showView();
+        ask(view, "первый чат");
+        String first = view.historyFile().path().getFileName().toString().replace(".json", "");
+
+        view.newChatForTest();
+        settle();
+        assertTrue(view.isEmptyStateShown());
+        ask(view, "второй чат");
+
+        assertEquals(List.of("второй чат", "первый чат"), view.chats().list().stream().map(entry -> entry.title()).toList());
+        view.openChatForTest(first);
+        settle();
+        assertTrue(view.history().getText().contains("первый чат"), view.history().getText());
+        assertFalse(view.history().getText().contains("второй чат"));
+
+        page.hideView(view);
+        ChatView reopened = showView();
+        settle();
+        assertTrue(reopened.history().getText().contains("первый чат"), "открывается чат, открытый в прошлый раз");
     }
 
     private static String press(ChatView view, int keyCode) {
