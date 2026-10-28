@@ -56,6 +56,9 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         return new ChatMessage(role, text, time, status, context, newTools);
     }
 
+    /** Так модель видит краткое содержание: как сообщение пользователя. */
+    public static final String SUMMARY_PREFIX = "[Краткое содержание предыдущей части диалога — сообщения выше уже не передаются]\n";
+
     public ChatMessage withContext(List<ContextItem> newContext) {
         return new ChatMessage(role, text, time, status, newContext, tools);
     }
@@ -67,6 +70,9 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
      * историю не входят).
      */
     public String modelText() {
+        if (role == ChatRole.SUMMARY) {
+            return SUMMARY_PREFIX + text;
+        }
         if (role == ChatRole.ASSISTANT) {
             String trace = tools.stream().filter(ToolUse::isCall).map(ToolUse::label).collect(Collectors.joining("; "));
             return trace.isEmpty() ? text : "[Вызванные инструменты: " + trace + "]\n\n" + text;

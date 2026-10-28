@@ -108,6 +108,8 @@ final class MessageRenderer {
         } else {
             if (message.role() == ChatRole.ERROR) {
                 styles.add(style(offset + text.length(), body.length(), errorColor(), SWT.NORMAL));
+            } else if (message.role() == ChatRole.SUMMARY) {
+                styles.add(style(offset + text.length(), body.length(), metaColor(), SWT.ITALIC));
             }
             text.append(body);
         }
@@ -124,6 +126,10 @@ final class MessageRenderer {
             case ASSISTANT -> {
                 name = "Ассистент";
                 nameColor = color(JFacePreferences.COUNTER_COLOR, SWT.COLOR_DARK_BLUE);
+            }
+            case SUMMARY -> {
+                name = "Краткое содержание диалога выше";
+                nameColor = metaColor();
             }
             default -> {
                 name = "Ошибка";

@@ -70,6 +70,25 @@ class RequestBudgetTest {
     }
 
     @Test
+    void compactionStartsWhenHistoryTakesHalfOfBudget() {
+        // Окно 2048 токенов — бюджет 4608 символов; сжимать, когда история больше половины.
+        ModelConnection small = connection(0, 2048);
+        ModelChatProvider provider = new ModelChatProvider(() -> small, new ModelClient());
+        List<ChatMessage> history = new java.util.ArrayList<>();
+        for (int i = 0; i < 9; i++) {
+            history.add(i % 2 == 0 ? user("вопрос " + i + " " + "а".repeat(600), code(0)) : assistant("ответ " + "б".repeat(600)));
+        }
+        int count = provider.compactCount(history);
+        assertTrue(count >= 2 && count <= 8, String.valueOf(count));
+        assertEquals(ChatRole.USER, history.get(count).role(), "сжимаются целые обмены");
+        assertEquals(0, provider.compactCount(history.subList(6, 9)), "короткая история не сжимается");
+
+        String transcript = ModelChatProvider.transcript(history, 1500);
+        assertTrue(transcript.startsWith("Пользователь: вопрос 8") || transcript.startsWith("Ассистент: "), transcript);
+        assertTrue(transcript.length() <= 1500);
+    }
+
+    @Test
     void answerCarriesTraceOfTools() {
         ChatMessage answer = assistant("В модуле одна процедура.").withTools(List.of(
                 new ToolUse("call_1", "read_module", "Читает модуль Х", "строки 1–3 из 3", ToolUse.Status.DONE),
