@@ -35,6 +35,14 @@ public record Attachment(String name, String mediaType, String data) {
         Objects.requireNonNull(data, "data");
     }
 
+    /** Тип вложения-скилла: инструкция, которую модель выполняет. */
+    public static final String SKILL = "text/x-skill";
+
+    /** Инструкция скилла к вопросу: команда {@code /имя}. */
+    public static Attachment skill(String name, String instructions) {
+        return new Attachment(name, SKILL, instructions);
+    }
+
     public boolean isImage() {
         return mediaType.startsWith("image/");
     }
@@ -98,6 +106,9 @@ public record Attachment(String name, String mediaType, String data) {
 
     /** Подпись: «screenshot.png, 120 КБ», «log.txt, 35 строк». */
     public String label() {
+        if (SKILL.equals(mediaType)) {
+            return "скилл " + name;
+        }
         if (isImage()) {
             return name + ", " + Math.max(1, imageBytes() / 1024) + " КБ";
         }
@@ -114,6 +125,10 @@ public record Attachment(String name, String mediaType, String data) {
         String fence = "```";
         while (data.contains(fence)) {
             fence += "`";
+        }
+        if (SKILL.equals(mediaType)) {
+            return "Выполни задачу по скиллу «" + name + "» — инструкция:\n" + fence + "markdown\n" + data.stripTrailing() + "\n"
+                    + fence;
         }
         return "Файл " + name + ":\n" + fence + "\n" + data.stripTrailing() + "\n" + fence;
     }
