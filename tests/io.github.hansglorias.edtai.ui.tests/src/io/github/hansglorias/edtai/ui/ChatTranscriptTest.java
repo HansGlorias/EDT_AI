@@ -274,8 +274,12 @@ class ChatTranscriptTest extends AbstractChatTest {
         ask(view, "второй чат");
 
         assertEquals(List.of("второй чат", "первый чат"), view.chats().list().stream().map(entry -> entry.title()).toList());
-        view.openChatForTest(first);
+        view.showHistoryPanel(true);
+        assertEquals(List.of("второй чат", "первый чат"), view.historyPanel().titles());
+        Screenshots.capture(view.control(), "chat-history");
+        view.historyPanel().select(1);
         settle();
+        assertTrue(view.historyFile().path().getFileName().toString().startsWith(first));
         assertTrue(view.history().getText().contains("первый чат"), view.history().getText());
         assertFalse(view.history().getText().contains("второй чат"));
 

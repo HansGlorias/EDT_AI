@@ -26,8 +26,12 @@ import io.github.hansglorias.edtai.core.tools.ToolSource;
  */
 final class AgentLoop {
 
-    /** Сколько ответов модели с вызовами инструментов подряд допускаем. */
-    static final int MAX_STEPS = 10;
+    /**
+     * Сколько ответов модели с вызовами инструментов подряд допускаем: правка
+     * формы или нескольких модулей — десятки вызовов; это защита от
+     * зацикливания, а не от работы.
+     */
+    static final int MAX_STEPS = 50;
 
     /** Вместо результата старого шага, когда запрос не помещается в окно модели. */
     static final String OMITTED = "(результат не передан: не помещается в окно модели; если он нужен — вызови инструмент снова)";
@@ -132,8 +136,8 @@ final class AgentLoop {
                 return ThinkFilter.strip(answer.toString()).strip();
             }
             if (step >= MAX_STEPS) {
-                text("_Остановлено: модель вызвала инструменты " + MAX_STEPS + " раз подряд. Уточните вопрос или"
-                        + " нажмите «Повторить»._");
+                text("_Остановлено: модель вызвала инструменты " + MAX_STEPS + " раз подряд. Напишите «продолжай»,"
+                        + " чтобы она продолжила, или уточните задачу._");
                 return answer.toString().strip();
             }
             List<ProtocolAdapter.ToolResult> results = new ArrayList<>();

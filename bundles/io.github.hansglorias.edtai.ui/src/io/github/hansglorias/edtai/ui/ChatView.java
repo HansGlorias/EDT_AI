@@ -40,6 +40,7 @@ import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.jface.text.TextUtilities;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
@@ -150,6 +151,8 @@ public class ChatView extends ViewPart {
     private String chatId;
 
     private Composite root;
+    private SashForm sash;
+    private ChatHistoryPanel historyPanel;
     private Composite top;
     private StackLayout topLayout;
     private StyledText history;
@@ -231,8 +234,31 @@ public class ChatView extends ViewPart {
         GridLayoutFactory.fillDefaults().spacing(0, 4).applyTo(parent);
         handCursor = parent.getDisplay().getSystemCursor(SWT.CURSOR_HAND);
 
-        top = new Composite(parent, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, true).applyTo(top);
+        sash = new SashForm(parent, SWT.HORIZONTAL);
+        GridDataFactory.fillDefaults().grab(true, true).applyTo(sash);
+        historyPanel = new ChatHistoryPanel(sash, new ChatHistoryPanel.Callbacks() {
+            @Override
+            public void open(String id) {
+                openChat(id);
+            }
+
+            @Override
+            public void delete(String id) {
+                if (id.equals(chatId)) {
+                    deleteChat();
+                } else {
+                    try {
+                        chats.delete(id);
+                    } catch (IOException e) {
+                        showNotice("Не удалось удалить чат: " + e.getMessage());
+                    }
+                    refreshHistoryPanel();
+                }
+            }
+        });
+        top = new Composite(sash, SWT.NONE);
+        sash.setWeights(new int[] { 30, 70 });
+        sash.setMaximizedControl(top);
         topLayout = new StackLayout();
         top.setLayout(topLayout);
         createHistory(top);
@@ -403,6 +429,15 @@ public class ChatView extends ViewPart {
         ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
         IToolBarManager toolBar = getViewSite().getActionBars().getToolBarManager();
 
+        Action history = new Action("История чатов", IAction.AS_CHECK_BOX) {
+            @Override
+            public void run() {
+                showHistoryPanel(isChecked());
+            }
+        };
+        history.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_OBJ_FOLDER));
+        toolBar.add(history);
+
         Action newChat = new Action("Новый чат") {
             @Override
             public void run() {
@@ -433,13 +468,13 @@ public class ChatView extends ViewPart {
         toolBar.add(preferencesAction);
 
         IMenuManager menu = getViewSite().getActionBars().getMenuManager();
-        MenuManager history = new MenuManager("История чатов");
-        history.setRemoveAllWhenShown(true);
-        history.addMenuListener(this::fillHistory);
+        MenuManager historyMenu = new MenuManager("История чатов");
+        historyMenu.setRemoveAllWhenShown(true);
+        historyMenu.addMenuListener(this::fillHistory);
         // Пустышка, чтобы подменю показывалось до первого открытия.
-        history.add(new Action("…") {
+        historyMenu.add(new Action("…") {
         });
-        menu.add(history);
+        menu.add(historyMenu);
         menu.add(new Action("Удалить этот чат") {
             @Override
             public void run() {
@@ -479,6 +514,7 @@ public class ChatView extends ViewPart {
         } catch (IOException e) {
             Platform.getLog(getClass()).warn("Не удалось удалить старые диалоги EDT AI", e);
         }
+        refreshHistoryPanel();
     }
 
     /** Открывает сохранённый диалог. */
@@ -488,6 +524,7 @@ public class ChatView extends ViewPart {
         }
         if (session.isBusy()) {
             showNotice("Дождитесь ответа или остановите его, чтобы открыть другой чат");
+            refreshHistoryPanel();
             return;
         }
         saveIfChanged();
@@ -498,6 +535,7 @@ public class ChatView extends ViewPart {
             saved = messages;
             allowedInChat.clear();
             chats.setCurrent(id);
+            refreshHistoryPanel();
         } catch (IOException e) {
             showNotice("Не удалось открыть чат: " + e.getMessage());
         }
@@ -516,6 +554,25 @@ public class ChatView extends ViewPart {
         session.clear();
         allowedInChat.clear();
         chatId = chats.newId();
+        refreshHistoryPanel();
+    }
+
+    /** Показывает или прячет боковую панель со списком чатов. */
+    void showHistoryPanel(boolean shown) {
+        sash.setMaximizedControl(shown ? null : top);
+        refreshHistoryPanel();
+    }
+
+    /** Обновляет список чатов на панели, если она открыта. */
+    private void refreshHistoryPanel() {
+        if (historyPanel == null || sash.isDisposed() || sash.getMaximizedControl() != null) {
+            return;
+        }
+        try {
+            historyPanel.show(chats.list(), chatId);
+        } catch (IOException e) {
+            historyPanel.show(List.of(), chatId);
+        }
     }
 
     /** Пункты меню «История чатов»: последние диалоги, открытый отмечен. */
@@ -925,6 +982,7 @@ public class ChatView extends ViewPart {
             Platform.getLog(getClass()).warn("Не удалось сохранить диалог EDT AI в " + file.path(), e);
         }
         saved = messages;
+        refreshHistoryPanel();
     }
 
     // ---- состояние ----
@@ -1078,6 +1136,10 @@ public class ChatView extends ViewPart {
 
     ChatStore chats() {
         return chats;
+    }
+
+    ChatHistoryPanel historyPanel() {
+        return historyPanel;
     }
 
     void openChatForTest(String id) {
