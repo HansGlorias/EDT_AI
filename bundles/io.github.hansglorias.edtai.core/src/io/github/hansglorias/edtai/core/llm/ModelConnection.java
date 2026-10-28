@@ -56,6 +56,15 @@ public record ModelConnection(
                 settings.maxTokens(), settings.systemPrompt(), TrustSettings.from(settings), settings.modelWindow());
     }
 
+    /** Системный промпт с добавкой в конце; пустая добавка — без изменений. */
+    public ModelConnection withSystemPromptPart(String part) {
+        if (part == null || part.isBlank()) {
+            return this;
+        }
+        String prompt = systemPrompt.isEmpty() ? part.strip() : systemPrompt + "\n\n" + part.strip();
+        return new ModelConnection(protocol, baseUrl, model, token, maxTokens, prompt, trust, window);
+    }
+
     public ModelConnection withMaxTokens(int value) {
         return new ModelConnection(protocol, baseUrl, model, token, value, systemPrompt, trust, window);
     }

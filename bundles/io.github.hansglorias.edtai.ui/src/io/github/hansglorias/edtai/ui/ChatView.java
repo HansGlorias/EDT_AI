@@ -76,9 +76,11 @@ import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
+import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolApprover.Decision;
+import io.github.hansglorias.edtai.core.tools.ToolSource;
 
 /**
  * Вид «AI Chat»: лента диалога, панель прикреплённых фрагментов кода и
@@ -107,7 +109,17 @@ public class ChatView extends ViewPart {
     /** Инструменты, которые пользователь разрешил «в этом чате»; сбрасываются «Новым чатом». */
     private final Set<String> allowedInChat = ConcurrentHashMap.newKeySet();
     private final ChatSession session = new ChatSession(
-            ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), this::tools, this::approve));
+            ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), new ToolSource() {
+                @Override
+                public List<Tool> tools(Consumer<ToolUse> problems) {
+                    return ChatView.this.tools(problems);
+                }
+
+                @Override
+                public String brief() {
+                    return ProjectBrief.describe(EclipseWorkspaceFiles.current());
+                }
+            }, this::approve));
     private final ChatHistoryFile historyFile = new ChatHistoryFile(
             Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath().resolve(HISTORY_FILE));
 

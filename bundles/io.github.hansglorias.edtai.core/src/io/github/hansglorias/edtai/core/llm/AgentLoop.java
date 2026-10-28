@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.llm;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
@@ -10,7 +11,9 @@ import java.util.function.Consumer;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
+import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.json.JsonException;
+import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolApprover;
 import io.github.hansglorias.edtai.core.tools.ToolException;
@@ -29,11 +32,14 @@ final class AgentLoop {
     /** Вместо результата старого шага, когда запрос не помещается в окно модели. */
     static final String OMITTED = "(результат не передан: не помещается в окно модели; если он нужен — вызови инструмент снова)";
 
+    static final String REPEATED = "Этот вызов с теми же аргументами уже был в этом ответе, его результат выше. Не повторяй его:"
+            + " используй полученный результат или вызови с другими аргументами.";
+
     static final String TOOLS_UNSUPPORTED = "Сервер не принимает инструменты — ответ без чтения проекта."
             + " Отключите «Инструменты» в настройках, чтобы не видеть это сообщение.";
 
     private final ModelClient client;
-    private final ModelConnection connection;
+    private final ModelConnection base;
     private final List<ChatMessage> history;
     private final Consumer<String> onText;
     private final Consumer<ToolUse> onTool;
@@ -57,6 +63,8 @@ final class AgentLoop {
     /** История и шаги, которые помещаются в окно модели. */
     private record Prepared(List<ChatMessage> history, List<Object> extra) {
     }
+    /** Вызовы этого ответа (имя и аргументы) → номер шага: повтор не выполняем. */
+    private final Map<String, Integer> seen = new HashMap<>();
     /** Сервер отклонил запрос с инструментами: больше их не передаём. */
     private boolean toolsRejected;
 
@@ -67,7 +75,7 @@ final class AgentLoop {
     AgentLoop(ModelClient client, ModelConnection connection, List<ChatMessage> history, ToolSource source, ToolApprover approver,
             Consumer<String> onText, Consumer<ToolUse> onTool) {
         this.client = client;
-        this.connection = connection;
+        this.base = connection;
         this.history = history;
         this.source = source;
         this.approver = approver;
@@ -115,7 +123,7 @@ final class AgentLoop {
             ModelReply reply;
             try {
                 Prepared request = prepare();
-                reply = await(client.request(connection, request.history(), request.extra(), tools, this::text));
+                reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
             } catch (ModelException e) {
                 if (!e.rejectsTools() || tools.isEmpty() || !steps.isEmpty()) {
                     throw e;
@@ -124,7 +132,7 @@ final class AgentLoop {
                 tools = List.of();
                 onTool.accept(new ToolUse("tools", "tools", "Инструменты", TOOLS_UNSUPPORTED, ToolUse.Status.FAILED));
                 Prepared request = prepare();
-                reply = await(client.request(connection, request.history(), request.extra(), tools, this::text));
+                reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
             }
             if (reply.calls().isEmpty()) {
                 return answer.toString().strip();
@@ -148,14 +156,17 @@ final class AgentLoop {
      * пометка {@link #OMITTED}, потом обрезается история.
      */
     private Prepared prepare() {
-        int budget = RequestBudget.chars(connection);
+        int budget = RequestBudget.chars(connection());
         int omitted = 0;
         List<Object> extra = extra(omitted);
-        while (omitted < steps.size() - 1 && RequestBudget.size(connection, history, extra, tools) > budget) {
+        while (omitted < steps.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > budget) {
             extra = extra(++omitted);
         }
+        // Результат пропущенного шага модели больше не виден: повторить такой вызов можно.
+        int visibleFrom = omitted;
+        seen.values().removeIf(step -> step < visibleFrom);
         List<Object> fixed = extra;
-        RequestBudget.Fitted fitted = RequestBudget.fit(history, part -> RequestBudget.size(connection, part, fixed, tools), budget);
+        RequestBudget.Fitted fitted = RequestBudget.fit(history, part -> RequestBudget.size(connection(), part, fixed, tools), budget);
         if (fitted.trimmed() && !fitted.notice().equals(trimmed)) {
             trimmed = fitted.notice();
             onTool.accept(trimmed);
@@ -178,6 +189,11 @@ final class AgentLoop {
         return extra;
     }
 
+    /** Подключение; если есть инструменты — с правилами работы с ними в системном промпте. */
+    private ModelConnection connection() {
+        return tools.isEmpty() ? base : base.withSystemPromptPart(ProjectBrief.TOOL_RULES);
+    }
+
     private ProtocolAdapter.ToolResult execute(ToolCall call) {
         Tool tool = tools.stream().filter(candidate -> candidate.name().equals(call.name())).findFirst().orElse(null);
         if (tool == null) {
@@ -194,6 +210,11 @@ final class AgentLoop {
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
         String summary = tool.summary(input);
+        String key = call.name() + " " + Json.write(input);
+        if (seen.containsKey(key)) {
+            onTool.accept(new ToolUse(call.id(), call.name(), summary, "повтор того же вызова, не выполнен", ToolUse.Status.FAILED));
+            return new ProtocolAdapter.ToolResult(call, REPEATED, true);
+        }
         if (tool.needsApproval()) {
             ToolUse waiting = new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.AWAITING);
             onTool.accept(waiting);
@@ -205,6 +226,7 @@ final class AgentLoop {
             }
         }
         onTool.accept(new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.RUNNING));
+        seen.put(key, steps.size());
         try {
             Tool.Result output = tool.call(input);
             onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE));

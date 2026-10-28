@@ -100,7 +100,7 @@ class AgentLoopTest {
         assertEquals("read_module", Json.stringAt(first, "tools", 0, "function", "name"));
         assertEquals("object", Json.stringAt(first, "tools", 0, "function", "parameters", "type"));
         Map<String, Object> second = Json.parseObject(server.requests().get(1).body());
-        List<Object> messages = Json.asList(second.get("messages"));
+        List<Object> messages = chat(second);
         assertEquals(3, messages.size());
         assertEquals("assistant", Json.stringAt(messages.get(1), "role"));
         assertEquals("Смотрю модуль.", Json.stringAt(messages.get(1), "content"));
@@ -159,7 +159,7 @@ class AgentLoopTest {
 
         assertEquals("Не вышло.", run(Protocol.OPENAI_COMPATIBLE));
 
-        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
+        List<Object> messages = chat(Json.parseObject(server.requests().get(1).body()));
         assertEquals("Ошибка: Модуля нет", Json.stringAt(messages.get(2), "content"));
         assertEquals("Ошибка: Инструмента «delete_all» нет", Json.stringAt(messages.get(3), "content"));
         assertTrue(Json.stringAt(messages.get(4), "content").startsWith("Ошибка: Аргументы вызова — не JSON-объект"));
@@ -213,7 +213,7 @@ class AgentLoopTest {
 
         assertEquals("Итог.", run(Protocol.OPENAI_COMPATIBLE));
         assertEquals("строки 1–1 из 1", uses.get(1).outcome());
-        Object assistant = Json.at(Json.parse(server.requests().get(1).body()), "messages", 1);
+        Object assistant = chat(Json.parseObject(server.requests().get(1).body())).get(1);
         assertFalse(Json.asObject(assistant).containsKey("content"), "пустой текст ассистента не передаём");
         assertEquals("{\"module\":\"Б\"}", Json.stringAt(assistant, "tool_calls", 0, "function", "arguments"));
     }
@@ -232,7 +232,7 @@ class AgentLoopTest {
         assertEquals(List.of("Читает модуль Общий {\"module\":\"Общий\"}"), asked);
         assertEquals(List.of(ToolUse.Status.AWAITING, ToolUse.Status.FAILED), uses.stream().map(ToolUse::status).toList());
         assertEquals("отклонено", uses.get(1).outcome());
-        String result = Json.stringAt(Json.parse(server.requests().get(1).body()), "messages", 2, "content");
+        String result = Json.stringAt(chat(Json.parseObject(server.requests().get(1).body())).get(2), "content");
         assertTrue(result.startsWith("Ошибка: Пользователь отклонил вызов"), result);
     }
 
@@ -307,6 +307,26 @@ class AgentLoopTest {
     }
 
     @Test
+    void repeatedCallIsNotRunAndRulesAreInSystemPrompt() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> {
+            int results = request.body().split("\"role\":\"tool\"", -1).length - 1;
+            response.sse(List.of(results < 2
+                    ? toolCalls("{\"index\":0,\"id\":\"call_" + results + "\",\"function\":{\"name\":\"read_module\","
+                            + "\"arguments\":\"{\\\"module\\\":\\\"Общий\\\"}\"}}")
+                    : "data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+        });
+
+        assertEquals("Готово.", run(Protocol.OPENAI_COMPATIBLE));
+
+        assertEquals(new ToolUse("call_1", "read_module", "Читает модуль Общий", "повтор того же вызова, не выполнен",
+                ToolUse.Status.FAILED), uses.get(uses.size() - 1));
+        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(2).body()).get("messages"));
+        assertEquals("Ошибка: " + AgentLoop.REPEATED, Json.stringAt(messages.get(messages.size() - 1), "content"));
+        assertEquals("system", Json.stringAt(messages.get(0), "role"));
+        assertTrue(Json.stringAt(messages.get(0), "content").contains("Правила работы с инструментами"));
+    }
+
+    @Test
     void oldToolResultsAreOmittedWhenWindowIsSmall() throws Exception {
         Tool big = new Tool() {
             @Override
@@ -337,7 +357,7 @@ class AgentLoopTest {
         server = FakeModelServer.http().handler((request, response) -> {
             int results = request.body().split("\"role\":\"tool\"", -1).length - 1;
             response.sse(List.of(results < 2
-                    ? toolCalls("{\"index\":0,\"id\":\"call_" + results + "\",\"function\":{\"name\":\"big\",\"arguments\":\"{}\"}}")
+                    ? toolCalls("{\"index\":0,\"id\":\"call_" + results + "\",\"function\":{\"name\":\"big\",\"arguments\":\"{\\\"part\\\":" + results + "}\"}}")
                     : "data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
         });
         // Окно 1000 токенов — бюджет 2250 символов: два результата по 1500 не помещаются.
@@ -348,7 +368,7 @@ class AgentLoopTest {
 
         assertEquals("Готово.", provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS));
 
-        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(2).body()).get("messages"));
+        List<Object> messages = chat(Json.parseObject(server.requests().get(2).body()));
         assertEquals(AgentLoop.OMITTED, Json.stringAt(messages.get(2), "content"));
         assertEquals("я".repeat(1500), Json.stringAt(messages.get(4), "content"));
     }
@@ -367,6 +387,11 @@ class AgentLoopTest {
     private ModelConnection connectionOpenAi() {
         return new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
                 new TrustSettings(false, Optional.empty()));
+    }
+
+    /** Сообщения запроса OpenAI без системного: там правила работы с инструментами. */
+    private static List<Object> chat(Map<String, Object> body) {
+        return Json.asList(body.get("messages")).stream().filter(message -> !"system".equals(Json.stringAt(message, "role"))).toList();
     }
 
     private static String toolCalls(String... calls) {

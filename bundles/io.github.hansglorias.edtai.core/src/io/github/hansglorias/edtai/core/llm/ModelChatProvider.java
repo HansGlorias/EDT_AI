@@ -92,14 +92,16 @@ public final class ModelChatProvider implements ChatProvider {
         } catch (Exception e) {
             return CompletableFuture.failedFuture(new ModelException("Не удалось прочитать настройки EDT AI: " + e.getMessage(), e));
         }
+        connection = withBrief(connection);
         String server = connection.baseUrl() + "|" + connection.model();
         if (tools == ToolSource.NONE || withoutTools.contains(server)) {
+            ModelConnection plain = connection;
             RequestBudget.Fitted fitted = RequestBudget.fit(history,
-                    part -> RequestBudget.size(connection, part, List.of(), List.of()), RequestBudget.chars(connection));
+                    part -> RequestBudget.size(plain, part, List.of(), List.of()), RequestBudget.chars(plain));
             if (fitted.trimmed()) {
                 onTool.accept(fitted.notice());
             }
-            return client.stream(connection, fitted.history(), onText);
+            return client.stream(plain, fitted.history(), onText);
         }
         AgentLoop loop = new AgentLoop(client, connection, history, tools, approver, onText, onTool);
         CompletableFuture<String> reply = loop.start();
@@ -109,5 +111,15 @@ public final class ModelChatProvider implements ChatProvider {
             }
         });
         return reply;
+    }
+
+    /** Сведения о проекте в конце системного промпта. */
+    private ModelConnection withBrief(ModelConnection connection) {
+        try {
+            return connection.withSystemPromptPart(tools.brief());
+        } catch (RuntimeException e) {
+            // Сведения о проекте — подсказка модели; без них ответ всё равно возможен.
+            return connection;
+        }
     }
 }

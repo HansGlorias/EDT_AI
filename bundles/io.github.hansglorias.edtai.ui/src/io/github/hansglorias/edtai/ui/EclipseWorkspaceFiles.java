@@ -12,6 +12,7 @@ import org.eclipse.core.filebuffers.LocationKind;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
@@ -28,22 +29,42 @@ import io.github.hansglorias.edtai.core.tools.WorkspaceFiles;
 final class EclipseWorkspaceFiles implements WorkspaceFiles {
 
     private final String preferred;
+    private final String activeFile;
+    private final int activeLine;
 
-    private EclipseWorkspaceFiles(String preferred) {
+    private EclipseWorkspaceFiles(String preferred, String activeFile, int activeLine) {
         this.preferred = preferred;
+        this.activeFile = activeFile;
+        this.activeLine = activeLine;
     }
 
-    /** Предпочтительный проект — проект файла в активном редакторе. Можно вызывать из любого потока. */
+    /**
+     * Предпочтительный проект — проект файла в активном редакторе; там же
+     * файл и строка курсора. Можно вызывать из любого потока.
+     */
     static EclipseWorkspaceFiles current() {
-        AtomicReference<String> project = new AtomicReference<>();
+        AtomicReference<EclipseWorkspaceFiles> result = new AtomicReference<>(new EclipseWorkspaceFiles(null, null, 0));
         inUi(() -> {
             IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
             IWorkbenchPage page = window == null ? null : window.getActivePage();
             ITextEditor editor = page == null ? null : EditorAccess.textEditor(page.getActiveEditor());
             IFile file = editor == null ? null : EditorAccess.file(editor);
-            project.set(file == null ? null : file.getProject().getName());
+            if (file != null) {
+                int line = editor.getSelectionProvider().getSelection() instanceof ITextSelection selection ? selection.getStartLine() + 1 : 0;
+                result.set(new EclipseWorkspaceFiles(file.getProject().getName(), file.getProjectRelativePath().toString(), line));
+            }
         });
-        return new EclipseWorkspaceFiles(project.get());
+        return result.get();
+    }
+
+    @Override
+    public Optional<String> activeFile() {
+        return Optional.ofNullable(activeFile);
+    }
+
+    @Override
+    public int activeLine() {
+        return activeLine;
     }
 
     @Override
