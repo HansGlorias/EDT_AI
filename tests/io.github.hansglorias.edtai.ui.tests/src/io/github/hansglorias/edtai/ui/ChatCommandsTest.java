@@ -4,11 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.junit.jupiter.api.Test;
 
+import io.github.hansglorias.edtai.core.chat.ChatMessage;
+import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 /** Команды через «/» и строка состояния: что делает модель, токены. */
@@ -61,6 +64,25 @@ class ChatCommandsTest extends AbstractChatTest {
         settle();
 
         assertEquals("test-model · контекст 1,3k из 32k · ответ ↑1,2k ↓56", view.status().getText());
+    }
+
+    @Test
+    void openedChatIsScrolledToEnd() throws Exception {
+        answering(List.of("Ок."));
+        ChatView view = showView();
+        String id = view.chats().newId();
+        List<ChatMessage> messages = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            messages.add(ChatMessage.of(ChatRole.USER, "Вопрос " + i));
+            messages.add(ChatMessage.of(ChatRole.ASSISTANT, "Ответ " + i + "\n\nстрока\nстрока\nстрока"));
+        }
+        view.chats().file(id).save(messages);
+
+        view.openChatForTest(id);
+
+        waitUntil(() -> view.history().getTopPixel() > 0
+                && view.history().getLinePixel(view.history().getLineCount() - 1) < view.history().getClientArea().height,
+                () -> "лента не внизу: " + view.history().getTopPixel());
     }
 
     private static boolean autoApprove() {

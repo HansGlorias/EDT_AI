@@ -38,6 +38,7 @@ import org.eclipse.jgit.treewalk.AbstractTreeIterator;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.eclipse.jgit.treewalk.EmptyTreeIterator;
 import org.eclipse.jgit.treewalk.FileTreeIterator;
+import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.treewalk.filter.PathFilter;
 import org.eclipse.jgit.treewalk.filter.TreeFilter;
 
@@ -363,6 +364,41 @@ public final class GitTools {
     private Opened open(Map<String, Object> input) throws ToolException {
         String project = ProjectTools.project(files, input);
         Path root = files.root(project).orElseThrow(() -> new ToolException("Каталог проекта «" + project + "» не найден"));
+        return open(project, root);
+    }
+
+    /**
+     * Текст файла проекта в последнем коммите — «до» для правок, сделанных
+     * мимо плагина (инструментами MCP). Переводы строк — как в {@code current}.
+     *
+     * @param path    путь относительно проекта
+     * @param current текст файла сейчас; {@code null} — файла нет
+     * @return {@code null} — в последнем коммите файла нет
+     * @throws ToolException проект не в git
+     */
+    public static String headText(String project, Path root, String path, String current) throws ToolException {
+        try (Opened opened = open(project, root)) {
+            Repository repository = opened.repository();
+            ObjectId tree = repository.resolve("HEAD^{tree}");
+            if (tree == null) {
+                return null;
+            }
+            try (TreeWalk walk = TreeWalk.forPath(repository, opened.repositoryPath(path), tree)) {
+                if (walk == null) {
+                    return null;
+                }
+                String text = new String(repository.open(walk.getObjectId(0)).getBytes(), StandardCharsets.UTF_8);
+                if (text.startsWith("\uFEFF")) {
+                    text = text.substring(1);
+                }
+                return current != null && current.contains("\r\n") && !text.contains("\r\n") ? text.replace("\n", "\r\n") : text;
+            }
+        } catch (IOException e) {
+            throw new ToolException("Не удалось прочитать " + path + " из git: " + e.getMessage());
+        }
+    }
+
+    private static Opened open(String project, Path root) throws ToolException {
         FileRepositoryBuilder builder = new FileRepositoryBuilder().readEnvironment().findGitDir(root.toFile());
         if (builder.getGitDir() == null) {
             throw new ToolException("Проект «" + project + "» не в git-репозитории");

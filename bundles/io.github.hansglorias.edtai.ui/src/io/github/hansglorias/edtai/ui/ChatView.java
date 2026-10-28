@@ -1,6 +1,8 @@
 package io.github.hansglorias.edtai.ui;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.net.URL;
 import java.nio.file.Files;
@@ -22,11 +24,19 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.eclipse.compare.CompareUI;
+import org.eclipse.core.resources.IContainer;
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceChangeEvent;
+import org.eclipse.core.resources.IResourceChangeListener;
+import org.eclipse.core.resources.IResourceDelta;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.IPreferenceChangeListener;
@@ -176,6 +186,19 @@ public class ChatView extends ViewPart {
     private final List<EditTools.Change> pendingChanges = new CopyOnWriteArrayList<>();
     /** Правки модели по ответам (до перезапуска EDT): ключ — {@link #changeKey}. */
     private final Map<String, List<EditTools.Change>> changes = new HashMap<>();
+    /**
+     * Файлы {@code src/}, изменённые на диске за идущий ответ: так видно правки
+     * инструментов MCP (EDT-MCP пишет метаданные и модули мимо плагина).
+     */
+    private final Set<IFile> touched = ConcurrentHashMap.newKeySet();
+    /** Такие файлы по ответам: ключ — {@link #changeKey}. */
+    private final Map<String, Set<IFile>> touchedByAnswer = new ConcurrentHashMap<>();
+    /** EDT может дописать файлы чуть позже конца ответа: их — к этому ответу до {@link #lateUntil}. */
+    private volatile String lateKey;
+    private volatile long lateUntil;
+    private static final long LATE_CHANGES_MS = 10_000;
+    /** Открыт сохранённый чат — прокрутить ленту в конец. */
+    private boolean scrollToEnd;
     private SashForm sash;
     /** Видна ли панель чатов и как поделена ширина: запоминаются между запусками (состояние вида). */
     private boolean historyShown;
@@ -246,6 +269,10 @@ public class ChatView extends ViewPart {
 
         @Override
         public void busyChanged(boolean busy) {
+            if (busy) {
+                touched.clear();
+                lateKey = null;
+            }
             scheduleRefresh();
             inUi(() -> markBusy(busy));
             if (!busy) {
@@ -256,6 +283,45 @@ public class ChatView extends ViewPart {
             }
         }
     };
+
+    private final IResourceChangeListener resourceListener = event -> {
+        boolean busy = session.isBusy();
+        String late = lateKey;
+        if (event.getDelta() == null || !busy && (late == null || System.currentTimeMillis() > lateUntil)) {
+            return;
+        }
+        List<IFile> files = new ArrayList<>();
+        try {
+            event.getDelta().accept(delta -> {
+                IResource resource = delta.getResource();
+                if (resource instanceof IFile file) {
+                    boolean content = delta.getKind() != IResourceDelta.CHANGED
+                            || (delta.getFlags() & (IResourceDelta.CONTENT | IResourceDelta.REPLACED)) != 0;
+                    if (content && isSource(file)) {
+                        files.add(file);
+                    }
+                    return false;
+                }
+                return !(resource instanceof IFolder folder) || !folder.isDerived() && !folder.getName().startsWith(".");
+            });
+        } catch (CoreException e) {
+            return;
+        }
+        if (files.isEmpty()) {
+            return;
+        }
+        if (busy) {
+            touched.addAll(files);
+        } else {
+            touchedByAnswer.computeIfAbsent(late, key -> ConcurrentHashMap.newKeySet()).addAll(files);
+            scheduleRefresh();
+        }
+    };
+
+    /** Исходники конфигурации: служебное (сборка, настройки) в дифф не берём. */
+    private static boolean isSource(IFile file) {
+        return file.getProjectRelativePath().toString().startsWith("src/") && !file.isDerived() && !file.isTeamPrivateMember();
+    }
 
     /** Настройки для подсказок и строки состояния; запросы к модели читают их сами. */
     private AiSettings settings = AiSettings.defaults();
@@ -327,6 +393,7 @@ public class ChatView extends ViewPart {
 
         session.addListener(chatListener);
         preferences().addPreferenceChangeListener(preferenceListener);
+        ResourcesPlugin.getWorkspace().addResourceChangeListener(resourceListener, IResourceChangeEvent.POST_CHANGE);
         settings = SettingsStore.workspace().load();
         contextBar.setLimit(settings.contextLimit());
         window = session.provider().window();
@@ -612,6 +679,7 @@ public class ChatView extends ViewPart {
             session.restore(messages);
             chatId = id;
             saved = messages;
+            scrollToEnd = !messages.isEmpty();
             allowedInChat.clear();
             chats.setCurrent(id);
             refreshHistoryPanel();
@@ -688,40 +756,93 @@ public class ChatView extends ViewPart {
 
     /** Ответ закончился: его правки — к последнему ответу ассистента. */
     private void attachChanges() {
-        if (pendingChanges.isEmpty()) {
+        if (pendingChanges.isEmpty() && touched.isEmpty()) {
             return;
         }
         List<ChatMessage> messages = session.messages();
         for (int i = messages.size() - 1; i >= 0; i--) {
             if (messages.get(i).role() == ChatRole.ASSISTANT) {
-                changes.computeIfAbsent(changeKey(messages.get(i)), key -> new ArrayList<>()).addAll(pendingChanges);
+                String key = changeKey(messages.get(i));
+                if (!pendingChanges.isEmpty()) {
+                    changes.computeIfAbsent(key, k -> new ArrayList<>()).addAll(pendingChanges);
+                }
+                if (!touched.isEmpty()) {
+                    touchedByAnswer.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).addAll(touched);
+                }
+                lateKey = key;
+                lateUntil = System.currentTimeMillis() + LATE_CHANGES_MS;
                 break;
             }
         }
         pendingChanges.clear();
+        touched.clear();
         scheduleRefresh();
     }
 
-    /** Файлы, изменённые в ответе: путь → [до первой правки, после последней]. */
-    private Map<IFile, String[]> changedFiles(ChatMessage answer) {
-        Map<IFile, String[]> files = new LinkedHashMap<>();
+    /**
+     * Файлы, изменённые в ответе: правки {@code edit_module} — до первой и
+     * после последней; файлы, изменённые мимо плагина (MCP), — с последним
+     * коммитом вместо «до».
+     */
+    private Map<IFile, EditTools.Change> changedFiles(ChatMessage answer) {
+        Map<IFile, EditTools.Change> files = new LinkedHashMap<>();
         for (EditTools.Change change : changes.getOrDefault(changeKey(answer), List.of())) {
             IFile file = ResourcesPlugin.getWorkspace().getRoot().getProject(change.project()).getFile(change.path());
-            files.computeIfAbsent(file, key -> new String[] { change.before(), change.after() })[1] = change.after();
+            EditTools.Change first = files.get(file);
+            files.put(file, first == null ? change
+                    : new EditTools.Change(change.project(), change.path(), first.before(), change.after()));
+        }
+        int notInGit = 0;
+        for (IFile file : touchedByAnswer.getOrDefault(changeKey(answer), Set.of())) {
+            if (files.containsKey(file)) {
+                continue;
+            }
+            String project = file.getProject().getName();
+            String path = file.getProjectRelativePath().toString();
+            try {
+                String now = currentText(file);
+                String head = GitTools.headText(project, file.getProject().getLocation().toFile().toPath(), path, now);
+                if (!Objects.equals(head, now)) {
+                    files.put(file, new EditTools.Change(project, path, head, now, true));
+                }
+            } catch (ToolException | LinkageError | RuntimeException e) {
+                notInGit++;
+            }
+        }
+        if (notInGit > 0) {
+            showNotice("Правки инструментов MCP не показать: файлов " + notInGit + " вне git-репозитория");
         }
         return files;
     }
 
+    /** Текст файла сейчас (с несохранённым в редакторе); {@code null} — файла нет. */
+    private static String currentText(IFile file) {
+        if (!file.exists()) {
+            return null;
+        }
+        try {
+            return EclipseWorkspaceFiles.text(file);
+        } catch (Exception e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        }
+    }
+
     void showChanges(ChatMessage answer) {
-        for (Map.Entry<IFile, String[]> entry : changedFiles(answer).entrySet()) {
+        Map<IFile, EditTools.Change> files = changedFiles(answer);
+        if (files.isEmpty()) {
+            showNotice("Изменений относительно последнего коммита нет");
+        }
+        for (Map.Entry<IFile, EditTools.Change> entry : files.entrySet()) {
             String now;
             try {
-                now = EclipseWorkspaceFiles.text(entry.getKey());
-            } catch (Exception e) {
+                now = Objects.requireNonNullElse(currentText(entry.getKey()), "");
+            } catch (RuntimeException e) {
                 showNotice("Не удалось прочитать " + entry.getKey().getName() + ": " + e.getMessage());
                 continue;
             }
-            CompareUI.openCompareEditor(new ModelChangesCompare(entry.getKey(), now, entry.getValue()[0]));
+            EditTools.Change change = entry.getValue();
+            CompareUI.openCompareEditor(new ModelChangesCompare(entry.getKey(), now, Objects.requireNonNullElse(change.before(), ""),
+                    change.sinceCommit()));
         }
     }
 
@@ -730,41 +851,67 @@ public class ChatView extends ViewPart {
      * меняли, — спрашивает: откат затрёт эти изменения.
      */
     void revertChanges(ChatMessage answer) {
-        Map<IFile, String[]> files = changedFiles(answer);
+        Map<IFile, EditTools.Change> files = changedFiles(answer);
         boolean changedSince = false;
-        for (Map.Entry<IFile, String[]> entry : files.entrySet()) {
-            try {
-                changedSince |= !EclipseWorkspaceFiles.text(entry.getKey()).equals(entry.getValue()[1]);
-            } catch (Exception e) {
-                changedSince = true;
+        long sinceCommit = files.values().stream().filter(EditTools.Change::sinceCommit).count();
+        for (Map.Entry<IFile, EditTools.Change> entry : files.entrySet()) {
+            if (!entry.getValue().sinceCommit()) {
+                try {
+                    changedSince |= !Objects.equals(currentText(entry.getKey()), entry.getValue().after());
+                } catch (RuntimeException e) {
+                    changedSince = true;
+                }
             }
         }
-        if (changedSince && !confirmRevert()) {
+        List<String> warnings = new ArrayList<>();
+        if (sinceCommit > 0) {
+            warnings.add("Файлы, которые меняли инструменты MCP (" + sinceCommit + "), вернутся к последнему коммиту: если в них"
+                    + " были ваши незакоммиченные правки, они тоже пропадут.");
+        }
+        if (changedSince) {
+            warnings.add("После правок модели модули меняли: откат вернёт их к состоянию до ответа и затрёт эти изменения.");
+        }
+        if (!warnings.isEmpty() && !confirmRevert.test(String.join("\n\n", warnings) + "\n\nПродолжить?")) {
             return;
         }
+        lateKey = null; // откат сам меняет файлы — это не правки модели
         EclipseWorkspaceFiles workspace = EclipseWorkspaceFiles.current();
         int reverted = 0;
-        for (Map.Entry<IFile, String[]> entry : files.entrySet()) {
+        for (Map.Entry<IFile, EditTools.Change> entry : files.entrySet()) {
             IFile file = entry.getKey();
-            String before = entry.getValue()[0];
+            String before = entry.getValue().before();
             try {
-                workspace.edit(file.getProject().getName(), file.getProjectRelativePath().toString(),
-                        current -> new TextChange.Replacement(0, current.length(), before));
+                if (before == null) {
+                    if (file.exists()) {
+                        file.delete(true, null);
+                    }
+                } else if (!file.exists()) {
+                    createFolders(file.getParent());
+                    file.create(new ByteArrayInputStream(before.getBytes(StandardCharsets.UTF_8)), true, null);
+                } else {
+                    workspace.edit(file.getProject().getName(), file.getProjectRelativePath().toString(),
+                            current -> new TextChange.Replacement(0, current.length(), before));
+                }
                 reverted++;
-            } catch (ToolException e) {
+            } catch (ToolException | CoreException e) {
                 showNotice("Не удалось откатить " + file.getName() + ": " + e.getMessage());
             }
         }
         changes.remove(changeKey(answer));
+        touchedByAnswer.remove(changeKey(answer));
         refresh();
         showNotice("Правки модели откатены, файлов: " + reverted);
     }
 
-    /** Для тестов можно подменить. */
-    boolean confirmRevert() {
-        return MessageDialog.openConfirm(getSite().getShell(), "Откатить правки",
-                "После правок модели файлы меняли. Откат вернёт их к состоянию до ответа и затрёт эти изменения. Продолжить?");
+    private static void createFolders(IContainer container) throws CoreException {
+        if (container instanceof IFolder folder && !folder.exists()) {
+            createFolders(folder.getParent());
+            folder.create(true, true, null);
+        }
     }
+
+    /** Вопрос перед откатом; тесты подменяют. */
+    Predicate<String> confirmRevert = message -> MessageDialog.openConfirm(getSite().getShell(), "Откатить правки", message);
 
     /** Пункты меню «История чатов»: последние диалоги, открытый отмечен. */
     private void fillHistory(IMenuManager menu) {
@@ -1092,7 +1239,8 @@ public class ChatView extends ViewPart {
         List<Set<MessageRenderer.Action>> actions = new ArrayList<>();
         for (int i = 0; i < messages.size(); i++) {
             actions.add(actions(messages, i, idle));
-            if (idle && messages.get(i).role() == ChatRole.ASSISTANT && changes.containsKey(changeKey(messages.get(i)))) {
+            String key = changeKey(messages.get(i));
+            if (idle && messages.get(i).role() == ChatRole.ASSISTANT && (changes.containsKey(key) || touchedByAnswer.containsKey(key))) {
                 actions.get(i).add(MessageRenderer.Action.CHANGES);
                 actions.get(i).add(MessageRenderer.Action.REVERT);
             }
@@ -1118,8 +1266,17 @@ public class ChatView extends ViewPart {
             history.replaceTextRange(start, history.getCharCount() - start, text.toString());
             history.replaceStyleRanges(start, text.length(), styles.toArray(StyleRange[]::new));
             history.redraw();
-            if (atBottom) {
+            if (atBottom || scrollToEnd) {
                 history.setTopPixel(Integer.MAX_VALUE);
+            }
+            if (scrollToEnd) {
+                scrollToEnd = false;
+                // При первом показе вида размеры ленты ещё не известны: прокручиваем и после компоновки.
+                history.getDisplay().asyncExec(() -> {
+                    if (!history.isDisposed()) {
+                        history.setTopPixel(Integer.MAX_VALUE);
+                    }
+                });
             }
         }
         if (idle && !messages.equals(saved)) {
@@ -1189,6 +1346,7 @@ public class ChatView extends ViewPart {
             List<ChatMessage> messages = chats.file(chatId).load();
             session.restore(messages);
             saved = messages;
+            scrollToEnd = !messages.isEmpty();
         } catch (IOException e) {
             chatId = chats.newId();
             Platform.getLog(getClass()).warn("Не удалось восстановить диалог EDT AI из " + chats.file(chatId).path().getParent(), e);
@@ -1423,6 +1581,7 @@ public class ChatView extends ViewPart {
         background("EDT AI: закрытие MCP", mcp::close);
         saveIfChanged();
         preferences().removePreferenceChangeListener(preferenceListener);
+        ResourcesPlugin.getWorkspace().removeResourceChangeListener(resourceListener);
         super.dispose();
     }
 
