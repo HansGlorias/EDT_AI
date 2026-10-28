@@ -127,7 +127,7 @@ public final class ModelChatProvider implements ChatProvider {
             CompletableFuture<String> text = request.thenApply(reply -> {
                 onUsage.accept(reply.usage() != null ? reply.usage()
                         : AgentLoop.estimate(RequestBudget.size(plain, fitted.history(), List.of(), List.of()), reply));
-                return reply.text();
+                return ChatMessage.stripTrace(reply.text());
             });
             text.whenComplete((answer, error) -> {
                 if (text.isCancelled()) {

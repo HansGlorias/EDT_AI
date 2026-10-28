@@ -56,6 +56,30 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         return new ChatMessage(role, text, time, status, context, newTools);
     }
 
+    /** Начало следа инструментов в ответе, каким его видит модель. */
+    public static final String TRACE = "[Вызванные инструменты: ";
+
+    /**
+     * Ответ без следа инструментов в начале: модель видит его у прошлых
+     * ответов и иногда начинает писать сама.
+     */
+    public static String stripTrace(String answer) {
+        String text = answer.stripLeading();
+        if (!text.startsWith(TRACE)) {
+            return answer;
+        }
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '[') {
+                depth++;
+            } else if (c == ']' && --depth == 0) {
+                return text.substring(i + 1).stripLeading();
+            }
+        }
+        return answer;
+    }
+
     /** Так модель видит краткое содержание: как сообщение пользователя. */
     public static final String SUMMARY_PREFIX = "[Краткое содержание предыдущей части диалога — сообщения выше уже не передаются]\n";
 
@@ -75,7 +99,7 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         }
         if (role == ChatRole.ASSISTANT) {
             String trace = tools.stream().filter(ToolUse::isCall).map(ToolUse::label).collect(Collectors.joining("; "));
-            return trace.isEmpty() ? text : "[Вызванные инструменты: " + trace + "]\n\n" + text;
+            return trace.isEmpty() ? text : TRACE + trace + "]\n\n" + text;
         }
         return ContextPrompt.compose(text, context);
     }
