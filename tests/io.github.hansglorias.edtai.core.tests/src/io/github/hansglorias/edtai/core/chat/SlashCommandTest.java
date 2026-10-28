@@ -24,6 +24,7 @@ class SlashCommandTest {
         assertEquals(List.of(SlashCommand.ATTACH, SlashCommand.AUTO), SlashCommand.matching("a"));
         assertEquals(List.of(SlashCommand.values()), SlashCommand.matching(""));
         assertEquals(List.of(), SlashCommand.matching("x"));
+        assertEquals(List.of(SlashCommand.READONLY), SlashCommand.matching("READ"));
     }
 
     @Test

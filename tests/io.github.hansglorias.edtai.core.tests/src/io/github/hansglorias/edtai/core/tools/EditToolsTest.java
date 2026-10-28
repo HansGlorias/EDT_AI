@@ -55,6 +55,7 @@ class EditToolsTest {
         assertEquals("﻿Процедура А()\r\n\tВозврат;\r\nКонецПроцедуры\r\n\r\nПроцедура Б()\r\n\tСообщить(\"Б\");\r\n\tВозврат;\r\n"
                 + "КонецПроцедуры\r\n", Files.readString(temp.resolve("Демо").resolve(MODULE), StandardCharsets.UTF_8));
         assertEquals("edit_module", edit.name());
+        assertTrue(edit.modifies(), "в режиме «только вопросы» не передаётся");
         assertEquals(List.of("module", "old_text", "new_text"), edit.inputSchema().get("required"));
     }
 

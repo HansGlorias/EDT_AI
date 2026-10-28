@@ -86,7 +86,8 @@ public final class McpClient implements AutoCloseable {
             for (Object tool : Json.asList(Json.at(result, "tools"))) {
                 String name = Json.stringAt(tool, "name");
                 if (name != null) {
-                    tools.add(new McpToolInfo(name, Json.stringAt(tool, "description"), Json.asObject(Json.at(tool, "inputSchema"))));
+                    tools.add(new McpToolInfo(name, Json.stringAt(tool, "description"), Json.asObject(Json.at(tool, "inputSchema")),
+                            Json.at(tool, "annotations", "readOnlyHint") instanceof Boolean readOnly ? readOnly : null));
                 }
             }
             cursor = Json.stringAt(result, "nextCursor");

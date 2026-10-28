@@ -164,6 +164,9 @@ public class ChatView extends ViewPart {
     /** Авторежим: инструменты MCP вызываются без вопроса, во всех чатах. Хранится в настройках рабочей области. */
     static final String AUTO_APPROVE = "autoApproveTools";
     static final String AUTO_MODE = "Авторежим";
+    /** Только вопросы: инструменты, меняющие проект, модели не передаются. Хранится в настройках рабочей области. */
+    static final String READ_ONLY = "readOnlyMode";
+    static final String READ_ONLY_MODE = "Только вопросы";
 
     /** Подключения к MCP-серверам из настроек. */
     private final McpHub mcp = new McpHub();
@@ -178,7 +181,8 @@ public class ChatView extends ViewPart {
 
                 @Override
                 public String brief() {
-                    return ProjectBrief.describe(EclipseWorkspaceFiles.current());
+                    String brief = ProjectBrief.describe(EclipseWorkspaceFiles.current());
+                    return isReadOnly() ? (brief + "\n\n" + ProjectBrief.READ_ONLY_RULES).strip() : brief;
                 }
             }, this::approve));
     private final Path stateLocation = Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath();
@@ -227,6 +231,7 @@ public class ChatView extends ViewPart {
     private Label status;
     private Cursor handCursor;
     private Action autoAction;
+    private Button readOnlyButton;
     private InputAssist inputAssist;
     /** Вкладка вида помечена как занятая (идёт ответ). */
     private boolean busyShown;
@@ -349,6 +354,9 @@ public class ChatView extends ViewPart {
         if (autoAction != null) {
             autoAction.setChecked(isAutoApprove());
         }
+        if (readOnlyButton != null && !readOnlyButton.isDisposed()) {
+            readOnlyButton.setSelection(isReadOnly());
+        }
         estimated = null;
         window = session.provider().window();
         updateStatus();
@@ -409,8 +417,17 @@ public class ChatView extends ViewPart {
         createContextBar(parent);
         createInput(parent);
 
-        status = new Label(parent, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, false).indent(4, 0).applyTo(status);
+        Composite statusRow = new Composite(parent, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(statusRow);
+        GridLayoutFactory.fillDefaults().numColumns(2).extendedMargins(4, 4, 0, 0).applyTo(statusRow);
+        status = new Label(statusRow, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).align(SWT.FILL, SWT.CENTER).applyTo(status);
+        readOnlyButton = new Button(statusRow, SWT.CHECK);
+        readOnlyButton.setText(READ_ONLY_MODE);
+        readOnlyButton.setToolTipText("Модель только отвечает: инструменты правки (edit_module, git_restore, меняющие"
+                + " инструменты MCP) ей не передаются. Команда /readonly");
+        readOnlyButton.setSelection(isReadOnly());
+        readOnlyButton.addListener(SWT.Selection, event -> setReadOnly(readOnlyButton.getSelection()));
 
         createActions();
 
@@ -1238,6 +1255,7 @@ public class ChatView extends ViewPart {
             case NEW -> newChat();
             case ATTACH -> attachModule();
             case AUTO -> setAutoApprove(!isAutoApprove());
+            case READONLY -> setReadOnly(!isReadOnly());
             default -> throw new IllegalArgumentException(command.text());
         }
     }
@@ -1253,6 +1271,19 @@ public class ChatView extends ViewPart {
         }
         showNotice(on ? "Авторежим включён: инструменты MCP вызываются без вопроса"
                 : "Авторежим выключен: перед вызовом инструмента MCP — вопрос");
+    }
+
+    private static boolean isReadOnly() {
+        return preferences().getBoolean(READ_ONLY, false);
+    }
+
+    void setReadOnly(boolean on) {
+        preferences().putBoolean(READ_ONLY, on);
+        if (readOnlyButton != null && !readOnlyButton.isDisposed()) {
+            readOnlyButton.setSelection(on);
+        }
+        showNotice(on ? "Только вопросы: модель не меняет проект, правки предлагает кодом в ответе"
+                : "Только вопросы выключено: модель может править модули");
     }
 
     /** Добавляет фрагмент на панель над полем ввода и ставит фокус в поле. */
@@ -1640,7 +1671,7 @@ public class ChatView extends ViewPart {
             status.setToolTipText(settings.isConfigured() ? settings.model() + " · " + settings.baseUrl() : null);
             // Строка и так во всю ширину: перекомпоновка всего вида раз в секунду (счётчик секунд) дёргала ленту.
             if (status.computeSize(SWT.DEFAULT, SWT.DEFAULT).y != status.getSize().y) {
-                status.getParent().layout(true);
+                root.layout(new Control[] { status });
             }
         }
     }
@@ -1727,6 +1758,9 @@ public class ChatView extends ViewPart {
         }
         Set<String> builtIn = tools.stream().map(Tool::name).collect(Collectors.toSet());
         tools.addAll(mcp.tools(current.mcpServers(), TrustSettings.from(current), builtIn, current::contextLimit, problems));
+        if (isReadOnly()) {
+            tools.removeIf(Tool::modifies);
+        }
         return tools;
     }
 
@@ -1828,6 +1862,10 @@ public class ChatView extends ViewPart {
 
     boolean isEmptyStateShown() {
         return topLayout.topControl == emptyState;
+    }
+
+    Button readOnlyButton() {
+        return readOnlyButton;
     }
 
     Label status() {

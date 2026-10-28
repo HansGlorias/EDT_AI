@@ -58,6 +58,11 @@ final class McpTool implements Tool {
         return true;
     }
 
+    @Override
+    public boolean modifies() {
+        return info.modifies();
+    }
+
     /** «MCP «EDT»: read_module_source (ОбщийМодуль.Х)» — значения первых двух аргументов. */
     @Override
     public String summary(Map<String, Object> input) {

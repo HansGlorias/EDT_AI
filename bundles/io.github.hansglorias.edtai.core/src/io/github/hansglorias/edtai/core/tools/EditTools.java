@@ -55,6 +55,11 @@ public final class EditTools {
     }
 
     private final class EditModule implements Tool {
+
+        @Override
+        public boolean modifies() {
+            return true;
+        }
         @Override
         public String name() {
             return "edit_module";
