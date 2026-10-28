@@ -17,7 +17,7 @@ import java.util.Objects;
  * @param useSystemTrustStore доверять корневым сертификатам ОС в дополнение к JDK
  * @param caCertificateFile   путь к дополнительному PEM-файлу с сертификатами CA, пусто — нет
  * @param mcpServers          MCP-серверы
- * @param modelWindow         окно модели в токенах: сколько помещается в запрос вместе с ответом, 0 — по умолчанию
+ * @param modelWindow         окно модели в токенах: сколько помещается в запрос вместе с ответом, 0 — по имени модели
  */
 public record AiSettings(
         Protocol protocol,
@@ -43,7 +43,9 @@ public record AiSettings(
     public static final int DEFAULT_CONTEXT_LIMIT = 40_000;
     public static final int MIN_CONTEXT_LIMIT = 1_000;
     public static final int MAX_CONTEXT_LIMIT = 2_000_000;
-    /** Окно по умолчанию: 32 тыс. токенов — типично для локальных моделей; у кого больше — укажет. */
+    /** Окно модели не задано: определяется по её имени. */
+    public static final int AUTO_MODEL_WINDOW = 0;
+    /** Окно незнакомой модели: 32 тыс. токенов — типично для локальных моделей. */
     public static final int DEFAULT_MODEL_WINDOW = 32_768;
     public static final int MIN_MODEL_WINDOW = 2_048;
     public static final int MAX_MODEL_WINDOW = 10_000_000;
@@ -60,14 +62,14 @@ public record AiSettings(
         contextLimit = contextLimit <= 0 ? DEFAULT_CONTEXT_LIMIT : contextLimit;
         caCertificateFile = Objects.requireNonNullElse(caCertificateFile, "").strip();
         mcpServers = List.copyOf(Objects.requireNonNullElse(mcpServers, List.of()));
-        modelWindow = modelWindow <= 0 ? DEFAULT_MODEL_WINDOW : modelWindow;
+        modelWindow = Math.max(AUTO_MODEL_WINDOW, modelWindow);
     }
 
     /** С окном модели по умолчанию. */
     public AiSettings(Protocol protocol, String baseUrl, String model, int maxTokens, String systemPrompt, int contextLimit,
             boolean toolsEnabled, boolean useSystemTrustStore, String caCertificateFile, List<McpServer> mcpServers) {
         this(protocol, baseUrl, model, maxTokens, systemPrompt, contextLimit, toolsEnabled, useSystemTrustStore, caCertificateFile,
-                mcpServers, DEFAULT_MODEL_WINDOW);
+                mcpServers, AUTO_MODEL_WINDOW);
     }
 
     public static AiSettings defaults() {

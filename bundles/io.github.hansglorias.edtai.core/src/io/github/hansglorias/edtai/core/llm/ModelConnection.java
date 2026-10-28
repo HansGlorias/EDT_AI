@@ -16,7 +16,7 @@ import io.github.hansglorias.edtai.core.tls.TrustSettings;
  * @param token     токен, пустая строка — без авторизации. Не попадает в {@link #toString()}
  * @param maxTokens    ограничение длины ответа, 0 — по умолчанию для протокола
  * @param systemPrompt системный промпт, пустая строка — без него
- * @param window       окно модели в токенах
+ * @param window       окно модели в токенах; 0 — по имени модели ({@link #guessWindow})
  */
 public record ModelConnection(
         Protocol protocol,
@@ -42,18 +42,38 @@ public record ModelConnection(
         maxTokens = Math.max(0, maxTokens);
         systemPrompt = Objects.requireNonNullElse(systemPrompt, "").strip();
         Objects.requireNonNull(trust, "trust");
-        window = window <= 0 ? AiSettings.DEFAULT_MODEL_WINDOW : window;
+        window = window <= 0 ? guessWindow(protocol, model) : window;
     }
 
     /** С окном модели по умолчанию. */
     public ModelConnection(Protocol protocol, String baseUrl, String model, String token, int maxTokens, String systemPrompt,
             TrustSettings trust) {
-        this(protocol, baseUrl, model, token, maxTokens, systemPrompt, trust, AiSettings.DEFAULT_MODEL_WINDOW);
+        this(protocol, baseUrl, model, token, maxTokens, systemPrompt, trust, AiSettings.AUTO_MODEL_WINDOW);
     }
 
     public static ModelConnection of(AiSettings settings, String token) {
         return new ModelConnection(settings.protocol(), settings.baseUrl(), settings.model(), token,
                 settings.maxTokens(), settings.systemPrompt(), TrustSettings.from(settings), settings.modelWindow());
+    }
+
+    /**
+     * Окно модели по имени, если в настройках не задано: у облачных моделей
+     * оно большое, у незнакомых (локальных) — {@link AiSettings#DEFAULT_MODEL_WINDOW}.
+     * Если угадали больше, чем есть, сервер ответит «не помещается», и
+     * запрос повторится с урезанной историей.
+     */
+    static int guessWindow(Protocol protocol, String model) {
+        String name = model == null ? "" : model.toLowerCase(Locale.ROOT);
+        if (protocol == Protocol.ANTHROPIC || name.contains("claude")) {
+            return 200_000;
+        }
+        if (name.matches(".*(gpt-4o|gpt-4\\.1|gpt-5|\\bo[134]\\b|o[134]-|gemini).*")) {
+            return 128_000;
+        }
+        if (name.contains("deepseek")) {
+            return 64_000;
+        }
+        return AiSettings.DEFAULT_MODEL_WINDOW;
     }
 
     /** Системный промпт с добавкой в конце; пустая добавка — без изменений. */

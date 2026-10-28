@@ -35,6 +35,9 @@ final class AgentLoop {
     static final String REPEATED = "Этот вызов с теми же аргументами уже был в этом ответе, его результат выше. Не повторяй его:"
             + " используй полученный результат или вызови с другими аргументами.";
 
+    /** Сколько раз урезать запрос после ответа «не помещается». */
+    static final int MAX_SHRINK = 3;
+
     static final String MCP_REJECTED = "сервер модели не принял их описания, ответ только со встроенными инструментами. ";
 
     static final String TOOLS_UNSUPPORTED = "Сервер не принимает инструменты — ответ без чтения проекта."
@@ -67,6 +70,8 @@ final class AgentLoop {
     }
     /** Вызовы этого ответа (имя и аргументы) → номер шага: повтор не выполняем. */
     private final Map<String, Integer> seen = new HashMap<>();
+    /** Сколько раз сервер ответил «не помещается»: бюджет делится на 2 в этой степени. */
+    private int shrink;
     /** Сервер отклонил запрос с инструментами: больше их не передаём. */
     private boolean toolsRejected;
 
@@ -145,7 +150,7 @@ final class AgentLoop {
      * пометка {@link #OMITTED}, потом обрезается история.
      */
     private Prepared prepare() {
-        int budget = RequestBudget.chars(connection());
+        int budget = RequestBudget.chars(connection()) >> shrink;
         int omitted = 0;
         List<Object> extra = extra(omitted);
         while (omitted < steps.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > budget) {
@@ -189,6 +194,11 @@ final class AgentLoop {
                 Prepared request = prepare();
                 return await(client.request(connection(), request.history(), request.extra(), tools, this::text));
             } catch (ModelException e) {
+                // Сервер говорит «не помещается» (окно угадали или задали больше настоящего): урезаем и повторяем.
+                if (e.contextOverflow() && shrink < MAX_SHRINK) {
+                    shrink++;
+                    continue;
+                }
                 if (!e.rejectsTools() || tools.isEmpty() || !steps.isEmpty()) {
                     throw e;
                 }

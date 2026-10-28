@@ -3,6 +3,11 @@ package io.github.hansglorias.edtai.ui;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -21,8 +26,11 @@ import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.IPreferenceChangeListener;
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.IAction;
 import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.IToolBarManager;
+import org.eclipse.jface.action.MenuManager;
+import org.eclipse.jface.action.Separator;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
 import org.eclipse.jface.resource.JFaceResources;
@@ -68,6 +76,7 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
+import io.github.hansglorias.edtai.core.chat.ChatStore;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.context.CodeInsertion;
 import io.github.hansglorias.edtai.core.context.ContextItem;
@@ -99,7 +108,11 @@ public class ChatView extends ViewPart {
     static final String SEND = "Отправить";
     static final String STOP = "Стоп";
     static final String RETRY = MessageRenderer.RETRY;
+    /** Единственный диалог до появления списка чатов: переносится в {@link #CHATS_DIRECTORY}. */
     static final String HISTORY_FILE = "chat.json";
+    static final String CHATS_DIRECTORY = "chats";
+    private static final int HISTORY_MENU = 30;
+    private static final DateTimeFormatter CHAT_TIME = DateTimeFormatter.ofPattern("dd.MM HH:mm");
     static final String REVIEW_CHANGES = "Ревью моих изменений";
     static final String COMMIT_MESSAGE = "Сообщение коммита";
     static final String REVIEW_PROMPT = "Сделай ревью моих незакоммиченных изменений: посмотри git_status и git_diff, при"
@@ -131,8 +144,10 @@ public class ChatView extends ViewPart {
                     return ProjectBrief.describe(EclipseWorkspaceFiles.current());
                 }
             }, this::approve));
-    private final ChatHistoryFile historyFile = new ChatHistoryFile(
-            Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath().resolve(HISTORY_FILE));
+    private final Path stateLocation = Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath();
+    /** Все диалоги; {@link #chatId} — открытый. */
+    private final ChatStore chats = new ChatStore(stateLocation.resolve(CHATS_DIRECTORY));
+    private String chatId;
 
     private Composite root;
     private Composite top;
@@ -418,6 +433,20 @@ public class ChatView extends ViewPart {
         toolBar.add(preferencesAction);
 
         IMenuManager menu = getViewSite().getActionBars().getMenuManager();
+        MenuManager history = new MenuManager("История чатов");
+        history.setRemoveAllWhenShown(true);
+        history.addMenuListener(this::fillHistory);
+        // Пустышка, чтобы подменю показывалось до первого открытия.
+        history.add(new Action("…") {
+        });
+        menu.add(history);
+        menu.add(new Action("Удалить этот чат") {
+            @Override
+            public void run() {
+                deleteChat();
+            }
+        });
+        menu.add(new Separator());
         menu.add(prompt(REVIEW_CHANGES, REVIEW_PROMPT));
         menu.add(prompt(COMMIT_MESSAGE, COMMIT_PROMPT));
     }
@@ -437,9 +466,84 @@ public class ChatView extends ViewPart {
         };
     }
 
+    /** Новый пустой диалог; текущий остаётся в истории чатов. */
     private void newChat() {
+        session.cancel();
+        saveIfChanged();
         session.clear();
         allowedInChat.clear();
+        chatId = chats.newId();
+        saved = List.of();
+        try {
+            chats.prune();
+        } catch (IOException e) {
+            Platform.getLog(getClass()).warn("Не удалось удалить старые диалоги EDT AI", e);
+        }
+    }
+
+    /** Открывает сохранённый диалог. */
+    private void openChat(String id) {
+        if (id.equals(chatId)) {
+            return;
+        }
+        if (session.isBusy()) {
+            showNotice("Дождитесь ответа или остановите его, чтобы открыть другой чат");
+            return;
+        }
+        saveIfChanged();
+        try {
+            List<ChatMessage> messages = chats.file(id).load();
+            session.restore(messages);
+            chatId = id;
+            saved = messages;
+            allowedInChat.clear();
+            chats.setCurrent(id);
+        } catch (IOException e) {
+            showNotice("Не удалось открыть чат: " + e.getMessage());
+        }
+    }
+
+    /** Удаляет открытый диалог и начинает новый. */
+    private void deleteChat() {
+        session.cancel();
+        try {
+            chats.delete(chatId);
+        } catch (IOException e) {
+            showNotice("Не удалось удалить чат: " + e.getMessage());
+            return;
+        }
+        saved = List.of();
+        session.clear();
+        allowedInChat.clear();
+        chatId = chats.newId();
+    }
+
+    /** Пункты меню «История чатов»: последние диалоги, открытый отмечен. */
+    private void fillHistory(IMenuManager menu) {
+        List<ChatStore.Entry> entries;
+        try {
+            entries = chats.list();
+        } catch (IOException e) {
+            entries = List.of();
+        }
+        if (entries.isEmpty() || entries.size() == 1 && entries.get(0).id().equals(chatId) && session.messages().isEmpty()) {
+            Action none = new Action("Сохранённых чатов нет") {
+            };
+            none.setEnabled(false);
+            menu.add(none);
+            return;
+        }
+        for (ChatStore.Entry entry : entries.stream().limit(HISTORY_MENU).toList()) {
+            String when = CHAT_TIME.format(LocalDateTime.ofInstant(entry.updated(), ZoneId.systemDefault()));
+            Action open = new Action(entry.title().replace("&", "&&") + "\t" + when, IAction.AS_CHECK_BOX) {
+                @Override
+                public void run() {
+                    openChat(entry.id());
+                }
+            };
+            open.setChecked(entry.id().equals(chatId));
+            menu.add(open);
+        }
     }
 
     /** Вопрос о вызове появился или снят: перекомпоновать вид; новый вопрос — пометить вкладку вида. */
@@ -786,24 +890,41 @@ public class ChatView extends ViewPart {
 
     // ---- сохранение диалога ----
 
+    /** Открывает последний диалог; старый единственный {@code chat.json} становится первым в истории. */
     private void restoreHistory() {
         try {
-            List<ChatMessage> messages = historyFile.load();
+            chats.migrate(stateLocation.resolve(HISTORY_FILE));
+            chatId = chats.current().orElseGet(chats::newId);
+            List<ChatMessage> messages = chats.file(chatId).load();
             session.restore(messages);
             saved = messages;
         } catch (IOException e) {
-            Platform.getLog(getClass()).warn("Не удалось восстановить диалог EDT AI из " + historyFile.path(), e);
+            chatId = chats.newId();
+            Platform.getLog(getClass()).warn("Не удалось восстановить диалог EDT AI из " + chats.file(chatId).path().getParent(), e);
         }
     }
 
-    private void saveHistory(List<ChatMessage> messages) {
-        try {
-            historyFile.save(messages);
-            saved = messages;
-        } catch (IOException e) {
-            saved = messages;
-            Platform.getLog(getClass()).warn("Не удалось сохранить диалог EDT AI в " + historyFile.path(), e);
+    private void saveIfChanged() {
+        List<ChatMessage> messages = session.messages();
+        if (!messages.equals(saved)) {
+            saveHistory(messages);
         }
+    }
+
+    /** Пустой диалог не хранится: файла нет, в истории его нет. */
+    private void saveHistory(List<ChatMessage> messages) {
+        ChatHistoryFile file = chats.file(chatId);
+        try {
+            if (messages.isEmpty()) {
+                Files.deleteIfExists(file.path());
+            } else {
+                file.save(messages);
+                chats.setCurrent(chatId);
+            }
+        } catch (IOException e) {
+            Platform.getLog(getClass()).warn("Не удалось сохранить диалог EDT AI в " + file.path(), e);
+        }
+        saved = messages;
     }
 
     // ---- состояние ----
@@ -940,10 +1061,7 @@ public class ChatView extends ViewPart {
         session.cancel();
         // Закрытие сессий MCP — запросы по сети, не в UI-потоке.
         background("EDT AI: закрытие MCP", mcp::close);
-        List<ChatMessage> messages = session.messages();
-        if (!messages.equals(saved)) {
-            saveHistory(messages);
-        }
+        saveIfChanged();
         preferences().removePreferenceChangeListener(preferenceListener);
         super.dispose();
     }
@@ -955,7 +1073,19 @@ public class ChatView extends ViewPart {
     }
 
     ChatHistoryFile historyFile() {
-        return historyFile;
+        return chats.file(chatId);
+    }
+
+    ChatStore chats() {
+        return chats;
+    }
+
+    void openChatForTest(String id) {
+        openChat(id);
+    }
+
+    void newChatForTest() {
+        newChat();
     }
 
     Composite control() {

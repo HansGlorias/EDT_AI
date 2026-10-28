@@ -178,10 +178,11 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
         label(group, "Окно модели, токенов:");
         modelWindow = new Text(group, SWT.BORDER);
-        modelWindow.setMessage(String.valueOf(AiSettings.DEFAULT_MODEL_WINDOW));
+        modelWindow.setMessage("по модели");
         modelWindow.setToolTipText("Сколько токенов модель принимает за раз вместе с ответом (max_model_len, num_ctx)."
-                + " Если диалог не помещается, старые фрагменты кода и сообщения модели не передаются. Пусто — "
-                + AiSettings.DEFAULT_MODEL_WINDOW + ".");
+                + " Пусто — по имени модели: Claude — 200 тыс., GPT-4o/4.1/5 и Gemini — 128 тыс., DeepSeek — 64 тыс.,"
+                + " остальные — " + AiSettings.DEFAULT_MODEL_WINDOW + ". Если сервер ответит «не помещается», запрос"
+                + " повторится с урезанной историей.");
         GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(modelWindow);
         modelWindow.addModifyListener(event -> validate());
 
@@ -464,7 +465,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         contextLimit.setText(
                 settings.contextLimit() == AiSettings.DEFAULT_CONTEXT_LIMIT ? "" : String.valueOf(settings.contextLimit()));
         modelWindow.setText(
-                settings.modelWindow() == AiSettings.DEFAULT_MODEL_WINDOW ? "" : String.valueOf(settings.modelWindow()));
+                settings.modelWindow() == AiSettings.AUTO_MODEL_WINDOW ? "" : String.valueOf(settings.modelWindow()));
         toolsEnabled.setSelection(settings.toolsEnabled());
         useSystemTrustStore.setSelection(settings.useSystemTrustStore());
         caFile.setText(settings.caCertificateFile());

@@ -98,7 +98,7 @@ class SettingsStoreTest {
 
     @Test
     void modelWindowIsStoredOnlyWhenNotDefault() throws Exception {
-        assertEquals(AiSettings.DEFAULT_MODEL_WINDOW, store.load().modelWindow());
+        assertEquals(AiSettings.AUTO_MODEL_WINDOW, store.load().modelWindow());
 
         store.save(new AiSettings(null, "", "", 0, "", 0, true, true, "", List.of(), 131_072));
         assertEquals(131_072, preferences.getInt(SettingsStore.KEY_MODEL_WINDOW, 0));

@@ -96,7 +96,7 @@ public final class SettingsStore {
         } else {
             preferences.putBoolean(KEY_TOOLS_ENABLED, settings.toolsEnabled());
         }
-        if (settings.modelWindow() == AiSettings.DEFAULT_MODEL_WINDOW) {
+        if (settings.modelWindow() == AiSettings.AUTO_MODEL_WINDOW) {
             preferences.remove(KEY_MODEL_WINDOW);
         } else {
             preferences.putInt(KEY_MODEL_WINDOW, settings.modelWindow());

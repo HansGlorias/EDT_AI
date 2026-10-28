@@ -54,7 +54,7 @@ final class ModelErrors {
         };
         String server = serverText(body);
         if (status / 100 == 4 && body != null && CONTEXT_OVERFLOW.matcher(body).find()) {
-            return new ModelException("Диалог не помещается в окно модели (HTTP " + status + "). Начните новый чат или проверьте"
+            return ModelException.overflow("Диалог не помещается в окно модели (HTTP " + status + "). Начните новый чат или проверьте"
                     + " «Окно модели» в настройках EDT AI: оно должно быть не больше, чем у модели на сервере."
                     + (server == null ? "" : " Ответ сервера: «" + server + "»"));
         }

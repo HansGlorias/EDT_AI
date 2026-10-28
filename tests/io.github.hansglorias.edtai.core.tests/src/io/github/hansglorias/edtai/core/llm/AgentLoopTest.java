@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -201,6 +202,22 @@ class AgentLoopTest {
         assertEquals("Без инструментов.", provider.reply(HISTORY, parts::add, uses::add).get(10, TimeUnit.SECONDS));
         assertEquals(3, server.requests().size());
         assertNull(Json.parseObject(server.requests().get(2).body()).get("tools"));
+    }
+
+    @Test
+    void contextOverflowIsRetriedWithShorterRequest() throws Exception {
+        AtomicInteger count = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (count.getAndIncrement() == 0) {
+                response.send(400, "application/json", "{\"error\":{\"message\":\"This model's maximum context length is 8192 tokens\","
+                        + "\"code\":\"context_length_exceeded\"}}");
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Поместилось.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        assertEquals("Поместилось.", run(Protocol.OPENAI_COMPATIBLE));
+        assertEquals(2, server.requests().size());
     }
 
     @Test

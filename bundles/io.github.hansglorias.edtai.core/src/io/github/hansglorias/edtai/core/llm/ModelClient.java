@@ -300,8 +300,9 @@ public final class ModelClient {
                             ? new ModelException("Ошибка запроса к модели: " + e.getMessage(), e)
                             : ModelErrors.of(e, Objects.requireNonNullElse(uri, URI.create("http://localhost")),
                                     connectTimeout, responseTimeout, idleExpired ? idleTimeout : null);
-                    result.completeExceptionally(new ModelException(ModelErrors.redact(error.getMessage(), connection.token()),
-                            error.getCause(), error.rejectsTools()));
+                    String message = ModelErrors.redact(error.getMessage(), connection.token());
+                    result.completeExceptionally(error.contextOverflow() ? ModelException.overflow(message)
+                            : new ModelException(message, error.getCause(), error.rejectsTools()));
                 }
             } finally {
                 if (watchdog != null) {

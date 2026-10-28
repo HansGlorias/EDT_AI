@@ -50,16 +50,17 @@ final class RequestBudget {
             return withoutCode > 0 || dropped > 0;
         }
 
-        /** Строка для ленты. */
+        /** Строка для ленты: что модель в этот раз не видит. */
         ToolUse notice() {
             List<String> parts = new ArrayList<>();
-            if (withoutCode > 0) {
-                parts.add("код старых сообщений не передан (сообщений — " + withoutCode + ")");
-            }
             if (dropped > 0) {
-                parts.add("самые старые сообщения не переданы — " + dropped);
+                parts.add("модель не видит самые старые сообщения (" + dropped + ")");
             }
-            return new ToolUse(NOTICE_ID, NOTICE_ID, "Окно модели", String.join(", ", parts), ToolUse.Status.DONE);
+            if (withoutCode > 0) {
+                parts.add((parts.isEmpty() ? "модель не видит " : "и ") + "прикреплённый к старым сообщениям код (" + withoutCode + ")");
+            }
+            return new ToolUse(NOTICE_ID, NOTICE_ID, "Диалог длиннее окна модели", String.join(" ", parts)
+                    + ". Начните новый чат или увеличьте «Окно модели» в настройках", ToolUse.Status.DONE);
         }
     }
 
