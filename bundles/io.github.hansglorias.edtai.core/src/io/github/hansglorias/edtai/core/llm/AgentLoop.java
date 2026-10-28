@@ -135,7 +135,7 @@ final class AgentLoop {
                 reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
             }
             if (reply.calls().isEmpty()) {
-                return answer.toString().strip();
+                return ThinkFilter.strip(answer.toString()).strip();
             }
             if (step >= MAX_STEPS) {
                 text("_Остановлено: модель вызвала инструменты " + MAX_STEPS + " раз подряд. Уточните вопрос или"

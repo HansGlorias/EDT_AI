@@ -56,6 +56,9 @@ final class OpenAiAdapter extends ProtocolAdapter {
             String error = errorText(json);
             throw new ModelException("Сервер прервал ответ с ошибкой: " + (error != null ? error : data));
         }
+        if ("length".equals(Json.stringAt(json, "choices", 0, "finish_reason"))) {
+            state.truncated();
+        }
         Object delta = Json.at(json, "choices", 0, "delta");
         state.text(Json.stringAt(delta, "content"));
         List<Object> calls = Json.asList(Json.at(delta, "tool_calls"));
@@ -85,7 +88,8 @@ final class OpenAiAdapter extends ProtocolAdapter {
             String id = Json.stringAt(call, "id");
             result.add(new ToolCall(id != null ? id : "call_" + i, Json.stringAt(call, "function", "name"), arguments(call)));
         }
-        return new ModelReply(text != null ? text : "", result);
+        return new ModelReply(ThinkFilter.strip(text != null ? text : ""), result,
+                "length".equals(Json.stringAt(json, "choices", 0, "finish_reason")));
     }
 
     @Override

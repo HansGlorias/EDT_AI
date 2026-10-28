@@ -44,6 +44,10 @@ public final class ModelClient {
     /** Сколько ждать следующей порции потока. */
     public static final Duration DEFAULT_IDLE_TIMEOUT = Duration.ofMinutes(2);
 
+    /** Пометка в конце ответа, который оборвался по max_tokens. */
+    static final String TRUNCATED = "_Ответ оборван: модель дошла до лимита длины ответа. Нажмите «Повторить» или увеличьте"
+            + " «Макс. токенов ответа» в настройках._";
+
     private static final int MAX_ERROR_BODY = 64 * 1024;
     private static final String USER_AGENT = "EDT-AI";
 
@@ -226,6 +230,13 @@ public final class ModelClient {
                 }
                 String type = response.headers().firstValue("Content-Type").orElse("").toLowerCase(Locale.ROOT);
                 ModelReply answer = type.contains("text/event-stream") ? readStream(body) : readFull(body);
+                if (answer.truncated() && answer.calls().isEmpty()) {
+                    String notice = (answer.text().isEmpty() ? "" : "\n\n") + TRUNCATED;
+                    if (!result.isDone()) {
+                        onText.accept(notice);
+                    }
+                    answer = new ModelReply(answer.text() + notice, answer.calls(), true);
+                }
                 result.complete(answer);
             } catch (Throwable e) {
                 if (!result.isDone()) {
