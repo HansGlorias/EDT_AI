@@ -59,6 +59,8 @@ abstract class AbstractChatTest {
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
+        // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, false);
         deleteChats();
         Platform.addLogListener(logListener);
     }
@@ -76,6 +78,8 @@ abstract class AbstractChatTest {
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
+        // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, false);
         deleteChats();
         Platform.removeLogListener(logListener);
         assertEquals(List.of(), loggedErrors.stream().map(AbstractChatTest::describe).toList());

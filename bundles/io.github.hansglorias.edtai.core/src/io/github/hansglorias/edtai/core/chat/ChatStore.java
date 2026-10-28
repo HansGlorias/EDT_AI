@@ -127,6 +127,11 @@ public final class ChatStore {
         return text.toLowerCase(Locale.ROOT).replace('ё', 'е');
     }
 
+    /** Название, данное диалогу (пользователем или придуманное моделью); пусто — по первому вопросу. */
+    public Optional<String> customTitle(String id) {
+        return Optional.ofNullable(titles().get(id));
+    }
+
     /** Название диалога: данное пользователем или начало первого вопроса. */
     public String title(String id, List<ChatMessage> messages) {
         String custom = titles().get(id);

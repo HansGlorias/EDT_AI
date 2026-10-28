@@ -153,6 +153,15 @@ public class ChatView extends ViewPart {
     static final String COMMIT_PROMPT = "Напиши сообщение коммита для моих незакоммиченных изменений (посмотри git_status и"
             + " git_diff): первая строка — суть до 72 символов, по-русски, затем пустая строка и короткий список изменений."
             + " Только текст сообщения в блоке кода, без пояснений.";
+    static final String EXPLAIN_PROMPT = "Объясни этот код: зачем он, что получает и что возвращает, основные шаги, побочные"
+            + " эффекты (запись в базу, блокировки, вызовы сервера, транзакции) и неочевидные места. Если код вызывает другие"
+            + " методы проекта и без них не понять — прочитай их. Ссылайся на строки: Модуль:строка.";
+    static final String TESTS_PROMPT = "Напиши тесты для этого кода. Сначала посмотри (search_code, list_objects), есть ли в"
+            + " проекте тесты и на чём: YAxUnit (общие модули с ИсполняемыеСценарии), Vanessa Automation (feature-файлы) —"
+            + " пиши в том же стиле и скажи, куда положить. Тестов нет — на YAxUnit. Покрой обычный сценарий, граничные"
+            + " случаи и ошибки. Модули тестов не создавай и не меняй — покажи код в ответе.";
+    /** Придумывать ли название чата после первого ответа (запрос к модели). Хранится в настройках рабочей области. */
+    static final String GENERATE_TITLES = "generateChatTitles";
 
     /** Как часто перерисовывать ленту во время стриминга. */
     private static final int REFRESH_DELAY_MS = 40;
@@ -170,6 +179,8 @@ public class ChatView extends ViewPart {
 
     /** Подключения к MCP-серверам из настроек. */
     private final McpHub mcp = new McpHub();
+    /** Чаты, для которых уже просили название у модели: по разу. */
+    private final Set<String> titleRequested = ConcurrentHashMap.newKeySet();
     /** Инструменты, которые пользователь разрешил «в этом чате»; сбрасываются «Новым чатом». */
     private final Set<String> allowedInChat = ConcurrentHashMap.newKeySet();
     private final ChatSession session = new ChatSession(
@@ -292,6 +303,7 @@ public class ChatView extends ViewPart {
                 inUi(() -> {
                     attachChanges();
                     approvalBar.dismiss();
+                    generateTitle();
                 });
             }
         }
@@ -1231,7 +1243,14 @@ public class ChatView extends ViewPart {
             return;
         }
         SlashCommand.Invocation command = SlashCommand.parse(text).orElse(null);
-        if (command != null && command.command() != SlashCommand.REVIEW && command.command() != SlashCommand.COMMIT) {
+        String prompt = command == null ? null : switch (command.command()) {
+            case REVIEW -> REVIEW_PROMPT;
+            case COMMIT -> COMMIT_PROMPT;
+            case EXPLAIN -> EXPLAIN_PROMPT;
+            case TESTS -> TESTS_PROMPT;
+            default -> null;
+        };
+        if (command != null && prompt == null) {
             input.setText("");
             run(command.command());
             return;
@@ -1240,7 +1259,14 @@ public class ChatView extends ViewPart {
             return;
         }
         if (command != null) {
-            String prompt = command.command() == SlashCommand.REVIEW ? REVIEW_PROMPT : COMMIT_PROMPT;
+            boolean aboutCode = command.command() == SlashCommand.EXPLAIN || command.command() == SlashCommand.TESTS;
+            if (aboutCode && contextBar.isEmpty()) {
+                attachFromEditor();
+            }
+            if (aboutCode && contextBar.isEmpty() && command.argument().isEmpty()) {
+                showNotice("Выделите код в редакторе, прикрепите модуль (@) или напишите после команды, о каком коде речь");
+                return;
+            }
             text = command.argument().isEmpty() ? prompt : prompt + "\n\n" + command.argument();
         }
         List<ContextItem> context = contextBar.snapshot();
@@ -1256,6 +1282,8 @@ public class ChatView extends ViewPart {
             case ATTACH -> attachModule();
             case AUTO -> setAutoApprove(!isAutoApprove());
             case READONLY -> setReadOnly(!isReadOnly());
+            case COMPACT -> compact();
+            case MCP -> showMcpStatus();
             default -> throw new IllegalArgumentException(command.text());
         }
     }
@@ -1271,6 +1299,74 @@ public class ChatView extends ViewPart {
         }
         showNotice(on ? "Авторежим включён: инструменты MCP вызываются без вопроса"
                 : "Авторежим выключен: перед вызовом инструмента MCP — вопрос");
+    }
+
+    /** Код из активного редактора — выделение или метод под курсором, как по Ctrl+Alt+A; нет редактора — ничего. */
+    private void attachFromEditor() {
+        ITextEditor editor = EditorAccess.textEditor(getSite().getPage().getActiveEditor());
+        AttachedContext context = editor == null ? null : AttachedContext.fromEditor(editor);
+        if (context != null) {
+            contextBar.add(context);
+        }
+    }
+
+    /** {@code /compact}: краткое содержание диалога вместо сообщений выше. */
+    private void compact() {
+        if (session.isBusy()) {
+            showNotice("Дождитесь ответа или остановите его");
+            return;
+        }
+        if (!session.canCompact()) {
+            showNotice("Сжимать нечего: после последнего сжатия ответов не было");
+            return;
+        }
+        session.compact().thenAccept(done -> {
+            if (done) {
+                inUi(() -> showNotice("История сжата: модель дальше видит краткое содержание"));
+            }
+        });
+    }
+
+    /** {@code /mcp}: подключение к серверам — в фоне, итог — в окне. */
+    private void showMcpStatus() {
+        AiSettings current = SettingsStore.workspace().load();
+        showNotice("Проверяю MCP-серверы…");
+        background("EDT AI: состояние MCP", () -> {
+            String text = mcp.describe(current.mcpServers(), TrustSettings.from(current));
+            inUi(() -> {
+                updateStatus();
+                mcpStatus.accept(text);
+            });
+        });
+    }
+
+    /** Показ итога {@code /mcp}; тесты подменяют. */
+    Consumer<String> mcpStatus = text -> MessageDialog.openInformation(getSite().getShell(), "MCP-серверы", text);
+
+    /**
+     * После ответа: если у чата ещё нет названия, просит модель придумать его
+     * по первому обмену — по разу на чат. Пользователь может переименовать.
+     */
+    private void generateTitle() {
+        String id = chatId;
+        List<ChatMessage> messages = session.messages();
+        boolean answered = messages.stream().anyMatch(message -> message.role() == ChatRole.ASSISTANT
+                && message.status() == Status.DONE && !message.text().isBlank());
+        if (!preferences().getBoolean(GENERATE_TITLES, true) || !answered || chats.customTitle(id).isPresent()
+                || !titleRequested.add(id)) {
+            return;
+        }
+        session.provider().title(messages).whenComplete((title, error) -> inUi(() -> {
+            try {
+                if (error == null && title != null && !title.isBlank() && chats.customTitle(id).isEmpty()
+                        && Files.exists(chats.file(id).path())) {
+                    chats.rename(id, title);
+                    refreshHistoryPanel();
+                }
+            } catch (IOException e) {
+                // Название — удобство: остаётся начало вопроса.
+            }
+        }));
     }
 
     private static boolean isReadOnly() {

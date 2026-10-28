@@ -60,6 +60,11 @@ public interface ChatProvider {
         return 0;
     }
 
+    /** Короткое название диалога по его началу, придуманное моделью. */
+    default CompletableFuture<String> title(List<ChatMessage> messages) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Названия чатов не придумываются"));
+    }
+
     /** Краткое содержание сообщений, сделанное моделью. */
     default CompletableFuture<String> summarize(List<ChatMessage> messages) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Сжатие истории не поддерживается"));

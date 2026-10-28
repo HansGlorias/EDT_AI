@@ -94,6 +94,24 @@ class McpHubTest {
     }
 
     @Test
+    void statusDescribesServersAndTools() throws Exception {
+        server.tool("update_index", false, arguments -> Json.object("content", List.of()));
+        McpServer edt = edt("");
+        McpServer off = new McpServer("Выключенный", McpTransport.HTTP, "http://localhost:1/mcp", false);
+        McpServer dead = new McpServer("Недоступный", McpTransport.HTTP, "http://localhost:1/mcp", true);
+
+        String status = hub.describe(List.of(edt, off, dead), TRUST);
+
+        assertTrue(status.startsWith("EDT — " + server.url() + "\nПодключено"), status);
+        assertTrue(status.contains("Инструментов: 4, модели доступно: 4."), status);
+        assertTrue(status.contains("Читают: get_edt_version, read_module_source."), status);
+        assertTrue(status.contains("Меняют проект (в режиме «только вопросы» не передаются): broken, update_index."), status);
+        assertTrue(status.contains("Выключенный — http://localhost:1/mcp\nВыключен."), status);
+        assertTrue(status.contains("Недоступный — http://localhost:1/mcp\nНе подключён: "), status);
+        assertEquals("MCP-серверы не настроены. Добавить: Настройки → EDT AI → MCP-серверы.", hub.describe(List.of(), TRUST));
+    }
+
+    @Test
     void modifyingIsGuessedByVerb() {
         for (String name : List.of("get_problems", "listObjects", "read-module", "search", "validate_project", "find.usages", "go_to_definition")) {
             assertFalse(new McpToolInfo(name, "", null).modifies(), name);

@@ -592,4 +592,59 @@ class ChatSessionTest {
         assertEquals(ToolUse.Status.FAILED, answer.tools().get(0).status());
         assertFalse(session.messages().stream().anyMatch(message -> message.role() == ChatRole.SUMMARY));
     }
+
+    @Test
+    void historyIsCompactedOnCommand() throws Exception {
+        List<List<ChatMessage>> requests = new ArrayList<>();
+        List<CompletableFuture<String>> summaries = new ArrayList<>();
+        ChatProvider provider = new ChatProvider() {
+            @Override
+            public String name() {
+                return "сжатие";
+            }
+
+            @Override
+            public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText) {
+                requests.add(history);
+                return CompletableFuture.completedFuture("ответ");
+            }
+
+            @Override
+            public CompletableFuture<String> summarize(List<ChatMessage> messages) {
+                CompletableFuture<String> summary = new CompletableFuture<>();
+                summaries.add(summary);
+                return summary;
+            }
+        };
+        ChatSession session = new ChatSession(provider);
+        assertFalse(session.canCompact(), "пустой диалог");
+        assertThrows(IllegalStateException.class, session::compact);
+        session.send("один").get(TIMEOUT, TimeUnit.SECONDS);
+        assertTrue(session.canCompact());
+
+        CompletableFuture<Boolean> stopped = session.compact();
+        assertTrue(session.isBusy());
+        assertEquals("Сжимаю историю диалога", session.activity().detail());
+        session.cancel();
+        assertFalse(stopped.get(TIMEOUT, TimeUnit.SECONDS));
+        assertFalse(session.isBusy());
+        assertEquals(2, session.messages().size(), "остановили — ничего не меняется");
+
+        CompletableFuture<Boolean> done = session.compact();
+        summaries.get(1).complete("  кратко  ");
+        assertTrue(done.get(TIMEOUT, TimeUnit.SECONDS));
+        assertEquals(ChatRole.SUMMARY, session.messages().get(2).role());
+        assertEquals("кратко", session.messages().get(2).text());
+        assertFalse(session.canCompact(), "после краткого содержания сжимать нечего");
+
+        session.send("два").get(TIMEOUT, TimeUnit.SECONDS);
+        assertEquals(List.of(ChatRole.SUMMARY, ChatRole.USER), requests.get(1).stream().map(ChatMessage::role).toList());
+
+        CompletableFuture<Boolean> failed = session.compact();
+        summaries.get(2).completeExceptionally(new IllegalStateException("сервер недоступен"));
+        assertFalse(failed.get(TIMEOUT, TimeUnit.SECONDS));
+        ChatMessage error = session.messages().get(session.messages().size() - 1);
+        assertEquals(ChatRole.ERROR, error.role());
+        assertEquals("Не удалось сжать историю: сервер недоступен", error.text());
+    }
 }

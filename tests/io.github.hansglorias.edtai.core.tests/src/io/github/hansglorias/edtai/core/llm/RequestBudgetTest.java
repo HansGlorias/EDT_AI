@@ -89,6 +89,15 @@ class RequestBudgetTest {
     }
 
     @Test
+    void titleIsCleanedFromAnswer() {
+        assertEquals("Дата сеанса в общем модуле", ModelChatProvider.cleanTitle("\n**«Дата сеанса в общем модуле».**\nПояснение"));
+        assertEquals("Ревью проведения", ModelChatProvider.cleanTitle("Название: \"Ревью проведения\""));
+        assertEquals("Ошибки проекта", ModelChatProvider.cleanTitle("# Ошибки проекта"));
+        assertEquals("", ModelChatProvider.cleanTitle("  \n "));
+        assertEquals(80, ModelChatProvider.cleanTitle("а".repeat(200)).length());
+    }
+
+    @Test
     void answerCarriesTraceOfTools() {
         ChatMessage answer = assistant("В модуле одна процедура.").withTools(List.of(
                 new ToolUse("call_1", "read_module", "Читает модуль Х", "строки 1–3 из 3", ToolUse.Status.DONE),
