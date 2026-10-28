@@ -653,6 +653,9 @@ public class ChatView extends ViewPart {
         saveIfChanged();
         session.clear();
         allowedInChat.clear();
+        if (session.provider() instanceof ModelChatProvider provider) {
+            provider.forgetRejections();
+        }
         chatId = chats.newId();
         saved = List.of();
         try {
