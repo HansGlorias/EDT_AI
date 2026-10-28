@@ -1,12 +1,17 @@
 package io.github.hansglorias.edtai.ui;
 
+import java.io.IOException;
 import java.net.URI;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
+import java.net.URL;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 
+import org.eclipse.core.runtime.Adapters;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.IPreferenceChangeListener;
 import org.eclipse.core.runtime.preferences.InstanceScope;
@@ -14,14 +19,17 @@ import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
-import org.eclipse.jface.preference.JFacePreferences;
 import org.eclipse.jface.resource.JFaceResources;
+import org.eclipse.jface.text.BadLocationException;
+import org.eclipse.jface.text.IDocument;
+import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
-import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Cursor;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
@@ -32,12 +40,20 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Text;
+import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.dialogs.PreferencesUtil;
+import org.eclipse.ui.part.MultiPageEditorPart;
 import org.eclipse.ui.part.ViewPart;
+import org.eclipse.ui.texteditor.ITextEditor;
+import org.eclipse.ui.texteditor.ITextEditorExtension2;
+import org.osgi.framework.FrameworkUtil;
 
+import io.github.hansglorias.edtai.core.chat.ChatHistoryFile;
 import io.github.hansglorias.edtai.core.chat.ChatListener;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
@@ -49,9 +65,10 @@ import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 /**
- * Вид «AI Chat»: лента диалога, поле ввода, отправка по кнопке или
- * Ctrl+Enter. Ответ модели появляется по мере генерации, его можно
- * остановить кнопкой «Стоп» или Esc.
+ * Вид «AI Chat»: лента диалога и поле ввода. Enter — отправить,
+ * Shift+Enter — новая строка. Ответ модели появляется по мере генерации,
+ * его можно остановить кнопкой «Стоп» или Esc. Диалог сохраняется в
+ * рабочей области и восстанавливается при следующем открытии вида.
  */
 public class ChatView extends ViewPart {
 
@@ -59,18 +76,24 @@ public class ChatView extends ViewPart {
 
     static final String SEND = "Отправить";
     static final String STOP = "Стоп";
-    static final String RETRY = "Повторить";
+    static final String RETRY = MessageRenderer.RETRY;
+    static final String HISTORY_FILE = "chat.json";
 
-    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault());
     /** Как часто перерисовывать ленту во время стриминга. */
     private static final int REFRESH_DELAY_MS = 40;
+    private static final int MIN_INPUT_LINES = 2;
+    private static final int MAX_INPUT_LINES = 10;
+    private static final int NOTICE_MS = 4000;
 
     private final ChatSession session = new ChatSession(ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient()));
+    private final ChatHistoryFile historyFile = new ChatHistoryFile(
+            Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath().resolve(HISTORY_FILE));
 
     private Composite root;
     private Composite top;
     private StackLayout topLayout;
     private StyledText history;
+    private MessageRenderer renderer;
     private Composite emptyState;
     private Label emptyTitle;
     private Label emptyText;
@@ -80,12 +103,21 @@ public class ChatView extends ViewPart {
     private Label status;
     private Cursor handCursor;
 
-    /** Что сейчас нарисовано в ленте: сообщение, есть ли у него «Повторить» и с какого символа оно начинается. */
-    private record Rendered(ChatMessage message, boolean retry, int start) {
+    /**
+     * Что сейчас нарисовано в ленте: сообщение, его действия, с какого символа
+     * оно начинается и где в нём блоки кода (для фона).
+     */
+    private record Rendered(ChatMessage message, Set<MessageRenderer.Action> actions, int start, List<int[]> codeRanges) {
     }
 
     private final List<Rendered> rendered = new ArrayList<>();
     private boolean refreshScheduled;
+    private List<ChatMessage> saved;
+    private String notice;
+
+    /** Отправленные сообщения для ↑ / ↓ в пустом поле; {@code recall} — какое сейчас показано. */
+    private int recall = -1;
+    private boolean recalling;
 
     private final ChatListener chatListener = new ChatListener() {
         @Override
@@ -124,34 +156,13 @@ public class ChatView extends ViewPart {
         GridLayoutFactory.fillDefaults().spacing(0, 4).applyTo(parent);
         handCursor = parent.getDisplay().getSystemCursor(SWT.CURSOR_HAND);
 
-        SashForm sash = new SashForm(parent, SWT.VERTICAL);
-        GridDataFactory.fillDefaults().grab(true, true).applyTo(sash);
-
-        top = new Composite(sash, SWT.NONE);
+        top = new Composite(parent, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, true).applyTo(top);
         topLayout = new StackLayout();
         top.setLayout(topLayout);
         createHistory(top);
         createEmptyState(top);
-
-        Composite bottom = new Composite(sash, SWT.NONE);
-        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(bottom);
-
-        input = new Text(bottom, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.BORDER);
-        input.setMessage("Сообщение (Ctrl+Enter — отправить, Esc — остановить ответ)");
-        GridDataFactory.fillDefaults().grab(true, true).applyTo(input);
-        input.addListener(SWT.KeyDown, this::onInputKey);
-        input.addModifyListener(event -> updateSendButton());
-
-        sendButton = new Button(bottom, SWT.PUSH);
-        int width = 0;
-        for (String text : new String[] { SEND, STOP }) {
-            sendButton.setText(text);
-            width = Math.max(width, sendButton.computeSize(SWT.DEFAULT, SWT.DEFAULT).x);
-        }
-        GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).hint(width, SWT.DEFAULT).applyTo(sendButton);
-        sendButton.addListener(SWT.Selection, event -> sendOrStop());
-
-        sash.setWeights(new int[] { 78, 22 });
+        createInput(parent);
 
         status = new Label(parent, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).indent(4, 0).applyTo(status);
@@ -161,14 +172,44 @@ public class ChatView extends ViewPart {
         session.addListener(chatListener);
         preferences().addPreferenceChangeListener(preferenceListener);
         settings = SettingsStore.workspace().load();
+        restoreHistory();
         updateStatus();
         updateEmptyState();
         updateSendButton();
+        refresh();
     }
 
     private void createHistory(Composite parent) {
         history = new StyledText(parent, SWT.MULTI | SWT.V_SCROLL | SWT.WRAP | SWT.READ_ONLY | SWT.BORDER);
         history.setMargins(8, 8, 8, 8);
+        renderer = new MessageRenderer(history, new MessageRenderer.Callbacks() {
+            @Override
+            public void copy(String text) {
+                copyToClipboard(text);
+            }
+
+            @Override
+            public void insert(String code) {
+                insertIntoEditor(code);
+            }
+
+            @Override
+            public void retry() {
+                if (session.canRetry()) {
+                    session.retry();
+                }
+            }
+
+            @Override
+            public void edit(int index) {
+                editMessage(index);
+            }
+
+            @Override
+            public void open(String url) {
+                openLink(url);
+            }
+        });
         history.addListener(SWT.MouseUp, event -> {
             if (event.button == 1 && history.getSelectionCount() == 0) {
                 Runnable action = actionAt(event.x, event.y);
@@ -178,6 +219,31 @@ public class ChatView extends ViewPart {
             }
         });
         history.addListener(SWT.MouseMove, event -> history.setCursor(actionAt(event.x, event.y) != null ? handCursor : null));
+        // Фон блока кода — на всю ширину ленты, а не только под символами.
+        history.addLineBackgroundListener(event -> {
+            if (isInCode(event.lineOffset)) {
+                event.lineBackground = renderer.codeBackground();
+            }
+        });
+
+        Menu menu = new Menu(history);
+        MenuItem copy = new MenuItem(menu, SWT.PUSH);
+        copy.setText("Копировать\tCtrl+C");
+        copy.addListener(SWT.Selection, event -> history.copy());
+        MenuItem selectAll = new MenuItem(menu, SWT.PUSH);
+        selectAll.setText("Выделить всё\tCtrl+A");
+        selectAll.addListener(SWT.Selection, event -> history.selectAll());
+        new MenuItem(menu, SWT.SEPARATOR);
+        MenuItem newChat = new MenuItem(menu, SWT.PUSH);
+        newChat.setText("Новый чат");
+        newChat.addListener(SWT.Selection, event -> session.clear());
+        menu.addListener(SWT.Show, event -> copy.setEnabled(history.getSelectionCount() > 0));
+        history.setMenu(menu);
+        history.addListener(SWT.KeyDown, event -> {
+            if ((event.stateMask & SWT.MOD1) != 0 && (event.keyCode == 'a' || event.keyCode == 'A')) {
+                history.selectAll();
+            }
+        });
     }
 
     private void createEmptyState(Composite parent) {
@@ -199,18 +265,48 @@ public class ChatView extends ViewPart {
         GridDataFactory.fillDefaults().applyTo(emptyLink);
     }
 
+    private void createInput(Composite parent) {
+        Composite bottom = new Composite(parent, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(bottom);
+        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(bottom);
+
+        input = new Text(bottom, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.BORDER);
+        input.setMessage("Сообщение (Enter — отправить, Shift+Enter — новая строка)");
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(input);
+        input.addListener(SWT.KeyDown, this::onInputKey);
+        input.addModifyListener(event -> {
+            if (!recalling) {
+                recall = -1;
+            }
+            updateSendButton();
+            updateInputHeight();
+        });
+        input.addListener(SWT.Resize, event -> updateInputHeight());
+
+        sendButton = new Button(bottom, SWT.PUSH);
+        int width = 0;
+        for (String text : new String[] { SEND, STOP }) {
+            sendButton.setText(text);
+            width = Math.max(width, sendButton.computeSize(SWT.DEFAULT, SWT.DEFAULT).x);
+        }
+        GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).hint(width, SWT.DEFAULT).applyTo(sendButton);
+        sendButton.addListener(SWT.Selection, event -> sendOrStop());
+        updateInputHeight();
+    }
+
     private void createActions() {
         ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
         IToolBarManager toolBar = getViewSite().getActionBars().getToolBarManager();
 
-        Action clear = new Action("Очистить историю") {
+        Action newChat = new Action("Новый чат") {
             @Override
             public void run() {
                 session.clear();
+                input.setFocus();
             }
         };
-        clear.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_ETOOL_CLEAR));
-        toolBar.add(clear);
+        newChat.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_TOOL_NEW_WIZARD));
+        toolBar.add(newChat);
 
         Action preferencesAction = new Action("Настройки EDT AI") {
             @Override
@@ -227,14 +323,72 @@ public class ChatView extends ViewPart {
                 new String[] { AiPreferencePage.ID }, null).open();
     }
 
-    private void onInputKey(Event event) {
+    // ---- ввод ----
+
+    void onInputKey(Event event) {
         boolean enter = event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR;
-        if (enter && (event.stateMask & SWT.MOD1) != 0) {
+        if (enter && (event.stateMask & SWT.SHIFT) == 0) {
             event.doit = false;
             send();
         } else if (event.keyCode == SWT.ESC && session.isBusy()) {
             event.doit = false;
             session.cancel();
+        } else if ((event.keyCode == SWT.ARROW_UP || event.keyCode == SWT.ARROW_DOWN) && event.stateMask == 0
+                && (input.getText().isEmpty() || recall >= 0)) {
+            event.doit = !recallSent(event.keyCode == SWT.ARROW_UP ? -1 : 1);
+        }
+    }
+
+    /**
+     * Показывает в поле ввода предыдущее ({@code -1}) или следующее ({@code +1})
+     * отправленное сообщение.
+     *
+     * @return {@code true}, если поле изменилось
+     */
+    private boolean recallSent(int direction) {
+        List<String> sent = session.messages().stream().filter(message -> message.role() == ChatRole.USER).map(ChatMessage::text).toList();
+        if (sent.isEmpty()) {
+            return false;
+        }
+        int next;
+        if (direction < 0) {
+            next = recall < 0 ? sent.size() - 1 : Math.max(0, recall - 1);
+        } else if (recall < 0) {
+            return false;
+        } else {
+            next = recall + 1;
+        }
+        recalling = true;
+        try {
+            if (next >= sent.size()) {
+                recall = -1;
+                input.setText("");
+            } else {
+                recall = next;
+                input.setText(sent.get(next));
+                input.setSelection(input.getText().length());
+            }
+        } finally {
+            recalling = false;
+        }
+        return true;
+    }
+
+    /** Высота поля по тексту: от {@link #MIN_INPUT_LINES} до {@link #MAX_INPUT_LINES} строк. */
+    private void updateInputHeight() {
+        if (input == null || input.isDisposed()) {
+            return;
+        }
+        int width = input.getSize().x > 0 ? input.getSize().x : SWT.DEFAULT;
+        int lineHeight = input.getLineHeight();
+        int trim = input.computeTrim(0, 0, 0, 0).height;
+        int content = input.computeSize(width, SWT.DEFAULT).y - trim;
+        int lines = Math.max(MIN_INPUT_LINES, Math.min(MAX_INPUT_LINES, (content + lineHeight - 1) / lineHeight));
+        int height = lines * lineHeight + trim;
+        GridData data = (GridData) input.getLayoutData();
+        if (data.heightHint != height) {
+            data.heightHint = height;
+            root.layout(true, true);
         }
     }
 
@@ -256,10 +410,95 @@ public class ChatView extends ViewPart {
         session.send(text);
     }
 
-    private void retry() {
-        if (session.canRetry()) {
-            session.retry();
+    private void editMessage(int index) {
+        if (session.isBusy()) {
+            showNotice("Дождитесь ответа или остановите его, чтобы изменить сообщение");
+            return;
         }
+        String text = session.editFrom(index);
+        input.setText(text);
+        input.setSelection(text.length());
+        input.setFocus();
+    }
+
+    // ---- действия в ленте ----
+
+    private void copyToClipboard(String text) {
+        Clipboard clipboard = new Clipboard(history.getDisplay());
+        try {
+            clipboard.setContents(new Object[] { text }, new Transfer[] { TextTransfer.getInstance() });
+        } finally {
+            clipboard.dispose();
+        }
+        showNotice("Скопировано в буфер обмена");
+    }
+
+    /** Заменяет выделение в последнем активном текстовом редакторе; отменяется через Ctrl+Z. */
+    void insertIntoEditor(String code) {
+        IEditorPart editor = getSite().getPage().getActiveEditor();
+        ITextEditor textEditor = textEditor(editor);
+        if (textEditor == null) {
+            showNotice("Откройте модуль в редакторе, чтобы вставить код");
+            return;
+        }
+        if (!textEditor.isEditable()
+                || textEditor instanceof ITextEditorExtension2 extension && !extension.validateEditorInputState()) {
+            showNotice("Редактор открыт только для чтения");
+            return;
+        }
+        IDocument document = textEditor.getDocumentProvider().getDocument(textEditor.getEditorInput());
+        if (!(textEditor.getSelectionProvider().getSelection() instanceof ITextSelection selection) || document == null) {
+            showNotice("Не удалось вставить код в редактор");
+            return;
+        }
+        try {
+            document.replace(selection.getOffset(), selection.getLength(), code);
+        } catch (BadLocationException e) {
+            showNotice("Не удалось вставить код в редактор: " + e.getMessage());
+            return;
+        }
+        textEditor.selectAndReveal(selection.getOffset(), code.length());
+        getSite().getPage().activate(editor);
+        showNotice("Код вставлен в " + editor.getTitle() + " (Ctrl+Z — отменить)");
+    }
+
+    private static ITextEditor textEditor(IEditorPart editor) {
+        if (editor == null) {
+            return null;
+        }
+        // Редактор объекта в EDT многостраничный: модуль — на одной из его страниц.
+        if (editor instanceof MultiPageEditorPart multiPage && multiPage.getSelectedPage() instanceof IEditorPart page) {
+            ITextEditor text = Adapters.adapt(page, ITextEditor.class);
+            if (text != null) {
+                return text;
+            }
+        }
+        return Adapters.adapt(editor, ITextEditor.class);
+    }
+
+    private void openLink(String url) {
+        String scheme = url.contains(":") ? url.substring(0, url.indexOf(':')).toLowerCase(Locale.ROOT) : "";
+        if (!Set.of("http", "https", "mailto").contains(scheme)) {
+            showNotice("Ссылка не открыта: поддерживаются только http, https и mailto");
+            return;
+        }
+        try {
+            PlatformUI.getWorkbench().getBrowserSupport().getExternalBrowser().openURL(new URL(url));
+        } catch (Exception e) {
+            showNotice("Не удалось открыть ссылку: " + e.getMessage());
+        }
+    }
+
+    /** Короткое сообщение в строке состояния. */
+    private void showNotice(String text) {
+        notice = text;
+        updateStatus();
+        history.getDisplay().timerExec(NOTICE_MS, () -> {
+            if (!status.isDisposed() && Objects.equals(notice, text)) {
+                notice = null;
+                updateStatus();
+            }
+        });
     }
 
     // ---- лента ----
@@ -285,11 +524,15 @@ public class ChatView extends ViewPart {
      */
     void refresh() {
         List<ChatMessage> messages = session.messages();
-        boolean canRetry = session.canRetry();
+        boolean idle = !session.isBusy();
+        List<Set<MessageRenderer.Action>> actions = new ArrayList<>();
+        for (int i = 0; i < messages.size(); i++) {
+            actions.add(actions(messages, i, idle));
+        }
         int first = 0;
         while (first < rendered.size() && first < messages.size()
                 && rendered.get(first).message().equals(messages.get(first))
-                && rendered.get(first).retry() == showRetry(messages, first, canRetry)) {
+                && rendered.get(first).actions().equals(actions.get(first))) {
             first++;
         }
         if (first < rendered.size() || first < messages.size()) {
@@ -300,86 +543,58 @@ public class ChatView extends ViewPart {
             StringBuilder text = new StringBuilder();
             List<StyleRange> styles = new ArrayList<>();
             for (int i = first; i < messages.size(); i++) {
-                boolean retry = showRetry(messages, i, canRetry);
-                rendered.add(new Rendered(messages.get(i), retry, start + text.length()));
-                render(messages.get(i), i > 0, retry, start, text, styles);
+                List<int[]> codeRanges = new ArrayList<>();
+                rendered.add(new Rendered(messages.get(i), actions.get(i), start + text.length(), codeRanges));
+                renderer.render(messages.get(i), i, i > 0, actions.get(i), start, text, styles, codeRanges);
             }
             history.replaceTextRange(start, history.getCharCount() - start, text.toString());
-            for (StyleRange style : styles) {
-                history.setStyleRange(style);
-            }
+            history.replaceStyleRanges(start, text.length(), styles.toArray(StyleRange[]::new));
+            history.redraw();
             if (atBottom) {
                 history.setTopPixel(Integer.MAX_VALUE);
             }
+        }
+        if (idle && !messages.equals(saved)) {
+            saveHistory(messages);
         }
         updateEmptyState();
         updateSendButton();
         updateStatus();
     }
 
-    private static boolean showRetry(List<ChatMessage> messages, int index, boolean canRetry) {
-        if (!canRetry || index != messages.size() - 1) {
-            return false;
-        }
+    private static Set<MessageRenderer.Action> actions(List<ChatMessage> messages, int index, boolean idle) {
         ChatMessage message = messages.get(index);
-        return message.role() == ChatRole.ERROR || message.status() == Status.STOPPED;
+        boolean last = index == messages.size() - 1;
+        Set<MessageRenderer.Action> actions = EnumSet.noneOf(MessageRenderer.Action.class);
+        switch (message.role()) {
+            // «Изменить» видно всегда: иначе каждая отправка перерисовывала бы всю ленту.
+            case USER -> actions.add(MessageRenderer.Action.EDIT);
+            case ASSISTANT -> {
+                if (!message.text().isEmpty() && message.status() != Status.STREAMING) {
+                    actions.add(MessageRenderer.Action.COPY);
+                }
+                if (last && idle) {
+                    actions.add(MessageRenderer.Action.RETRY);
+                }
+            }
+            case ERROR -> {
+                if (last && idle) {
+                    actions.add(MessageRenderer.Action.RETRY);
+                }
+            }
+        }
+        return actions;
     }
 
-    private void render(ChatMessage message, boolean separator, boolean retry, int offset, StringBuilder text, List<StyleRange> styles) {
-        if (separator) {
-            text.append("\n\n");
-        }
-        String name;
-        Color nameColor;
-        switch (message.role()) {
-            case USER -> {
-                name = "Вы";
-                nameColor = null;
-            }
-            case ASSISTANT -> {
-                name = "Ассистент";
-                nameColor = color(JFacePreferences.COUNTER_COLOR, SWT.COLOR_DARK_BLUE);
-            }
-            default -> {
-                name = "Ошибка";
-                nameColor = errorColor();
+    private boolean isInCode(int offset) {
+        for (Rendered item : rendered) {
+            for (int[] range : item.codeRanges()) {
+                if (offset >= range[0] && offset <= range[1]) {
+                    return true;
+                }
             }
         }
-        styles.add(new StyleRange(offset + text.length(), name.length(), nameColor, null, SWT.BOLD));
-        text.append(name);
-
-        String meta = "  " + TIME.format(message.time()) + switch (message.status()) {
-            case STREAMING -> " · пишет…";
-            case STOPPED -> message.role() == ChatRole.ASSISTANT ? " · остановлено" : "";
-            case DONE -> "";
-        };
-        styles.add(new StyleRange(offset + text.length(), meta.length(), metaColor(), null));
-        text.append(meta).append('\n');
-
-        String body = message.text();
-        if (body.isEmpty() && message.role() == ChatRole.ASSISTANT) {
-            String placeholder = switch (message.status()) {
-                case STREAMING -> "…";
-                case STOPPED -> "(ответ не получен)";
-                case DONE -> "(пустой ответ)";
-            };
-            styles.add(new StyleRange(offset + text.length(), placeholder.length(), metaColor(), null, SWT.ITALIC));
-            text.append(placeholder);
-        } else {
-            if (message.role() == ChatRole.ERROR) {
-                styles.add(new StyleRange(offset + text.length(), body.length(), errorColor(), null));
-            }
-            text.append(body);
-        }
-
-        if (retry) {
-            text.append('\n');
-            StyleRange link = new StyleRange(offset + text.length(), RETRY.length(), linkColor(), null);
-            link.underline = true;
-            link.data = (Runnable) this::retry;
-            styles.add(link);
-            text.append(RETRY);
-        }
+        return false;
     }
 
     private Runnable actionAt(int x, int y) {
@@ -396,21 +611,26 @@ public class ChatView extends ViewPart {
         return bottom <= history.getClientArea().height + history.getLineHeight();
     }
 
-    private Color color(String key, int fallback) {
-        Color color = JFaceResources.getColorRegistry().get(key);
-        return color != null ? color : history.getDisplay().getSystemColor(fallback);
+    // ---- сохранение диалога ----
+
+    private void restoreHistory() {
+        try {
+            List<ChatMessage> messages = historyFile.load();
+            session.restore(messages);
+            saved = messages;
+        } catch (IOException e) {
+            Platform.getLog(getClass()).warn("Не удалось восстановить диалог EDT AI из " + historyFile.path(), e);
+        }
     }
 
-    private Color errorColor() {
-        return color(JFacePreferences.ERROR_COLOR, SWT.COLOR_RED);
-    }
-
-    private Color metaColor() {
-        return color(JFacePreferences.QUALIFIER_COLOR, SWT.COLOR_DARK_GRAY);
-    }
-
-    private Color linkColor() {
-        return color(JFacePreferences.HYPERLINK_COLOR, SWT.COLOR_LINK_FOREGROUND);
+    private void saveHistory(List<ChatMessage> messages) {
+        try {
+            historyFile.save(messages);
+            saved = messages;
+        } catch (IOException e) {
+            saved = messages;
+            Platform.getLog(getClass()).warn("Не удалось сохранить диалог EDT AI в " + historyFile.path(), e);
+        }
     }
 
     // ---- состояние ----
@@ -419,7 +639,8 @@ public class ChatView extends ViewPart {
         boolean configured = settings.isConfigured();
         String title = configured ? "Чем помочь?" : "Модель не настроена";
         String text = configured
-                ? "Задайте вопрос модели " + settings.model() + ". Ctrl+Enter — отправить, Esc — остановить ответ."
+                ? "Задайте вопрос модели " + settings.model() + ". Enter — отправить, Shift+Enter — новая строка,"
+                        + " Esc — остановить ответ."
                 : "Укажите адрес сервера, протокол и модель в настройках EDT AI. Для локальной Ollama или"
                         + " LM Studio токен не нужен.";
         if (!title.equals(emptyTitle.getText()) || !text.equals(emptyText.getText())) {
@@ -450,7 +671,9 @@ public class ChatView extends ViewPart {
 
     private void updateStatus() {
         String text;
-        if (!settings.isConfigured()) {
+        if (notice != null) {
+            text = notice;
+        } else if (!settings.isConfigured()) {
             text = "Модель не настроена";
         } else {
             text = settings.model() + " · " + host(settings.baseUrl()) + (session.isBusy() ? " · генерирует ответ…" : "");
@@ -495,6 +718,10 @@ public class ChatView extends ViewPart {
     public void dispose() {
         session.removeListener(chatListener);
         session.cancel();
+        List<ChatMessage> messages = session.messages();
+        if (!messages.equals(saved)) {
+            saveHistory(messages);
+        }
         preferences().removePreferenceChangeListener(preferenceListener);
         super.dispose();
     }
@@ -503,6 +730,10 @@ public class ChatView extends ViewPart {
 
     ChatSession session() {
         return session;
+    }
+
+    ChatHistoryFile historyFile() {
+        return historyFile;
     }
 
     Composite control() {
@@ -521,10 +752,6 @@ public class ChatView extends ViewPart {
         return sendButton;
     }
 
-    Composite emptyState() {
-        return emptyState;
-    }
-
     boolean isEmptyStateShown() {
         return topLayout.topControl == emptyState;
     }
@@ -533,13 +760,25 @@ public class ChatView extends ViewPart {
         return status;
     }
 
-    /** Действие ссылки с текстом {@code text} в ленте или {@code null}. */
+    /** Действие ссылки с текстом {@code text} в ленте или {@code null}; если таких несколько — последней. */
     Runnable linkAction(String text) {
+        List<Runnable> actions = linkActions(text);
+        return actions.isEmpty() ? null : actions.get(actions.size() - 1);
+    }
+
+    /** Действия всех ссылок с текстом {@code text}, по порядку в ленте. */
+    List<Runnable> linkActions(String text) {
+        List<Runnable> actions = new ArrayList<>();
         for (StyleRange style : history.getStyleRanges()) {
             if (style.data instanceof Runnable action && history.getTextRange(style.start, style.length).equals(text)) {
-                return action;
+                actions.add(action);
             }
         }
-        return null;
+        return actions;
+    }
+
+    /** Есть ли у ленты фон кода в строке, где стоит {@code offset}. */
+    boolean hasCodeBackground(int offset) {
+        return isInCode(history.getOffsetAtLine(history.getLineAtOffset(offset)));
     }
 }

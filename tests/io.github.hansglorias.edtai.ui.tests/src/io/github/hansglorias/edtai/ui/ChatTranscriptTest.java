@@ -1,0 +1,302 @@
+package io.github.hansglorias.edtai.ui;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.jface.resource.JFaceResources;
+import org.eclipse.jface.text.IDocument;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.StyleRange;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.widgets.Event;
+import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.ide.IDE;
+import org.eclipse.ui.texteditor.ITextEditor;
+import org.eclipse.ui.texteditor.ITextEditorActionConstants;
+import org.junit.jupiter.api.Test;
+
+import io.github.hansglorias.edtai.core.chat.ChatRole;
+
+/**
+ * Лента этапа 3: Markdown, действия у сообщений и блоков кода, ввод,
+ * сохранение диалога.
+ */
+class ChatTranscriptTest extends AbstractChatTest {
+
+    private static final String CODE = "Процедура ПриСозданииНаСервере(Отказ, СтандартнаяОбработка)\n"
+            + "\tДата = ТекущаяДатаСеанса();\n"
+            + "КонецПроцедуры";
+    private static final String ANSWER = "## Получение даты\n\n"
+            + "Есть **два** способа:\n\n"
+            + "1. `ТекущаяДатаСеанса()` — с учётом *часового пояса*;\n"
+            + "2. `ТекущаяДата()` — время сервера, на клиенте лучше не использовать.\n\n"
+            + "| Функция | Где работает |\n|---|---|\n| ТекущаяДатаСеанса | сервер и клиент |\n| ТекущаяДата | сервер |\n\n"
+            + "```bsl\n" + CODE + "\n```\n\n"
+            + "> Часовой пояс сеанса задаётся в `УстановитьЧасовойПоясСеанса()`.\n\n"
+            + "Подробнее — в [документации](https://its.example.invalid/date).";
+
+    @Test
+    void markdownIsRendered() throws Exception {
+        answering(chunks(ANSWER, 17));
+        ChatView view = showView();
+
+        ask(view, "Как получить текущую дату?");
+
+        String text = view.history().getText();
+        assertTrue(text.contains("\nПолучение даты\n"), text);
+        assertFalse(text.contains("##") || text.contains("**") || text.contains("```"), text);
+        assertTrue(text.contains("1. ТекущаяДатаСеанса() — с учётом часового пояса;"), text);
+        assertTrue(text.contains("ТекущаяДатаСеанса │ сервер и клиент"), text);
+        assertTrue(text.contains("bsl   " + MessageRenderer.COPY + "   " + MessageRenderer.INSERT + "\n" + CODE), text);
+        assertTrue(text.contains("│ Часовой пояс сеанса"), text);
+
+        assertTrue((styleAt(view, "два").fontStyle & SWT.BOLD) != 0);
+        assertTrue((styleAt(view, "часового пояса").fontStyle & SWT.ITALIC) != 0);
+        assertEquals(JFaceResources.getHeaderFont(), styleAt(view, "Получение даты").font);
+        assertEquals(JFaceResources.getTextFont(), styleAt(view, "ТекущаяДата()").font);
+        assertNotNull(styleAt(view, "ТекущаяДата()").background);
+        assertEquals(JFaceResources.getTextFont(), styleAt(view, "Дата = ТекущаяДатаСеанса();").font);
+        StyleRange link = styleAt(view, "документации");
+        assertTrue(link.underline);
+        assertInstanceOf(Runnable.class, link.data);
+
+        assertTrue(view.hasCodeBackground(text.indexOf("Дата = ТекущаяДатаСеанса();")));
+        assertTrue(view.hasCodeBackground(text.indexOf("bsl   " + MessageRenderer.COPY)));
+        assertFalse(view.hasCodeBackground(text.indexOf("Есть два способа")));
+        assertFalse(view.hasCodeBackground(text.indexOf("Подробнее")));
+        Screenshots.capture(view.control(), "chat-markdown");
+
+        page.getWorkbenchWindow().getShell().setSize(420, 780);
+        settle();
+        Screenshots.capture(view.control(), "chat-narrow");
+    }
+
+    @Test
+    void copiesCodeAndAnswer() throws Exception {
+        answering(chunks(ANSWER, 40));
+        ChatView view = showView();
+        ask(view, "Пример?");
+
+        List<Runnable> copies = view.linkActions(MessageRenderer.COPY);
+        assertEquals(2, copies.size(), "у ответа и у блока кода");
+
+        copies.get(1).run();
+        assertEquals(CODE, clipboard());
+        assertEquals("Скопировано в буфер обмена", view.status().getText());
+
+        copies.get(0).run();
+        assertEquals(ANSWER, clipboard());
+    }
+
+    @Test
+    void insertsCodeIntoEditorWithUndo() throws Exception {
+        answering(chunks(ANSWER, 40));
+        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject("edtai-ui-test");
+        if (!project.exists()) {
+            project.create(null);
+        }
+        project.open(null);
+        IFile file = project.getFile("Module.txt");
+        if (file.exists()) {
+            file.delete(true, null);
+        }
+        file.create(new ByteArrayInputStream("Начало\n".getBytes(StandardCharsets.UTF_8)), true, null);
+        try {
+            IEditorPart editor = IDE.openEditor(page, file);
+            ITextEditor textEditor = assertInstanceOf(ITextEditor.class, editor);
+            textEditor.selectAndReveal("Начало\n".length(), 0);
+            IDocument document = textEditor.getDocumentProvider().getDocument(textEditor.getEditorInput());
+
+            ChatView view = (ChatView) page.showView(ChatView.ID);
+            ask(view, "Пример?");
+            view.linkAction(MessageRenderer.INSERT).run();
+
+            assertEquals("Начало\n" + CODE, document.get());
+            assertTrue(view.status().getText().startsWith("Код вставлен в Module.txt"), view.status().getText());
+            assertEquals(editor, page.getActivePart());
+
+            textEditor.getAction(ITextEditorActionConstants.UNDO).run();
+            assertEquals("Начало\n", document.get());
+        } finally {
+            page.closeAllEditors(false);
+            project.delete(true, true, null);
+        }
+    }
+
+    @Test
+    void insertWithoutEditorExplainsWhy() throws Exception {
+        answering(chunks(ANSWER, 40));
+        ChatView view = showView();
+        ask(view, "Пример?");
+
+        view.linkAction(MessageRenderer.INSERT).run();
+
+        assertEquals("Откройте модуль в редакторе, чтобы вставить код", view.status().getText());
+    }
+
+    @Test
+    void editReturnsMessageToInput() throws Exception {
+        answering(List.of("Ответ."));
+        ChatView view = showView();
+        ask(view, "первый вопрос");
+        ask(view, "второй вопрос");
+        assertEquals(2, view.linkActions(MessageRenderer.EDIT).size());
+
+        view.linkActions(MessageRenderer.EDIT).get(1).run();
+        settle();
+
+        assertEquals("второй вопрос", view.input().getText());
+        assertEquals(List.of(ChatRole.USER, ChatRole.ASSISTANT), view.session().messages().stream().map(m -> m.role()).toList());
+        assertFalse(view.history().getText().contains("второй вопрос"));
+
+        view.linkActions(MessageRenderer.EDIT).get(0).run();
+        settle();
+        assertEquals("первый вопрос", view.input().getText());
+        assertTrue(view.isEmptyStateShown());
+    }
+
+    @Test
+    void retryRegeneratesLastAnswer() throws Exception {
+        List<String> answers = new ArrayList<>(List.of("Первый ответ.", "Второй ответ."));
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
+                openAiPart(answers.remove(0)), "data: [DONE]\n\n"), 0));
+        configure(server);
+        ChatView view = showView();
+        ask(view, "вопрос");
+
+        view.linkAction(MessageRenderer.RETRY).run();
+        waitUntil(() -> view.history().getText().contains("Второй ответ.") && !view.session().isBusy());
+
+        assertFalse(view.history().getText().contains("Первый ответ."));
+        assertEquals(2, view.session().messages().size());
+    }
+
+    @Test
+    void enterSendsAndShiftEnterDoesNot() throws Exception {
+        answering(List.of("ок"));
+        ChatView view = showView();
+
+        view.input().setText("строка");
+        Event shiftEnter = key(SWT.CR, SWT.SHIFT);
+        view.onInputKey(shiftEnter);
+        assertTrue(shiftEnter.doit, "Shift+Enter — перевод строки в поле");
+        assertTrue(view.session().messages().isEmpty());
+
+        Event enter = key(SWT.CR, 0);
+        view.onInputKey(enter);
+        assertFalse(enter.doit);
+        assertEquals("", view.input().getText());
+        waitUntil(() -> !view.session().isBusy() && view.session().messages().size() == 2);
+        assertEquals("строка", view.session().messages().get(0).text());
+    }
+
+    @Test
+    void arrowsRecallSentMessages() throws Exception {
+        answering(List.of("ок"));
+        ChatView view = showView();
+        ask(view, "раз");
+        ask(view, "два");
+
+        assertEquals("два", press(view, SWT.ARROW_UP));
+        assertEquals("раз", press(view, SWT.ARROW_UP));
+        assertEquals("раз", press(view, SWT.ARROW_UP));
+        assertEquals("два", press(view, SWT.ARROW_DOWN));
+        assertEquals("", press(view, SWT.ARROW_DOWN));
+
+        view.input().setText("свой текст");
+        Event up = key(SWT.ARROW_UP, 0);
+        view.onInputKey(up);
+        assertTrue(up.doit, "в непустом поле стрелки двигают курсор");
+        assertEquals("свой текст", view.input().getText());
+    }
+
+    @Test
+    void inputGrowsWithText() throws Exception {
+        ChatView view = showView();
+        int empty = view.input().getSize().y;
+
+        view.input().setText("1\n2\n3\n4\n5\n6");
+        settle();
+        int six = view.input().getSize().y;
+        view.input().setText("строка\n".repeat(40));
+        settle();
+        int many = view.input().getSize().y;
+
+        assertTrue(six > empty, empty + " → " + six);
+        assertTrue(many > six, six + " → " + many);
+        assertTrue(many < view.input().getLineHeight() * 12, "не больше 10 строк: " + many);
+    }
+
+    @Test
+    void dialogSurvivesReopeningView() throws Exception {
+        answering(List.of("Запомнил."));
+        ChatView view = showView();
+        ask(view, "сохрани меня");
+        page.hideView(view);
+        assertTrue(Files.readString(historyFile()).contains("сохрани меня"));
+
+        ChatView reopened = showView();
+        settle();
+
+        assertTrue(reopened.history().getText().contains("сохрани меня"));
+        assertTrue(reopened.history().getText().contains("Запомнил."));
+        assertFalse(reopened.isEmptyStateShown());
+
+        reopened.session().clear();
+        settle();
+        assertTrue(reopened.isEmptyStateShown());
+        assertFalse(Files.readString(historyFile()).contains("сохрани меня"));
+    }
+
+    private static String press(ChatView view, int keyCode) {
+        view.onInputKey(key(keyCode, 0));
+        return view.input().getText();
+    }
+
+    private static Event key(int keyCode, int stateMask) {
+        Event event = new Event();
+        event.keyCode = keyCode;
+        event.stateMask = stateMask;
+        event.doit = true;
+        return event;
+    }
+
+    private static StyleRange styleAt(ChatView view, String fragment) {
+        int offset = view.history().getText().indexOf(fragment);
+        assertTrue(offset >= 0, fragment);
+        StyleRange style = view.history().getStyleRangeAtOffset(offset);
+        assertNotNull(style, "нет оформления у «" + fragment + "»");
+        return style;
+    }
+
+    private String clipboard() {
+        Clipboard clipboard = new Clipboard(page.getWorkbenchWindow().getShell().getDisplay());
+        try {
+            return (String) clipboard.getContents(TextTransfer.getInstance());
+        } finally {
+            clipboard.dispose();
+        }
+    }
+
+    /** Ответ частями по {@code size} символов, как при стриминге. */
+    private static List<String> chunks(String text, int size) {
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < text.length(); i += size) {
+            parts.add(text.substring(i, Math.min(text.length(), i + size)));
+        }
+        return parts;
+    }
+}

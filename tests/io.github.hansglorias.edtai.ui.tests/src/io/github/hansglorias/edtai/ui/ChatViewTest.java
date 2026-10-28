@@ -6,41 +6,25 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
 
-import org.eclipse.core.runtime.ILogListener;
-import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.Platform;
 import org.eclipse.jface.preference.PreferenceDialog;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
-import org.eclipse.ui.IViewPart;
-import org.eclipse.ui.IWorkbenchPage;
-import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.dialogs.PreferencesUtil;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.settings.AiSettings;
-import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 /**
  * Вид чата и страница настроек в живом workbench против фейкового сервера
  * модели. Снимки состояний — в {@code target/screenshots}.
  */
-class ChatViewTest {
+class ChatViewTest extends AbstractChatTest {
 
     private static final long TIMEOUT_MS = 15_000;
     private static final String QUESTION = "Как получить текущую дату на сервере?";
@@ -48,38 +32,6 @@ class ChatViewTest {
             "На сервере используйте ", "`ТекущаяДатаСеанса()`", " — она учитывает часовой пояс сеанса.\n\n",
             "```bsl\n", "Дата = ТекущаяДатаСеанса();\n", "```\n\n",
             "`ТекущаяДата()` возвращает время компьютера сервера, ", "её лучше не использовать.");
-
-    private IWorkbenchPage page;
-    private FakeModelServer server;
-    /** Ошибки, попавшие в лог Eclipse во время теста: например, исключения в цикле событий UI. */
-    private final List<IStatus> loggedErrors = new CopyOnWriteArrayList<>();
-    private final ILogListener logListener = (status, plugin) -> {
-        if (status.matches(IStatus.ERROR)) {
-            loggedErrors.add(status);
-        }
-    };
-
-    @BeforeEach
-    void setUp() throws Exception {
-        page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
-        page.getWorkbenchWindow().getShell().setBounds(0, 0, 720, 780);
-        SettingsStore.workspace().save(AiSettings.defaults());
-        Platform.addLogListener(logListener);
-    }
-
-    @AfterEach
-    void tearDown() throws Exception {
-        IViewPart view = page.findView(ChatView.ID);
-        if (view != null) {
-            page.hideView(view);
-        }
-        if (server != null) {
-            server.close();
-        }
-        SettingsStore.workspace().save(AiSettings.defaults());
-        Platform.removeLogListener(logListener);
-        assertEquals(List.of(), loggedErrors.stream().map(ChatViewTest::describe).toList());
-    }
 
     @Test
     void notConfiguredShowsHint() throws Exception {
@@ -123,13 +75,14 @@ class ChatViewTest {
         Screenshots.capture(view.control(), "chat-streaming");
 
         release.countDown();
-        waitUntil(() -> !view.session().isBusy() && view.history().getText().endsWith("её лучше не использовать."));
+        waitUntil(() -> !view.session().isBusy() && view.history().getText().contains("её лучше не использовать."));
         waitUntil(() -> ChatView.SEND.equals(view.sendButton().getText()));
         String text = view.history().getText();
         assertTrue(text.startsWith("Вы  "), text);
         assertTrue(text.contains(QUESTION));
         assertTrue(text.contains("Ассистент  "));
-        assertTrue(text.contains(String.join("", ANSWER)));
+        assertTrue(text.contains("На сервере используйте ТекущаяДатаСеанса() — она учитывает часовой пояс сеанса.\n\n"
+                + "bsl   Копировать   Вставить в редактор\nДата = ТекущаяДатаСеанса();\n\nТекущаяДата() возвращает"), text);
         assertFalse(text.contains("пишет…"));
         assertTrue(server.requests().get(0).body().contains(QUESTION));
         Screenshots.capture(view.control(), "chat-answer");
@@ -154,7 +107,7 @@ class ChatViewTest {
 
         view.input().setText(QUESTION);
         view.send();
-        waitUntil(() -> view.history().getText().contains("строка 79\n"));
+        waitUntil(() -> view.history().getText().contains("строка 79"));
         waitUntil(() -> view.history().getTopPixel() > 0 && isLastLineVisible(view), () -> "top=" + view.history().getTopPixel());
 
         // Пользователь прокрутил вверх, чтобы перечитать: новые строки не должны его сдёргивать.
@@ -286,49 +239,5 @@ class ChatViewTest {
             dialog.close();
         }
         assertEquals(AiSettings.defaults(), SettingsStore.workspace().load());
-    }
-
-    private ChatView showView() throws Exception {
-        ChatView view = assertInstanceOf(ChatView.class, page.showView(ChatView.ID));
-        page.setPartState(page.getReference(view), IWorkbenchPage.STATE_MAXIMIZED);
-        return view;
-    }
-
-    private static void configure(FakeModelServer server) throws Exception {
-        SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, false, "",
-                new ArrayList<>()));
-    }
-
-    private static String describe(IStatus status) {
-        StringWriter out = new StringWriter();
-        out.append(status.getMessage());
-        if (status.getException() != null) {
-            status.getException().printStackTrace(new PrintWriter(out));
-        }
-        return out.toString();
-    }
-
-    private static String openAiPart(String text) {
-        String escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
-        return "data: {\"choices\":[{\"delta\":{\"content\":\"" + escaped + "\"}}]}\n\n";
-    }
-
-    private static void waitUntil(BooleanSupplier condition) {
-        waitUntil(condition, () -> "");
-    }
-
-    /** @param state что показать в сообщении, если не дождались */
-    private static void waitUntil(BooleanSupplier condition, Supplier<String> state) {
-        Display display = Display.getCurrent();
-        long deadline = System.currentTimeMillis() + TIMEOUT_MS;
-        while (!condition.getAsBoolean()) {
-            if (System.currentTimeMillis() > deadline) {
-                throw new AssertionError("Не дождались условия за " + TIMEOUT_MS + " мс. Состояние: " + state.get());
-            }
-            if (!display.readAndDispatch()) {
-                display.timerExec(20, () -> { });
-                display.sleep();
-            }
-        }
     }
 }
