@@ -82,7 +82,7 @@ class ChatToolsTest extends AbstractChatTest {
 
         Map<String, Object> first = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(first.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
-        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "git_status", "git_diff", "git_log"), names);
+        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "git_status", "git_diff", "git_log"), names);
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
         String result = Json.stringAt(messages.get(messages.size() - 1), "content");
         assertTrue(result.contains("ОбщийМодуль.Тест.Модуль (проект " + PROJECT + ", src/CommonModules/Тест/Module.bsl)"), result);
@@ -110,6 +110,32 @@ class ChatToolsTest extends AbstractChatTest {
 
         assertNull(Json.parseObject(server.requests().get(0).body()).get("tools"));
         assertFalse(view.history().getText().contains(MessageRenderer.TOOL));
+    }
+
+    @Test
+    void modelEditsModuleAndFileIsSaved() throws Exception {
+        String arguments = Json.write(Json.object("module", "ОбщийМодуль.Тест", "old_text", "\tСообщить(\"Тест\");",
+                "new_text", "\tСообщить(\"Изменено\");"));
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
+                        + "\"function\":{\"name\":\"edit_module\",\"arguments\":" + Json.write(arguments) + "}}]}}]}\n\n",
+                        "data: [DONE]\n\n"), 5);
+            } else {
+                response.sse(List.of(openAiPart("Поправил."), "data: [DONE]\n\n"), 5);
+            }
+        });
+        configure(server);
+        ChatView view = showView();
+
+        ask(view, "Поменяй текст сообщения");
+
+        IFile file = project.getFile("src/CommonModules/Тест/Module.bsl");
+        try (var in = file.getContents()) {
+            assertEquals(CODE.replace("\"Тест\");", "\"Изменено\");"), new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        }
+        assertTrue(view.history().getText().contains(MessageRenderer.TOOL + "Правит модуль ОбщийМодуль.Тест — строка 2"),
+                view.history().getText());
     }
 
     @Test
