@@ -15,13 +15,27 @@ final class StreamState {
     private final StringBuilder text = new StringBuilder();
     private final Map<Integer, Builder> calls = new TreeMap<>();
     private final Consumer<String> onText;
+    private final ThinkFilter thinking = new ThinkFilter();
+    private boolean truncated;
 
     StreamState(Consumer<String> onText) {
         this.onText = onText;
     }
 
+    /** Часть текста; рассуждения {@code <think>…</think>} не показываются и не сохраняются. */
     void text(String part) {
         if (part != null && !part.isEmpty()) {
+            visible(thinking.feed(part));
+        }
+    }
+
+    /** Ответ оборвался по лимиту длины (max_tokens). */
+    void truncated() {
+        truncated = true;
+    }
+
+    private void visible(String part) {
+        if (!part.isEmpty()) {
             text.append(part);
             onText.accept(part);
         }
@@ -42,6 +56,7 @@ final class StreamState {
     }
 
     ModelReply reply() {
+        visible(thinking.finish());
         List<ToolCall> result = new ArrayList<>();
         for (Map.Entry<Integer, Builder> entry : calls.entrySet()) {
             Builder call = entry.getValue();
@@ -49,7 +64,7 @@ final class StreamState {
                 result.add(new ToolCall(call.id != null ? call.id : "call_" + entry.getKey(), call.name, call.arguments.toString()));
             }
         }
-        return new ModelReply(text.toString(), result);
+        return new ModelReply(ThinkFilter.strip(text.toString()), result, truncated);
     }
 
     private static final class Builder {

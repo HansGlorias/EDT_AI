@@ -73,6 +73,12 @@ final class AnthropicAdapter extends ProtocolAdapter {
                 }
                 return false;
             }
+            case "message_delta" -> {
+                if ("max_tokens".equals(Json.stringAt(json, "delta", "stop_reason"))) {
+                    state.truncated();
+                }
+                return false;
+            }
             case "message_stop" -> {
                 return true;
             }
@@ -106,7 +112,7 @@ final class AnthropicAdapter extends ProtocolAdapter {
                 calls.add(new ToolCall(Json.stringAt(block, "id"), Json.stringAt(block, "name"), input == null ? "{}" : Json.write(input)));
             }
         }
-        return new ModelReply(text.toString(), calls);
+        return new ModelReply(ThinkFilter.strip(text.toString()), calls, "max_tokens".equals(Json.stringAt(json, "stop_reason")));
     }
 
     @Override
