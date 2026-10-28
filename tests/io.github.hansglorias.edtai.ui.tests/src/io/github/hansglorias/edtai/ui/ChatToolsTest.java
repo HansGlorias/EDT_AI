@@ -2,6 +2,7 @@ package io.github.hansglorias.edtai.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,6 +17,9 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.ActionContributionItem;
+import org.eclipse.jface.action.IContributionItem;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -78,7 +82,7 @@ class ChatToolsTest extends AbstractChatTest {
 
         Map<String, Object> first = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(first.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
-        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code"), names);
+        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "git_status", "git_diff", "git_log"), names);
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
         String result = Json.stringAt(messages.get(messages.size() - 1), "content");
         assertTrue(result.contains("ОбщийМодуль.Тест.Модуль (проект " + PROJECT + ", src/CommonModules/Тест/Module.bsl)"), result);
@@ -106,6 +110,26 @@ class ChatToolsTest extends AbstractChatTest {
 
         assertNull(Json.parseObject(server.requests().get(0).body()).get("tools"));
         assertFalse(view.history().getText().contains(MessageRenderer.TOOL));
+    }
+
+    @Test
+    void reviewMenuSendsPrompt() throws Exception {
+        answering(List.of("Изменений нет."));
+        SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, "", 0, true, false, "",
+                new ArrayList<>()));
+        ChatView view = showView();
+
+        Action review = null;
+        for (IContributionItem item : view.getViewSite().getActionBars().getMenuManager().getItems()) {
+            if (item instanceof ActionContributionItem action && ChatView.REVIEW_CHANGES.equals(action.getAction().getText())) {
+                review = (Action) action.getAction();
+            }
+        }
+        assertNotNull(review, "пункт меню вида");
+        review.run();
+        waitUntil(() -> !view.session().isBusy() && view.session().messages().size() == 2);
+
+        assertEquals(ChatView.REVIEW_PROMPT, view.session().messages().get(0).text());
     }
 
     private void createFile(String path, String text) throws Exception {
