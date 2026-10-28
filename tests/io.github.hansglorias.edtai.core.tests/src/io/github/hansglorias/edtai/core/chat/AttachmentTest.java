@@ -1,0 +1,57 @@
+package io.github.hansglorias.edtai.core.chat;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+
+class AttachmentTest {
+
+    @Test
+    void imagesByExtensionTextOtherwise() {
+        byte[] png = { (byte) 0x89, 'P', 'N', 'G', 0, 1, 2 };
+        Attachment image = Attachment.file("Форма.PNG", png);
+        assertTrue(image.isImage());
+        assertEquals("image/png", image.mediaType());
+        assertEquals(Base64.getEncoder().encodeToString(png), image.data());
+        assertEquals("image/jpeg", Attachment.file("a.jpg", png).mediaType());
+        assertEquals("[Приложено изображение: Форма.PNG]", image.promptText());
+
+        byte[] utf8 = ("﻿Ошибка\r\nстрока 2").getBytes(StandardCharsets.UTF_8);
+        Attachment log = Attachment.file("log.txt", utf8);
+        assertFalse(log.isImage());
+        assertEquals("Ошибка\nстрока 2", log.data(), "без BOM, переводы строк — \\n");
+        assertEquals("log.txt, 2 строки", log.label());
+
+        assertEquals("Выгрузка", Attachment.file("old.xml", "Выгрузка".getBytes(Charset.forName("windows-1251"))).data(),
+                "старые файлы 1С — в Windows-1251");
+        IllegalArgumentException binary = assertThrows(IllegalArgumentException.class,
+                () -> Attachment.file("base.1cd", new byte[] { 1, 0, 2, 0 }));
+        assertEquals("«base.1cd» — не текст и не картинка (PNG, JPEG, GIF, WebP)", binary.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> Attachment.png("big.png", new byte[Attachment.MAX_IMAGE_BYTES + 1]));
+        assertThrows(IllegalArgumentException.class, () -> Attachment.file("big.txt", "а".repeat(Attachment.MAX_TEXT_CHARS + 1)
+                .getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void textGoesToPromptInFence() {
+        Attachment file = Attachment.file("readme.md", "Пример:\n```bsl\nА = 1;\n```\n".getBytes(StandardCharsets.UTF_8));
+        assertEquals("Файл readme.md:\n````\nПример:\n```bsl\nА = 1;\n```\n````", file.promptText());
+        assertEquals("readme.md, 4 строки", file.label());
+        assertEquals("one.txt, 1 строка", Attachment.file("one.txt", "x".getBytes(StandardCharsets.UTF_8)).label());
+        assertEquals("shot.png, 1 КБ", Attachment.png("shot.png", new byte[300]).label());
+
+        ChatMessage question = new ChatMessage(ChatRole.USER, "Что не так?", java.time.Instant.EPOCH, ChatMessage.Status.DONE,
+                List.of(), List.of(), List.of(Attachment.png("shot.png", new byte[3]), file));
+        assertEquals(List.of("shot.png"), question.images().stream().map(Attachment::name).toList());
+        assertTrue(question.modelText().startsWith("[Приложено изображение: shot.png]\n\nФайл readme.md:"), question.modelText());
+        assertTrue(question.modelText().endsWith("````\n\nЧто не так?"), question.modelText());
+    }
+}

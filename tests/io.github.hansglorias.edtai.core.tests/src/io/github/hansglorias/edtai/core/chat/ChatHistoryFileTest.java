@@ -37,6 +37,19 @@ class ChatHistoryFileTest {
     }
 
     @Test
+    void savesAndLoadsAttachments() throws Exception {
+        List<ChatMessage> messages = List.of(new ChatMessage(ChatRole.USER, "что на скриншоте", Instant.parse("2026-10-28T09:00:00Z"),
+                Status.DONE, List.of(), List.of(), List.of(Attachment.png("shot.png", new byte[] { 1, 2, 3 }),
+                        Attachment.file("log.txt", "строка".getBytes(java.nio.charset.StandardCharsets.UTF_8)))));
+        ChatHistoryFile file = new ChatHistoryFile(temp.resolve("chat.json"));
+
+        file.save(messages);
+
+        assertEquals(messages, file.load());
+        assertTrue(Files.readString(file.path()).contains("\"mediaType\":\"image/png\""));
+    }
+
+    @Test
     void savesAndLoadsContext() throws Exception {
         ContextItem lines = ContextItem.of("Демо", "src/CommonModules/Цены/Module.bsl", 10, 12, 40, "А = 1;\nБ = 2;\nВ = 3;")
                 .truncate(13);

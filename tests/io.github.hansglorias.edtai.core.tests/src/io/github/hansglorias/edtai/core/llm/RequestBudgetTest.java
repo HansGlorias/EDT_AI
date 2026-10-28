@@ -11,10 +11,12 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
+import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
@@ -43,6 +45,30 @@ class RequestBudgetTest {
     }
 
     @Test
+    void imagesGoAsBlocksInBothProtocolsAndCostFixed() {
+        Attachment shot = Attachment.png("shot.png", new byte[30_000]);
+        List<ChatMessage> history = List.of(new ChatMessage(ChatRole.USER, "Что за ошибка?", java.time.Instant.EPOCH,
+                ChatMessage.Status.DONE, List.of(), List.of(), List.of(shot)));
+
+        Object anthropic = new AnthropicAdapter().messages(history).get(0);
+        assertEquals("image", Json.stringAt(anthropic, "content", 0, "type"));
+        assertEquals("image/png", Json.stringAt(anthropic, "content", 0, "source", "media_type"));
+        assertEquals(shot.data(), Json.stringAt(anthropic, "content", 0, "source", "data"));
+        assertEquals("[Приложено изображение: shot.png]\n\nЧто за ошибка?", Json.stringAt(anthropic, "content", 1, "text"));
+        Object openAi = new OpenAiAdapter().messages(history).get(0);
+        assertEquals("image_url", Json.stringAt(openAi, "content", 0, "type"));
+        assertTrue(Json.stringAt(openAi, "content", 0, "image_url", "url").startsWith("data:image/png;base64,AAAA"));
+        assertTrue(Json.at(new OpenAiAdapter().messages(List.of(user("Что за ошибка?", code(0)))).get(0), "content") instanceof String,
+                "без картинок — строка, как раньше");
+
+        ModelConnection connection = connection(0, 100_000);
+        int withImage = RequestBudget.size(connection, history, List.of(), List.of());
+        int withoutImage = RequestBudget.size(connection, List.of(history.get(0).withAttachments(List.of())), List.of(), List.of());
+        assertTrue(withImage - withoutImage < RequestBudget.IMAGE_CHARS + 500, "картинка — по фиксированной цене, не по base64");
+        assertTrue(withImage - withoutImage > RequestBudget.IMAGE_CHARS - 500);
+    }
+
+    @Test
     void fittingHistoryIsUntouched() {
         List<ChatMessage> history = List.of(user("Вопрос", code(100)), assistant("Ответ"));
         RequestBudget.Fitted fitted = RequestBudget.fit(history, RequestBudgetTest::size, 1000);
@@ -65,8 +91,8 @@ class RequestBudgetTest {
         RequestBudget.Fitted dropped = RequestBudget.fit(history, RequestBudgetTest::size, 310);
         assertEquals(4, dropped.dropped());
         assertEquals(List.of("Третий"), dropped.history().stream().map(ChatMessage::text).toList());
-        assertEquals("Диалог длиннее окна модели — модель не видит самые старые сообщения (4) и прикреплённый к старым сообщениям"
-                + " код (2). Начните новый чат или увеличьте «Окно модели» в настройках", dropped.notice().label());
+        assertEquals("Диалог длиннее окна модели — модель не видит самые старые сообщения (4) и прикреплённые к старым сообщениям"
+                + " код и файлы (2). Начните новый чат или увеличьте «Окно модели» в настройках", dropped.notice().label());
     }
 
     @Test

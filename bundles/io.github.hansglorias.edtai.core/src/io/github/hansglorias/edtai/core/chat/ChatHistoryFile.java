@@ -21,7 +21,8 @@ import io.github.hansglorias.edtai.core.json.JsonException;
  * Диалог в JSON-файле: чтобы он переживал перезапуск EDT.
  *
  * <p>Формат: {@code {"version":1,"messages":[{"role":"USER","status":"DONE","time":"…","text":"…","context":[…]}]}}.
- * Поля {@code context} (фрагменты кода сообщения) и {@code tools} (вызовы
+ * Поля {@code context} (фрагменты кода сообщения), {@code attachments}
+ * (файлы и скриншоты, картинки — в base64) и {@code tools} (вызовы
  * инструментов в ответе) необязательные: файлы без них читаются как есть.
  */
 public final class ChatHistoryFile {
@@ -72,6 +73,13 @@ public final class ChatHistoryFile {
                 }
                 item.put("context", context);
             }
+            if (!message.attachments().isEmpty()) {
+                List<Object> files = new ArrayList<>();
+                for (Attachment file : message.attachments()) {
+                    files.add(Json.object("name", file.name(), "mediaType", file.mediaType(), "data", file.data()));
+                }
+                item.put("attachments", files);
+            }
             if (!message.tools().isEmpty()) {
                 List<Object> tools = new ArrayList<>();
                 for (ToolUse use : message.tools()) {
@@ -105,7 +113,8 @@ public final class ChatHistoryFile {
                 String status = Json.stringAt(item, "status");
                 String time = Json.stringAt(item, "time");
                 messages.add(new ChatMessage(ChatRole.valueOf(role), body, time == null ? Instant.EPOCH : Instant.parse(time),
-                        status == null ? ChatMessage.Status.DONE : ChatMessage.Status.valueOf(status), context(item), tools(item)));
+                        status == null ? ChatMessage.Status.DONE : ChatMessage.Status.valueOf(status), context(item), tools(item),
+                        attachments(item)));
             }
             return messages;
         } catch (JsonException | IllegalArgumentException | DateTimeParseException e) {
@@ -141,6 +150,20 @@ public final class ChatHistoryFile {
                     Json.at(use, "at") instanceof Number at ? at.intValue() : -1));
         }
         return tools;
+    }
+
+    private static List<Attachment> attachments(Object message) throws IOException {
+        List<Attachment> files = new ArrayList<>();
+        for (Object file : Json.asList(Json.at(message, "attachments"))) {
+            String name = Json.stringAt(file, "name");
+            String type = Json.stringAt(file, "mediaType");
+            String data = Json.stringAt(file, "data");
+            if (name == null || type == null || data == null) {
+                throw new IOException("В сохранённом вложении нет имени, типа или данных");
+            }
+            files.add(new Attachment(name, type, data));
+        }
+        return files;
     }
 
     private static int number(Object part, String key) {

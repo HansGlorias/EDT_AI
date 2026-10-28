@@ -14,13 +14,15 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.context.ContextPrompt;
 
 /**
  * Панель над полем ввода: прикреплённые фрагменты, по одному в строку
- * (переносятся при узком виде). Подпись — ссылка, открывает файл на этих
- * строках; «×» — убрать. Панели нет, когда фрагментов нет.
+ * (переносятся при узком виде), и приложенные файлы и скриншоты. Подпись
+ * фрагмента — ссылка, открывает файл на этих строках; «×» — убрать. Панели
+ * нет, когда ничего не прикреплено.
  */
 final class ContextBar {
 
@@ -38,6 +40,7 @@ final class ContextBar {
     private final Composite bar;
     private final Callbacks callbacks;
     private final List<AttachedContext> items = new ArrayList<>();
+    private final List<Attachment> files = new ArrayList<>();
     private final List<Link> chips = new ArrayList<>();
     private int limit;
 
@@ -96,9 +99,31 @@ final class ContextBar {
         }
     }
 
+    /** @return {@code false}, если этот файл уже приложен */
+    boolean add(Attachment file) {
+        if (files.contains(file)) {
+            return false;
+        }
+        files.add(file);
+        refresh();
+        return true;
+    }
+
+    void remove(Attachment file) {
+        if (files.remove(file)) {
+            refresh();
+        }
+    }
+
+    /** Приложенные файлы и скриншоты. */
+    List<Attachment> attachments() {
+        return List.copyOf(files);
+    }
+
     void clear() {
         items.forEach(AttachedContext::dispose);
         items.clear();
+        files.clear();
         refresh();
     }
 
@@ -107,7 +132,7 @@ final class ContextBar {
     }
 
     boolean isEmpty() {
-        return items.isEmpty();
+        return items.isEmpty() && files.isEmpty();
     }
 
     /** Фрагменты сейчас, обрезанные по лимиту. */
@@ -155,12 +180,20 @@ final class ContextBar {
             chip.setData(label);
             chips.add(chip);
         }
+        for (Attachment file : files) {
+            Link chip = new Link(bar, SWT.NONE);
+            chip.setText(escape(file.label()) + " <a href=\"" + HREF_REMOVE + "\">" + REMOVE + "</a>");
+            chip.setToolTipText(file.isImage() ? "Картинка: модель получит её изображением" : "Текст файла уйдёт модели целиком");
+            chip.addListener(SWT.Selection, event -> chip.getDisplay().asyncExec(() -> remove(file)));
+            chip.setData(file.label());
+            chips.add(chip);
+        }
         updateVisibility();
         callbacks.changed();
     }
 
     private void updateVisibility() {
-        boolean visible = !items.isEmpty();
+        boolean visible = !isEmpty();
         bar.setVisible(visible);
         ((GridData) bar.getLayoutData()).exclude = !visible;
     }

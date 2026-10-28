@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.ui;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.net.URI;
@@ -64,10 +65,18 @@ import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.DND;
+import org.eclipse.swt.dnd.DropTarget;
+import org.eclipse.swt.dnd.DropTargetAdapter;
+import org.eclipse.swt.dnd.DropTargetEvent;
+import org.eclipse.swt.dnd.FileTransfer;
+import org.eclipse.swt.dnd.ImageTransfer;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Cursor;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.Button;
@@ -94,6 +103,7 @@ import org.eclipse.ui.texteditor.ITextEditor;
 import org.eclipse.ui.texteditor.ITextEditorExtension2;
 import org.osgi.framework.FrameworkUtil;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatHistoryFile;
 import io.github.hansglorias.edtai.core.chat.ChatListener;
 import io.github.hansglorias.edtai.core.chat.ChatMarkdown;
@@ -160,6 +170,9 @@ public class ChatView extends ViewPart {
             + " проекте тесты и на чём: YAxUnit (общие модули с ИсполняемыеСценарии), Vanessa Automation (feature-файлы) —"
             + " пиши в том же стиле и скажи, куда положить. Тестов нет — на YAxUnit. Покрой обычный сценарий, граничные"
             + " случаи и ошибки. Модули тестов не создавай и не меняй — покажи код в ответе.";
+    /** Файлы больше не читаем: картинка всё равно не пройдёт, текст — тоже. */
+    private static final long MAX_FILE_BYTES = 10_000_000;
+    private static final DateTimeFormatter SCREENSHOT_TIME = DateTimeFormatter.ofPattern("HHmmss");
     /** Придумывать ли название чата после первого ответа (запрос к модели). Хранится в настройках рабочей области. */
     static final String GENERATE_TITLES = "generateChatTitles";
 
@@ -603,7 +616,7 @@ public class ChatView extends ViewPart {
     private void createInput(Composite parent) {
         Composite bottom = new Composite(parent, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(bottom);
-        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(bottom);
+        GridLayoutFactory.fillDefaults().numColumns(3).applyTo(bottom);
 
         input = new Text(bottom, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.BORDER);
         input.setMessage("Сообщение (Enter — отправить, Shift+Enter — новая строка)");
@@ -622,6 +635,27 @@ public class ChatView extends ViewPart {
         input.addListener(SWT.FocusIn, event -> {
             if (!contextBar.isEmpty()) {
                 contextBar.refresh();
+            }
+        });
+
+        Button attachButton = new Button(bottom, SWT.PUSH);
+        attachButton.setImage(PlatformUI.getWorkbench().getSharedImages().getImage(ISharedImages.IMG_OBJ_FILE));
+        attachButton.setToolTipText("Приложить файлы или скриншоты (картинку можно вставить в поле Ctrl+V или перетащить файл)");
+        GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).applyTo(attachButton);
+        attachButton.addListener(SWT.Selection, event -> chooseFiles());
+        DropTarget drop = new DropTarget(input, DND.DROP_COPY | DND.DROP_DEFAULT);
+        drop.setTransfer(FileTransfer.getInstance());
+        drop.addDropListener(new DropTargetAdapter() {
+            @Override
+            public void dragEnter(DropTargetEvent event) {
+                event.detail = DND.DROP_COPY;
+            }
+
+            @Override
+            public void drop(DropTargetEvent event) {
+                if (event.data instanceof String[] paths) {
+                    attachFiles(List.of(paths));
+                }
             }
         });
 
@@ -733,7 +767,7 @@ public class ChatView extends ViewPart {
                     showNotice("Дождитесь ответа или остановите его");
                     return;
                 }
-                session.send(text, contextBar.snapshot());
+                session.send(text, contextBar.snapshot(), contextBar.attachments());
                 contextBar.clear();
             }
         };
@@ -1159,6 +1193,12 @@ public class ChatView extends ViewPart {
         if (inputAssist != null && inputAssist.isOpen()) {
             return; // Enter, Esc и стрелки — списку подсказок
         }
+        boolean paste = (event.stateMask & SWT.MOD1) != 0 && (event.keyCode == 'v' || event.keyCode == 'V')
+                || (event.stateMask & SWT.SHIFT) != 0 && event.keyCode == SWT.INSERT;
+        if (paste && pasteAttachments()) {
+            event.doit = false;
+            return;
+        }
         boolean enter = event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR;
         if (enter && (event.stateMask & SWT.SHIFT) == 0) {
             event.doit = false;
@@ -1271,7 +1311,7 @@ public class ChatView extends ViewPart {
         }
         List<ContextItem> context = contextBar.snapshot();
         input.setText("");
-        session.send(text, context);
+        session.send(text, context, contextBar.attachments());
         contextBar.clear();
     }
 
@@ -1299,6 +1339,86 @@ public class ChatView extends ViewPart {
         }
         showNotice(on ? "Авторежим включён: инструменты MCP вызываются без вопроса"
                 : "Авторежим выключен: перед вызовом инструмента MCP — вопрос");
+    }
+
+    /** Диалог выбора файлов: картинки и текстовые файлы. */
+    private void chooseFiles() {
+        FileDialog dialog = new FileDialog(getSite().getShell(), SWT.OPEN | SWT.MULTI);
+        dialog.setText("Приложить файлы");
+        dialog.setFilterExtensions(new String[] { "*.*", "*.png;*.jpg;*.jpeg;*.gif;*.webp" });
+        dialog.setFilterNames(new String[] { "Все файлы", "Картинки" });
+        if (dialog.open() != null) {
+            List<String> paths = new ArrayList<>();
+            for (String name : dialog.getFileNames()) {
+                paths.add(Path.of(dialog.getFilterPath(), name).toString());
+            }
+            attachFiles(paths);
+        }
+    }
+
+    /** Прикладывает файлы с диска; что не вышло — в строке состояния. */
+    void attachFiles(List<String> paths) {
+        List<String> problems = new ArrayList<>();
+        for (String name : paths) {
+            Path path = Path.of(name);
+            try {
+                if (Files.isDirectory(path)) {
+                    problems.add("«" + path.getFileName() + "» — папка");
+                    continue;
+                }
+                if (Files.size(path) > MAX_FILE_BYTES) {
+                    problems.add("«" + path.getFileName() + "» больше " + MAX_FILE_BYTES / 1_000_000 + " МБ");
+                    continue;
+                }
+                contextBar.add(Attachment.file(path.getFileName().toString(), Files.readAllBytes(path)));
+            } catch (IllegalArgumentException e) {
+                problems.add(e.getMessage());
+            } catch (IOException e) {
+                problems.add("«" + path.getFileName() + "» не прочитать: " + e.getMessage());
+            }
+        }
+        if (!problems.isEmpty()) {
+            showNotice(String.join("; ", problems));
+        }
+        input.setFocus();
+    }
+
+    /**
+     * Ctrl+V в поле ввода: картинка из буфера (скриншот) или скопированные
+     * в проводнике файлы прикладываются; текст вставляется как обычно.
+     *
+     * @return {@code true}, если в буфере была картинка или файлы
+     */
+    boolean pasteAttachments() {
+        Clipboard clipboard = new Clipboard(input.getDisplay());
+        try {
+            if (clipboard.getContents(FileTransfer.getInstance()) instanceof String[] paths && paths.length > 0) {
+                attachFiles(List.of(paths));
+                return true;
+            }
+            if (clipboard.getContents(ImageTransfer.getInstance()) instanceof ImageData image) {
+                attachImage(image);
+                return true;
+            }
+            return false;
+        } finally {
+            clipboard.dispose();
+        }
+    }
+
+    /** Скриншот из буфера — в PNG. */
+    void attachImage(ImageData image) {
+        ImageLoader loader = new ImageLoader();
+        loader.data = new ImageData[] { image };
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        loader.save(png, SWT.IMAGE_PNG);
+        String name = "скриншот-" + LocalDateTime.now().format(SCREENSHOT_TIME) + ".png";
+        try {
+            contextBar.add(Attachment.png(name, png.toByteArray()));
+        } catch (IllegalArgumentException e) {
+            showNotice(e.getMessage());
+        }
+        input.setFocus();
     }
 
     /** Код из активного редактора — выделение или метод под курсором, как по Ctrl+Alt+A; нет редактора — ничего. */
@@ -1412,6 +1532,7 @@ public class ChatView extends ViewPart {
         input.setSelection(message.text().length());
         contextBar.clear();
         message.context().forEach(item -> contextBar.add(AttachedContext.fromItem(item)));
+        message.attachments().forEach(contextBar::add);
         input.setFocus();
     }
 
@@ -1696,7 +1817,7 @@ public class ChatView extends ViewPart {
         String title = configured ? "Чем помочь?" : "Модель не настроена";
         String text = configured
                 ? "Задайте вопрос модели " + settings.model() + ". Enter — отправить, Shift+Enter — новая строка,"
-                        + " Esc — остановить ответ. Чтобы спросить о коде, выделите его в модуле и нажмите Ctrl+Alt+A."
+                        + " Esc — остановить ответ. Чтобы спросить о коде, выделите его в модуле и нажмите Ctrl+Alt+A. Скриншот — Ctrl+V в поле ввода, файлы — кнопкой рядом с ним или перетаскиванием."
                 : "Укажите адрес сервера, протокол и модель в настройках EDT AI. Для локальной Ollama или"
                         + " LM Studio токен не нужен.";
         if (!title.equals(emptyTitle.getText()) || !text.equals(emptyText.getText())) {

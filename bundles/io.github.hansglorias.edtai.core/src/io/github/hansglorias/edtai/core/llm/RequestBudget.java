@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ToIntFunction;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
@@ -35,8 +36,18 @@ final class RequestBudget {
 
     /** Размер тела запроса в символах. */
     static int size(ModelConnection connection, List<ChatMessage> history, List<Object> extra, List<Tool> tools) {
-        return Json.write(ProtocolAdapter.of(connection.protocol()).body(connection, history, extra, tools)).length();
+        int size = Json.write(ProtocolAdapter.of(connection.protocol()).body(connection, history, extra, tools)).length();
+        // Картинка стоит не по длине base64, а по числу пикселей: скриншот — порядка 1,5 тыс. токенов.
+        for (ChatMessage message : history) {
+            for (Attachment image : message.images()) {
+                size += IMAGE_CHARS - image.data().length();
+            }
+        }
+        return size;
     }
+
+    /** Сколько символов считать за картинку. */
+    static final int IMAGE_CHARS = 1600 * CHARS_PER_TOKEN;
 
     /**
      * Что передано модели из истории.
@@ -57,7 +68,7 @@ final class RequestBudget {
                 parts.add("модель не видит самые старые сообщения (" + dropped + ")");
             }
             if (withoutCode > 0) {
-                parts.add((parts.isEmpty() ? "модель не видит " : "и ") + "прикреплённый к старым сообщениям код (" + withoutCode + ")");
+                parts.add((parts.isEmpty() ? "модель не видит " : "и ") + "прикреплённые к старым сообщениям код и файлы (" + withoutCode + ")");
             }
             return new ToolUse(NOTICE_ID, NOTICE_ID, "Диалог длиннее окна модели", String.join(" ", parts)
                     + ". Начните новый чат или увеличьте «Окно модели» в настройках", ToolUse.Status.DONE);
@@ -80,8 +91,9 @@ final class RequestBudget {
         int withoutCode = 0;
         for (int i = 0; i < last && size.applyAsInt(messages) > budget; i++) {
             ChatMessage message = messages.get(i);
-            if (message.context().stream().anyMatch(item -> !item.text().isEmpty())) {
-                messages.set(i, message.withContext(message.context().stream().map(item -> item.truncate(0)).toList()));
+            if (message.context().stream().anyMatch(item -> !item.text().isEmpty()) || !message.attachments().isEmpty()) {
+                messages.set(i, message.withContext(message.context().stream().map(item -> item.truncate(0)).toList())
+                        .withAttachments(List.of()));
                 withoutCode++;
             }
         }
