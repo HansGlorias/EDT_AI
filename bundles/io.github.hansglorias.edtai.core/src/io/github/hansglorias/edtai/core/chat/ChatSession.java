@@ -317,8 +317,10 @@ public final class ChatSession {
                 }
             }
             if (existing >= 0) {
+                use = use.withAt(request.tools.get(existing).at());
                 request.tools.set(existing, use);
             } else {
+                use = use.withAt(request.text.length());
                 request.tools.add(use);
             }
             boolean working = use.status() == ToolUse.Status.RUNNING || use.status() == ToolUse.Status.AWAITING;
@@ -346,7 +348,11 @@ public final class ChatSession {
             Throwable cause = unwrap(error);
             String partial = request.text.toString();
             if (cause == null) {
-                result = put(request, answer != null ? answer : partial, Status.DONE);
+                String text = answer != null ? answer : partial;
+                // Итоговый текст бывает короче потока (убраны пробелы и рассуждения в начале): сдвигаем места вызовов.
+                int shift = partial.indexOf(text) > 0 ? partial.indexOf(text) : 0;
+                request.tools.replaceAll(use -> use.at() < 0 ? use : use.withAt(Math.max(0, Math.min(text.length(), use.at() - shift))));
+                result = put(request, text, Status.DONE);
             } else if (cause instanceof CancellationException) {
                 result = put(request, partial, Status.STOPPED);
             } else {
@@ -387,7 +393,7 @@ public final class ChatSession {
     /** Инструмент, который не успел завершиться до конца ответа. */
     private static ToolUse interrupted(ToolUse use) {
         return use.status() == ToolUse.Status.RUNNING || use.status() == ToolUse.Status.AWAITING
-                ? new ToolUse(use.id(), use.name(), use.summary(), "прервано", ToolUse.Status.FAILED)
+                ? new ToolUse(use.id(), use.name(), use.summary(), "прервано", ToolUse.Status.FAILED, use.at())
                 : use;
     }
 

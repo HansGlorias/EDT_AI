@@ -71,7 +71,9 @@ final class ChatHistoryPanel {
         columns.setColumnData(title, new ColumnWeightData(100, 60));
         GC gc = new GC(table);
         try {
-            columns.setColumnData(time, new ColumnPixelData(gc.textExtent("00.00 ").x + 8));
+            // Отступы ячейки на Windows больше, чем кажется: с запасом, иначе время обрезается до «19:…».
+            int text = Math.max(gc.textExtent("00:00").x, gc.textExtent("00.00").x);
+            columns.setColumnData(time, new ColumnPixelData(text + 3 * gc.textExtent("0").x + 12));
         } finally {
             gc.dispose();
         }

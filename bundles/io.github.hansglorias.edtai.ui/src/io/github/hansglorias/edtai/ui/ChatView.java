@@ -234,12 +234,13 @@ public class ChatView extends ViewPart {
      * Что сейчас нарисовано в ленте: сообщение, его действия, с какого символа
      * оно начинается и где в нём блоки кода (для фона).
      */
-    private record Rendered(ChatMessage message, Set<MessageRenderer.Action> actions, int start, List<int[]> codeRanges) {
+    private record Rendered(ChatMessage message, Set<MessageRenderer.Action> actions, List<String> files, int start,
+            List<int[]> codeRanges) {
     }
 
     private final List<Rendered> rendered = new ArrayList<>();
     private boolean refreshScheduled;
-    private List<ChatMessage> saved;
+    private List<ChatMessage> saved = List.of();
     private String notice;
 
     /** Отправленные сообщения для ↑ / ↓ в пустом поле; {@code recall} — какое сейчас показано. */
@@ -444,6 +445,16 @@ public class ChatView extends ViewPart {
             @Override
             public void revertChanges(ChatMessage answer) {
                 ChatView.this.revertChanges(answer);
+            }
+
+            @Override
+            public List<String> changedFiles(ChatMessage answer) {
+                return session.isBusy() ? List.of() : changedPaths(answer);
+            }
+
+            @Override
+            public void showChange(ChatMessage answer, String path) {
+                ChatView.this.showChanges(answer, path);
             }
 
             @Override
@@ -830,8 +841,29 @@ public class ChatView extends ViewPart {
         }
     }
 
+    /** Пути (в проекте) файлов, изменённых в ответе: для строки «Изменено:». Без обращения к git. */
+    private List<String> changedPaths(ChatMessage answer) {
+        String key = changeKey(answer);
+        Set<String> paths = new java.util.LinkedHashSet<>();
+        for (EditTools.Change change : changes.getOrDefault(key, List.of())) {
+            paths.add(change.path());
+        }
+        for (IFile file : touchedByAnswer.getOrDefault(key, Set.of())) {
+            paths.add(file.getProjectRelativePath().toString());
+        }
+        return List.copyOf(paths);
+    }
+
     void showChanges(ChatMessage answer) {
+        showChanges(answer, null);
+    }
+
+    /** @param only путь одного файла в проекте; {@code null} — все */
+    private void showChanges(ChatMessage answer, String only) {
         Map<IFile, EditTools.Change> files = changedFiles(answer);
+        if (only != null) {
+            files.keySet().removeIf(file -> !file.getProjectRelativePath().toString().equals(only));
+        }
         if (files.isEmpty()) {
             showNotice("Изменений относительно последнего коммита нет");
         }
@@ -1240,7 +1272,9 @@ public class ChatView extends ViewPart {
         List<ChatMessage> messages = session.messages();
         boolean idle = !session.isBusy();
         List<Set<MessageRenderer.Action>> actions = new ArrayList<>();
+        List<List<String>> files = new ArrayList<>();
         for (int i = 0; i < messages.size(); i++) {
+            files.add(idle && messages.get(i).role() == ChatRole.ASSISTANT ? changedPaths(messages.get(i)) : List.of());
             actions.add(actions(messages, i, idle));
             String key = changeKey(messages.get(i));
             if (idle && messages.get(i).role() == ChatRole.ASSISTANT && (changes.containsKey(key) || touchedByAnswer.containsKey(key))) {
@@ -1251,7 +1285,8 @@ public class ChatView extends ViewPart {
         int first = 0;
         while (first < rendered.size() && first < messages.size()
                 && rendered.get(first).message().equals(messages.get(first))
-                && rendered.get(first).actions().equals(actions.get(first))) {
+                && rendered.get(first).actions().equals(actions.get(first))
+                && rendered.get(first).files().equals(files.get(first))) {
             first++;
         }
         if (first < rendered.size() || first < messages.size()) {
@@ -1263,7 +1298,7 @@ public class ChatView extends ViewPart {
             List<StyleRange> styles = new ArrayList<>();
             for (int i = first; i < messages.size(); i++) {
                 List<int[]> codeRanges = new ArrayList<>();
-                rendered.add(new Rendered(messages.get(i), actions.get(i), start + text.length(), codeRanges));
+                rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), start + text.length(), codeRanges));
                 renderer.render(messages.get(i), i, i > 0, actions.get(i), start, text, styles, codeRanges);
             }
             history.replaceTextRange(start, history.getCharCount() - start, text.toString());
@@ -1282,7 +1317,8 @@ public class ChatView extends ViewPart {
                 });
             }
         }
-        if (idle && !messages.equals(saved)) {
+        // Новый чат сохраняем сразу, с первым вопросом: он появляется в панели чатов, не дожидаясь ответа.
+        if ((idle || saved.isEmpty()) && !messages.equals(saved)) {
             saveHistory(messages);
         }
         updateEmptyState();

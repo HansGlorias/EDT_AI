@@ -75,8 +75,12 @@ public final class ChatHistoryFile {
             if (!message.tools().isEmpty()) {
                 List<Object> tools = new ArrayList<>();
                 for (ToolUse use : message.tools()) {
-                    tools.add(Json.object("id", use.id(), "name", use.name(), "summary", use.summary(), "outcome", use.outcome(),
-                            "status", use.status().name()));
+                    Map<String, Object> saved = new LinkedHashMap<>(Json.object("id", use.id(), "name", use.name(),
+                            "summary", use.summary(), "outcome", use.outcome(), "status", use.status().name()));
+                    if (use.at() >= 0) {
+                        saved.put("at", use.at());
+                    }
+                    tools.add(saved);
                 }
                 item.put("tools", tools);
             }
@@ -133,7 +137,8 @@ public final class ChatHistoryFile {
             }
             String status = Json.stringAt(use, "status");
             tools.add(new ToolUse(Json.stringAt(use, "id"), name, Json.stringAt(use, "summary"), Json.stringAt(use, "outcome"),
-                    status == null ? ToolUse.Status.DONE : ToolUse.Status.valueOf(status)));
+                    status == null ? ToolUse.Status.DONE : ToolUse.Status.valueOf(status),
+                    Json.at(use, "at") instanceof Number at ? at.intValue() : -1));
         }
         return tools;
     }

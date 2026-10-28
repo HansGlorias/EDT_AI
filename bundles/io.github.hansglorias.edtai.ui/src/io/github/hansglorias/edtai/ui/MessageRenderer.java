@@ -14,6 +14,7 @@ import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.RGB;
 
+import io.github.hansglorias.edtai.core.chat.AnswerParts;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
@@ -39,6 +40,7 @@ final class MessageRenderer {
     static final String INSERT = "Вставить в редактор";
     static final String CONTEXT = "Контекст: ";
     static final String TOOL = "→ ";
+    static final String CHANGED = "Изменено: ";
 
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault());
     private static final List<String> CODE_ACTIONS = List.of(COPY, INSERT);
@@ -75,6 +77,12 @@ final class MessageRenderer {
 
         /** Вернуть модули, как были до правок модели в этом ответе. */
         void revertChanges(ChatMessage answer);
+
+        /** Файлы, изменённые в этом ответе: пути в проекте; пусто — ничего. */
+        List<String> changedFiles(ChatMessage answer);
+
+        /** Сравнение одного изменённого файла. */
+        void showChange(ChatMessage answer, String path);
     }
 
     private final StyledText history;
@@ -100,20 +108,38 @@ final class MessageRenderer {
         }
         header(message, index, actions, offset, text, styles);
         context(message, offset, text, styles);
-        tools(message, offset, text, styles);
         String body = message.text();
-        if (body.isEmpty() && message.role() == ChatRole.ASSISTANT) {
-            String placeholder = switch (message.status()) {
-                case STREAMING -> "…";
-                case STOPPED -> "(ответ не получен)";
-                case DONE -> "(пустой ответ)";
-            };
-            styles.add(style(offset + text.length(), placeholder.length(), metaColor(), SWT.ITALIC));
-            text.append(placeholder);
-        } else if (message.role() == ChatRole.ASSISTANT) {
-            RichText rich = Markdown.render(body, CODE_ACTIONS);
-            markdown(rich, offset + text.length(), styles, codeRanges);
-            text.append(rich.text());
+        if (message.role() == ChatRole.ASSISTANT) {
+            // Текст и вызовы по порядку, как шёл ответ: видно, что модель делает между абзацами.
+            List<AnswerParts.Part> parts = AnswerParts.split(body, message.tools());
+            boolean afterTools = false;
+            for (int i = 0; i < parts.size(); i++) {
+                AnswerParts.Part part = parts.get(i);
+                if (i > 0) {
+                    text.append(afterTools ? "\n" : "\n\n");
+                }
+                if (part.isText()) {
+                    RichText rich = Markdown.render(part.text(), CODE_ACTIONS);
+                    markdown(rich, offset + text.length(), styles, codeRanges);
+                    text.append(rich.text());
+                } else {
+                    tools(part.tools(), offset, text, styles);
+                }
+                afterTools = !part.isText();
+            }
+            if (parts.stream().noneMatch(AnswerParts.Part::isText)) {
+                String placeholder = switch (message.status()) {
+                    case STREAMING -> "…";
+                    case STOPPED -> "(ответ не получен)";
+                    case DONE -> "(пустой ответ)";
+                };
+                if (!parts.isEmpty()) {
+                    text.append('\n');
+                }
+                styles.add(style(offset + text.length(), placeholder.length(), metaColor(), SWT.ITALIC));
+                text.append(placeholder);
+            }
+            changedFiles(message, offset, text, styles);
         } else {
             if (message.role() == ChatRole.ERROR) {
                 styles.add(style(offset + text.length(), body.length(), errorColor(), SWT.NORMAL));
@@ -175,14 +201,46 @@ final class MessageRenderer {
         text.append('\n');
     }
 
-    /** Строки о вызванных инструментах: «→ Читает модуль Х — строки 1–120 из 120». */
-    private void tools(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles) {
-        for (ToolUse use : message.tools()) {
+    /** Строки о вызванных инструментах: «→ Читает модуль Х — строки 1–120 из 120», без перевода строки в конце. */
+    private void tools(List<ToolUse> uses, int offset, StringBuilder text, List<StyleRange> styles) {
+        for (int i = 0; i < uses.size(); i++) {
+            ToolUse use = uses.get(i);
             String line = TOOL + use.label();
             styles.add(style(offset + text.length(), line.length(),
                     use.status() == ToolUse.Status.FAILED ? errorColor() : metaColor(), SWT.NORMAL));
-            text.append(line).append('\n');
+            text.append(line);
+            if (i < uses.size() - 1) {
+                text.append('\n');
+            }
         }
+    }
+
+    /** «Изменено: ФормаСписка/Form.form, ФормаСписка/Module.bsl» — каждый файл открывает сравнение. */
+    private void changedFiles(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles) {
+        List<String> files = callbacks.changedFiles(message);
+        if (files.isEmpty()) {
+            return;
+        }
+        text.append("\n\n");
+        styles.add(style(offset + text.length(), CHANGED.length(), metaColor(), SWT.NORMAL));
+        text.append(CHANGED);
+        for (int i = 0; i < files.size(); i++) {
+            String path = files.get(i);
+            if (i > 0) {
+                text.append(", ");
+            }
+            String label = shortName(path);
+            StyleRange link = new StyleRange(offset + text.length(), label.length(), linkColor(), null);
+            link.data = (Runnable) () -> callbacks.showChange(message, path);
+            styles.add(link);
+            text.append(label);
+        }
+    }
+
+    /** Имя файла с каталогом над ним: «ФормаСписка/Form.form». */
+    static String shortName(String path) {
+        String[] parts = path.split("/");
+        return parts.length < 2 ? path : parts[parts.length - 2] + "/" + parts[parts.length - 1];
     }
 
     /** Строка «Контекст:» с подписями фрагментов-ссылками. */
