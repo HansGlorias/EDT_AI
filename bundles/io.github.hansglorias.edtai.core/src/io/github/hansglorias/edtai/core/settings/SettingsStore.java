@@ -23,6 +23,7 @@ public final class SettingsStore {
     static final String KEY_PROTOCOL = "protocol";
     static final String KEY_BASE_URL = "baseUrl";
     static final String KEY_MODEL = "model";
+    static final String KEY_MAX_TOKENS = "maxTokens";
     static final String KEY_USE_SYSTEM_TRUST_STORE = "useSystemTrustStore";
     static final String KEY_CA_CERTIFICATE_FILE = "caCertificateFile";
     static final String KEY_MCP_SERVERS = "mcpServers";
@@ -55,6 +56,7 @@ public final class SettingsStore {
                 Protocol.parse(preferences.get(KEY_PROTOCOL, null)),
                 preferences.get(KEY_BASE_URL, ""),
                 preferences.get(KEY_MODEL, ""),
+                preferences.getInt(KEY_MAX_TOKENS, 0),
                 preferences.getBoolean(KEY_USE_SYSTEM_TRUST_STORE, AiSettings.DEFAULT_USE_SYSTEM_TRUST_STORE),
                 preferences.get(KEY_CA_CERTIFICATE_FILE, ""),
                 servers);
@@ -64,6 +66,11 @@ public final class SettingsStore {
         preferences.put(KEY_PROTOCOL, settings.protocol().name());
         put(KEY_BASE_URL, settings.baseUrl());
         put(KEY_MODEL, settings.model());
+        if (settings.maxTokens() > 0) {
+            preferences.putInt(KEY_MAX_TOKENS, settings.maxTokens());
+        } else {
+            preferences.remove(KEY_MAX_TOKENS);
+        }
         preferences.putBoolean(KEY_USE_SYSTEM_TRUST_STORE, settings.useSystemTrustStore());
         put(KEY_CA_CERTIFICATE_FILE, settings.caCertificateFile());
         put(KEY_MCP_SERVERS, McpServersCodec.encode(settings.mcpServers()));

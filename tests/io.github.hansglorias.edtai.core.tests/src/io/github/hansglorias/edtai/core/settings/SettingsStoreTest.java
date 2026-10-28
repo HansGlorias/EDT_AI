@@ -60,7 +60,7 @@ class SettingsStoreTest {
 
     @Test
     void savesAndLoadsSettings() throws Exception {
-        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "test-model", false,
+        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "test-model", 2048, false,
                 "/etc/ssl/corp-ca.pem", List.of(
                         new McpServer("fs", McpTransport.STDIO, "server --stdio", true),
                         new McpServer("web", McpTransport.HTTP, "http://localhost:8080/mcp", false)));
@@ -72,8 +72,8 @@ class SettingsStoreTest {
 
     @Test
     void emptyValuesAreRemovedFromPreferences() throws Exception {
-        store.save(new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", true, "", List.of()));
-        store.save(new AiSettings(Protocol.ANTHROPIC, "", "", true, "", List.of()));
+        store.save(new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", 0, true, "", List.of()));
+        store.save(new AiSettings(Protocol.ANTHROPIC, "", "", 0, true, "", List.of()));
 
         assertEquals(List.of(SettingsStore.KEY_PROTOCOL, SettingsStore.KEY_USE_SYSTEM_TRUST_STORE),
                 List.of(preferences.keys()).stream().sorted().toList());

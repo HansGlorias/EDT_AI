@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.security.cert.CertPathBuilderException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -119,19 +120,33 @@ public final class TlsContextFactory {
                     .toArray(X509Certificate[]::new);
         }
 
+        /**
+         * Если ни один менеджер не доверяет цепочке, выбрасывает самую
+         * содержательную ошибку: «сертификат просрочен» от менеджера, который
+         * знает этот CA, важнее, чем «нет пути к корню» от остальных.
+         */
         private void check(Check check) throws CertificateException {
-            CertificateException first = null;
+            CertificateException best = null;
             for (X509TrustManager manager : managers) {
                 try {
                     check.run(manager);
                     return;
                 } catch (CertificateException e) {
-                    if (first == null) {
-                        first = e;
+                    if (best == null || isUnknownIssuer(best) && !isUnknownIssuer(e)) {
+                        best = e;
                     }
                 }
             }
-            throw first;
+            throw best;
+        }
+
+        private static boolean isUnknownIssuer(Throwable error) {
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof CertPathBuilderException) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private interface Check {
