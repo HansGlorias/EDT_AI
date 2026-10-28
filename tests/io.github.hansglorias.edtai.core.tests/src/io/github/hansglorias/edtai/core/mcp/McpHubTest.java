@@ -140,6 +140,27 @@ class McpHubTest {
     }
 
     @Test
+    void emptyToolListIsReportedAndNotRemembered() throws Exception {
+        try (FakeMcpServer empty = new FakeMcpServer()) {
+            McpServer config = new McpServer("Пустой", McpTransport.HTTP, empty.url(), true);
+            assertEquals(List.of(), hub.tools(List.of(config), TRUST, Set.of(), () -> limit, problems::add));
+            assertTrue(problems.get(0).label().contains("сервер не вернул ни одного инструмента"), problems.get(0).label());
+
+            // Инструменты появились (EDT догрузила проект) — следующий ответ их видит.
+            empty.tool("get_edt_version", "Версия EDT", arguments -> FakeMcpServer.resource("2026.1"));
+            assertEquals(1, hub.tools(List.of(config), TRUST, Set.of(), () -> limit, problems::add).size());
+        }
+    }
+
+    @Test
+    void filterWithoutMatchesIsReported() {
+        assertEquals(Map.of(), tools(edt("nothing_*")));
+        assertEquals(1, problems.size());
+        assertTrue(problems.get(0).label().endsWith("фильтр «nothing_*» не пропустил ни одного из 3 инструментов сервера"),
+                problems.get(0).label());
+    }
+
+    @Test
     void longResultIsCut() throws Exception {
         server.tool("big", "Много текста", arguments -> Json.object("content", List.of(Json.object("type", "text", "text", "а".repeat(50)))));
         limit = 10;

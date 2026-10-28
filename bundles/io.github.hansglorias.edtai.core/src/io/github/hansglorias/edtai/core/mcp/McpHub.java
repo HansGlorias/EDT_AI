@@ -82,12 +82,18 @@ public final class McpHub implements AutoCloseable {
                 problems.accept(problem(server, e.getMessage()));
                 continue;
             }
+            int allowed = 0;
             for (McpToolInfo info : connection.tools()) {
                 if (server.allowsTool(info.name())) {
                     String name = exposedName(server, info.name(), taken);
                     taken.add(name);
                     tools.add(new McpTool(this, server, info, name, limit));
+                    allowed++;
                 }
+            }
+            if (allowed == 0) {
+                problems.accept(problem(server, "фильтр «" + server.tools() + "» не пропустил ни одного из "
+                        + connection.tools().size() + " инструментов сервера"));
             }
         }
         return tools;
@@ -163,7 +169,13 @@ public final class McpHub implements AutoCloseable {
         McpClient client = new McpClient(uri(server), httpClient(uri(server), trust), callTimeout);
         try {
             client.initialize();
-            Connection connection = new Connection(server, trust, client, List.copyOf(client.listTools()));
+            List<McpToolInfo> tools = List.copyOf(client.listTools());
+            if (tools.isEmpty()) {
+                // Пустой список не запоминаем: EDT-MCP сразу после запуска EDT может ещё не зарегистрировать инструменты.
+                throw new McpException("сервер не вернул ни одного инструмента. Если EDT только что запущена, повторите вопрос"
+                        + " чуть позже");
+            }
+            Connection connection = new Connection(server, trust, client, tools);
             connections.put(server.name(), connection);
             return connection;
         } catch (McpException e) {
