@@ -77,6 +77,15 @@ public interface WorkspaceFiles {
         }
     }
 
+    /**
+     * Файлы проекта изменились на диске мимо IDE (откат git): пусть IDE их
+     * перечитает. По умолчанию ничего не делает.
+     *
+     * @param paths пути относительно проекта, файлы или каталоги
+     */
+    default void refresh(String project, List<String> paths) {
+    }
+
     /** Все файлы проекта с несохранёнными правками: путь относительно проекта → текст. */
     default Map<String, String> unsavedTexts(String project) {
         return Map.of();

@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.IntSupplier;
 
+import org.eclipse.jgit.api.CheckoutCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.LogCommand;
 import org.eclipse.jgit.api.Status;
@@ -43,7 +44,8 @@ import org.eclipse.jgit.treewalk.filter.TreeFilter;
 import io.github.hansglorias.edtai.core.context.BslModulePath;
 
 /**
- * Инструменты git только на чтение: что изменено, дифф, история. Через
+ * Инструменты git: что изменено, дифф, история и откат файлов к последнему
+ * коммиту ({@code git_restore}, с подтверждением). Через
  * JGit — он есть в EDT (EGit), отдельная программа {@code git} не нужна.
  * Работают, если каталог проекта лежит в git-репозитории; видят
  * сохранённые файлы, а не несохранённый текст редактора.
@@ -70,7 +72,7 @@ public final class GitTools {
             return List.of();
         }
         GitTools tools = new GitTools(files, limit);
-        return List.of(tools.new StatusTool(), tools.new DiffTool(), tools.new LogTool());
+        return List.of(tools.new StatusTool(), tools.new DiffTool(), tools.new LogTool(), tools.new RestoreTool());
     }
 
     // ---- инструменты ----
@@ -248,6 +250,89 @@ public final class GitTools {
                 throw new ToolException("git log не выполнен: " + e.getMessage());
             }
         }
+    }
+
+    /**
+     * Откат незакоммиченных изменений файлов или каталогов к последнему
+     * коммиту — как {@code git restore --source=HEAD}. Новые файлы не
+     * удаляются. Необратимо, поэтому с подтверждением (в авторежиме — без).
+     */
+    private final class RestoreTool implements Tool {
+        @Override
+        public String name() {
+            return "git_restore";
+        }
+
+        @Override
+        public String description() {
+            return "Отменяет незакоммиченные изменения: возвращает файлы или каталоги проекта к последнему коммиту (HEAD),"
+                    + " удалённые — восстанавливает. Новые (неотслеживаемые) файлы не удаляет. Необратимо: правки пропадут."
+                    + " Вызывай, только когда пользователь просит откатить. paths — пути в проекте (как в git_status) или"
+                    + " имена модулей; каталог — весь объект, например src/Catalogs/Товары.";
+        }
+
+        @Override
+        public Map<String, Object> inputSchema() {
+            return schema(Map.of("paths", Map.of("type", "array", "items", Map.of("type", "string"), "description",
+                    "Пути файлов или каталогов в проекте либо имена модулей"), "project", PROJECT), List.of("paths"));
+        }
+
+        @Override
+        public boolean needsApproval() {
+            return true;
+        }
+
+        @Override
+        public String summary(Map<String, Object> input) {
+            List<String> paths = paths(input);
+            return "Откатывает в git: " + (paths.isEmpty() ? "?" : paths.get(0) + (paths.size() > 1 ? " и ещё " + (paths.size() - 1) : ""));
+        }
+
+        @Override
+        public Result call(Map<String, Object> input) throws ToolException {
+            String project = ProjectTools.project(files, input);
+            List<String> paths = new ArrayList<>();
+            try (Opened opened = open(input); Git git = new Git(opened.repository())) {
+                if (opened.repository().resolve("HEAD") == null) {
+                    throw new ToolException("В репозитории ещё нет коммитов: откатывать не к чему");
+                }
+                Path root = files.root(opened.project()).orElseThrow();
+                for (String raw : paths(input)) {
+                    String normalized = raw.replace('\\', '/').replaceAll("/+$", "");
+                    String path = normalized.contains("/") ? normalized : ProjectTools.modulePath(opened.project(), raw);
+                    if (path.isEmpty() || !root.resolve(path).normalize().startsWith(root)) {
+                        throw new ToolException("Путь вне проекта: " + raw);
+                    }
+                    paths.add(path);
+                }
+                if (paths.isEmpty()) {
+                    throw new ToolException("Не указаны paths: что откатить");
+                }
+                CheckoutCommand checkout = git.checkout().setStartPoint("HEAD");
+                paths.forEach(path -> checkout.addPath(opened.repositoryPath(path)));
+                checkout.call();
+            } catch (GitAPIException | IOException e) {
+                throw new ToolException("git restore не выполнен: " + e.getMessage());
+            } finally {
+                if (!paths.isEmpty()) {
+                    files.refresh(project, paths);
+                }
+            }
+            return new Result("Возвращено к последнему коммиту (HEAD): " + String.join(", ", paths)
+                    + ". Новые файлы, если были, остались — их видно в git_status.", "откачено: " + paths.size());
+        }
+    }
+
+    private static List<String> paths(Map<String, Object> input) {
+        Object value = input.get("paths");
+        List<String> paths = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            list.forEach(item -> paths.add(String.valueOf(item).strip()));
+        } else if (value != null) {
+            paths.add(String.valueOf(value).strip());
+        }
+        paths.removeIf(String::isEmpty);
+        return paths;
     }
 
     // ---- общее ----

@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.mcp;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntSupplier;
 
@@ -13,6 +14,8 @@ final class McpTool implements Tool {
 
     private static final int MAX_SUMMARY_ARGUMENT = 60;
     private static final int MAX_OUTCOME = 80;
+    /** Сколько раз повторять вызов, пока EDT собирает проект: при паузе 3 с — до полутора минут. */
+    static final int BUILD_RETRIES = 30;
 
     private final McpHub hub;
     private final McpServer server;
@@ -76,6 +79,16 @@ final class McpTool implements Tool {
     @Override
     public Result call(Map<String, Object> input) throws ToolException {
         McpCallResult result = hub.call(server, info.name(), input);
+        // EDT-MCP не меняет метаданные, пока EDT собирает проект, и просит повторить: ждём сами, а не гоняем модель.
+        for (int attempt = 0; attempt < BUILD_RETRIES && result.error() && isBuilding(result.text()); attempt++) {
+            try {
+                Thread.sleep(hub.buildRetryDelay.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new ToolException("остановлено, пока ждали окончания сборки проекта");
+            }
+            result = hub.call(server, info.name(), input);
+        }
         String text = result.text();
         int max = limit.getAsInt();
         if (text.length() > max) {
@@ -86,6 +99,12 @@ final class McpTool implements Tool {
             throw new ToolException(text.isBlank() ? "инструмент вернул ошибку без описания" : text);
         }
         return new Result(text, outcome(result.text()));
+    }
+
+    /** «Project is building: stage …, pipeline …. Please wait and retry.» */
+    static boolean isBuilding(String text) {
+        String lower = text.toLowerCase(Locale.ROOT);
+        return lower.contains("project is building") && lower.contains("retry");
     }
 
     /** Итог для ленты: первая непустая строка результата или его размер. */

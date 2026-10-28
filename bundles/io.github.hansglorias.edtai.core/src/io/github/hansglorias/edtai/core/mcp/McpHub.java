@@ -44,6 +44,8 @@ public final class McpHub implements AutoCloseable {
 
     private final Map<String, Connection> connections = new ConcurrentHashMap<>();
     private final Duration callTimeout;
+    /** Пауза перед повтором вызова, пока EDT собирает проект; в тестах — короче. */
+    volatile Duration buildRetryDelay = Duration.ofSeconds(3);
 
     public McpHub() {
         this(CALL_TIMEOUT);

@@ -15,7 +15,9 @@ import org.eclipse.core.filebuffers.ITextFileBufferManager;
 import org.eclipse.core.filebuffers.LocationKind;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
@@ -128,6 +130,21 @@ final class EclipseWorkspaceFiles implements WorkspaceFiles {
      * несохранённых правок, он сохраняется (виден в git diff); если были —
      * правка остаётся в редакторе, чтобы не сохранить чужие правки молча.
      */
+    /** Откат git записал файлы мимо EDT: перечитываем, чтобы EDT обновил модель и редакторы. */
+    @Override
+    public void refresh(String project, List<String> paths) {
+        IProject resource = ResourcesPlugin.getWorkspace().getRoot().getProject(project);
+        for (String path : paths) {
+            IResource member = resource.findMember(path);
+            IResource target = member != null ? member : resource.getFolder(path).getParent();
+            try {
+                (target != null && target.exists() ? target : resource).refreshLocal(IResource.DEPTH_INFINITE, null);
+            } catch (CoreException e) {
+                // Не обновили — EDT заметит изменения сам при следующем обращении к файлу.
+            }
+        }
+    }
+
     @Override
     public Edit edit(String project, String path, TextChange change) throws ToolException {
         IFile file = ResourcesPlugin.getWorkspace().getRoot().getProject(project).getFile(path);
