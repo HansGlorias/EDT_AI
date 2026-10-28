@@ -27,6 +27,10 @@ import io.github.hansglorias.edtai.core.json.JsonException;
 final class ModelErrors {
 
     private static final int MAX_SERVER_TEXT = 300;
+    /** Тексты переполнения контекста у OpenAI, vLLM, Anthropic, llama.cpp, шлюзов. */
+    static final Pattern CONTEXT_OVERFLOW = Pattern.compile("(?i)context[_ ]length|maximum context|context window"
+            + "|max_model_len|too many tokens|prompt is too long|input is too long|exceeds? the (?:model'?s? )?(?:context|maximum)"
+            + "|exceed_context_size");
     private static final Pattern HTML_TITLE = Pattern.compile("(?is)<title>(.*?)</title>");
 
     private ModelErrors() {
@@ -49,6 +53,11 @@ final class ModelErrors {
                     : "Сервер ответил HTTP " + status + ".";
         };
         String server = serverText(body);
+        if (status / 100 == 4 && body != null && CONTEXT_OVERFLOW.matcher(body).find()) {
+            return new ModelException("Диалог не помещается в окно модели (HTTP " + status + "). Начните новый чат или проверьте"
+                    + " «Окно модели» в настройках EDT AI: оно должно быть не больше, чем у модели на сервере."
+                    + (server == null ? "" : " Ответ сервера: «" + server + "»"));
+        }
         // vLLM без --enable-auto-tool-choice, старые шлюзы: 400/422 с упоминанием tools в тексте ошибки.
         boolean rejectsTools = (status == 400 || status == 422) && body != null && body.toLowerCase(Locale.ROOT).contains("tool");
         return new ModelException(server == null ? text : text + " Ответ сервера: «" + server + "»", null, rejectsTools);

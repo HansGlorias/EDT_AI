@@ -306,6 +306,53 @@ class AgentLoopTest {
         };
     }
 
+    @Test
+    void oldToolResultsAreOmittedWhenWindowIsSmall() throws Exception {
+        Tool big = new Tool() {
+            @Override
+            public String name() {
+                return "big";
+            }
+
+            @Override
+            public String description() {
+                return "Много текста";
+            }
+
+            @Override
+            public Map<String, Object> inputSchema() {
+                return Json.object("type", "object");
+            }
+
+            @Override
+            public String summary(Map<String, Object> input) {
+                return "Большой результат";
+            }
+
+            @Override
+            public Result call(Map<String, Object> input) {
+                return new Result("я".repeat(1500), "1500 символов");
+            }
+        };
+        server = FakeModelServer.http().handler((request, response) -> {
+            int results = request.body().split("\"role\":\"tool\"", -1).length - 1;
+            response.sse(List.of(results < 2
+                    ? toolCalls("{\"index\":0,\"id\":\"call_" + results + "\",\"function\":{\"name\":\"big\",\"arguments\":\"{}\"}}")
+                    : "data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+        });
+        // Окно 1000 токенов — бюджет 2250 символов: два результата по 1500 не помещаются.
+        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()), 1000);
+        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(big),
+                ToolApprover.ALLOW_ALL);
+
+        assertEquals("Готово.", provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS));
+
+        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(2).body()).get("messages"));
+        assertEquals(AgentLoop.OMITTED, Json.stringAt(messages.get(2), "content"));
+        assertEquals("я".repeat(1500), Json.stringAt(messages.get(4), "content"));
+    }
+
     private String run(Protocol protocol) throws Exception {
         return run(protocol, problems -> List.of(READ), ToolApprover.ALLOW_ALL);
     }

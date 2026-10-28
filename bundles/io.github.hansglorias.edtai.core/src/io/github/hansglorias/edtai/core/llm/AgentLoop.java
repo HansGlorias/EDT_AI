@@ -26,6 +26,9 @@ final class AgentLoop {
     /** Сколько ответов модели с вызовами инструментов подряд допускаем. */
     static final int MAX_STEPS = 10;
 
+    /** Вместо результата старого шага, когда запрос не помещается в окно модели. */
+    static final String OMITTED = "(результат не передан: не помещается в окно модели; если он нужен — вызови инструмент снова)";
+
     static final String TOOLS_UNSUPPORTED = "Сервер не принимает инструменты — ответ без чтения проекта."
             + " Отключите «Инструменты» в настройках, чтобы не видеть это сообщение.";
 
@@ -43,6 +46,17 @@ final class AgentLoop {
     private volatile CompletableFuture<ModelReply> current;
     private final StringBuilder answer = new StringBuilder();
     private boolean separate;
+    /** Шаги этого ответа: вызовы модели и их результаты. */
+    private final List<Step> steps = new ArrayList<>();
+    /** Что последним сообщили в ленту про обрезку истории. */
+    private ToolUse trimmed;
+
+    private record Step(ModelReply reply, List<ProtocolAdapter.ToolResult> results) {
+    }
+
+    /** История и шаги, которые помещаются в окно модели. */
+    private record Prepared(List<ChatMessage> history, List<Object> extra) {
+    }
     /** Сервер отклонил запрос с инструментами: больше их не передаём. */
     private boolean toolsRejected;
 
@@ -97,19 +111,20 @@ final class AgentLoop {
             onTool.accept(new ToolUse("tools", "tools", "Инструменты", "не удалось получить список: " + e.getMessage(),
                     ToolUse.Status.FAILED));
         }
-        List<Object> extra = new ArrayList<>();
         for (int step = 1;; step++) {
             ModelReply reply;
             try {
-                reply = await(client.request(connection, history, extra, tools, this::text));
+                Prepared request = prepare();
+                reply = await(client.request(connection, request.history(), request.extra(), tools, this::text));
             } catch (ModelException e) {
-                if (!e.rejectsTools() || tools.isEmpty() || !extra.isEmpty()) {
+                if (!e.rejectsTools() || tools.isEmpty() || !steps.isEmpty()) {
                     throw e;
                 }
                 toolsRejected = true;
                 tools = List.of();
                 onTool.accept(new ToolUse("tools", "tools", "Инструменты", TOOLS_UNSUPPORTED, ToolUse.Status.FAILED));
-                reply = await(client.request(connection, history, extra, tools, this::text));
+                Prepared request = prepare();
+                reply = await(client.request(connection, request.history(), request.extra(), tools, this::text));
             }
             if (reply.calls().isEmpty()) {
                 return answer.toString().strip();
@@ -119,14 +134,48 @@ final class AgentLoop {
                         + " нажмите «Повторить»._");
                 return answer.toString().strip();
             }
-            extra.add(adapter.assistantMessage(reply));
             List<ProtocolAdapter.ToolResult> results = new ArrayList<>();
             for (ToolCall call : reply.calls()) {
                 results.add(execute(call));
             }
-            extra.addAll(adapter.toolResults(results));
+            steps.add(new Step(reply, results));
             separate = answer.length() > 0;
         }
+    }
+
+    /**
+     * Запрос под окно модели: сначала вместо результатов старых шагов —
+     * пометка {@link #OMITTED}, потом обрезается история.
+     */
+    private Prepared prepare() {
+        int budget = RequestBudget.chars(connection);
+        int omitted = 0;
+        List<Object> extra = extra(omitted);
+        while (omitted < steps.size() - 1 && RequestBudget.size(connection, history, extra, tools) > budget) {
+            extra = extra(++omitted);
+        }
+        List<Object> fixed = extra;
+        RequestBudget.Fitted fitted = RequestBudget.fit(history, part -> RequestBudget.size(connection, part, fixed, tools), budget);
+        if (fitted.trimmed() && !fitted.notice().equals(trimmed)) {
+            trimmed = fitted.notice();
+            onTool.accept(trimmed);
+        }
+        return new Prepared(fitted.history(), extra);
+    }
+
+    /** Вызовы и результаты шагов в формате протокола; у первых {@code omitted} шагов — без результатов. */
+    private List<Object> extra(int omitted) {
+        List<Object> extra = new ArrayList<>();
+        for (int i = 0; i < steps.size(); i++) {
+            Step step = steps.get(i);
+            extra.add(adapter.assistantMessage(step.reply()));
+            List<ProtocolAdapter.ToolResult> results = step.results();
+            if (i < omitted) {
+                results = results.stream().map(result -> new ProtocolAdapter.ToolResult(result.call(), OMITTED, false)).toList();
+            }
+            extra.addAll(adapter.toolResults(results));
+        }
+        return extra;
     }
 
     private ProtocolAdapter.ToolResult execute(ToolCall call) {

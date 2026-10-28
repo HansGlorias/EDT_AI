@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.chat;
 
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Вызов инструмента моделью — для показа в ленте: что модель прочитала или
@@ -24,6 +25,14 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         summary = Objects.requireNonNullElse(summary, name);
         outcome = Objects.requireNonNullElse(outcome, "");
         status = Objects.requireNonNullElse(status, Status.DONE);
+    }
+
+    /** Служебные строки ленты (сервер не подключился, окно модели), а не вызовы инструментов. */
+    private static final Set<String> NOTICES = Set.of("tools", "mcp", "context");
+
+    /** Вызов инструмента, а не служебная строка. */
+    public boolean isCall() {
+        return !NOTICES.contains(name);
     }
 
     /** Строка для ленты: «Читает модуль Х — строки 1–120 из 120». */

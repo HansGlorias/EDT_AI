@@ -94,7 +94,12 @@ public final class ModelChatProvider implements ChatProvider {
         }
         String server = connection.baseUrl() + "|" + connection.model();
         if (tools == ToolSource.NONE || withoutTools.contains(server)) {
-            return client.stream(connection, history, onText);
+            RequestBudget.Fitted fitted = RequestBudget.fit(history,
+                    part -> RequestBudget.size(connection, part, List.of(), List.of()), RequestBudget.chars(connection));
+            if (fitted.trimmed()) {
+                onTool.accept(fitted.notice());
+            }
+            return client.stream(connection, fitted.history(), onText);
         }
         AgentLoop loop = new AgentLoop(client, connection, history, tools, approver, onText, onTool);
         CompletableFuture<String> reply = loop.start();
