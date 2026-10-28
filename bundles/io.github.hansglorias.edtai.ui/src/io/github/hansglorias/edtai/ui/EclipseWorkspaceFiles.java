@@ -141,12 +141,13 @@ final class EclipseWorkspaceFiles implements WorkspaceFiles {
                     ITextFileBuffer buffer = manager.getTextFileBuffer(file.getFullPath(), LocationKind.IFILE);
                     boolean dirty = buffer.isDirty();
                     IDocument document = buffer.getDocument();
-                    TextChange.Replacement replacement = change.compute(document.get());
+                    String before = document.get();
+                    TextChange.Replacement replacement = change.compute(before);
                     document.replace(replacement.offset(), replacement.length(), replacement.text());
                     if (!dirty) {
                         buffer.commit(null, false);
                     }
-                    result.set(new Edit(document.get(), replacement, !dirty));
+                    result.set(new Edit(document.get(), replacement, !dirty, before));
                 } finally {
                     manager.disconnect(file.getFullPath(), LocationKind.IFILE, null);
                 }
@@ -164,6 +165,17 @@ final class EclipseWorkspaceFiles implements WorkspaceFiles {
             throw new ToolException("Не удалось изменить " + path + ": EDT закрывается");
         }
         return result.get();
+    }
+
+    /** Текущий текст файла: из открытого редактора, если он есть, иначе с диска. */
+    static String text(IFile file) throws Exception {
+        ITextFileBufferManager manager = FileBuffers.getTextFileBufferManager();
+        manager.connect(file.getFullPath(), LocationKind.IFILE, null);
+        try {
+            return manager.getTextFileBuffer(file.getFullPath(), LocationKind.IFILE).getDocument().get();
+        } finally {
+            manager.disconnect(file.getFullPath(), LocationKind.IFILE, null);
+        }
     }
 
     /** Выполняет в UI-потоке и ждёт. */

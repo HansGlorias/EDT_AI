@@ -50,8 +50,9 @@ public interface WorkspaceFiles {
      * @param text        текст файла после правки
      * @param replacement что заменено
      * @param saved       файл сохранён; {@code false} — правка в редакторе, где были несохранённые правки пользователя
+     * @param before      текст файла до правки: для диффа и отката
      */
-    record Edit(String text, TextChange.Replacement replacement, boolean saved) {
+    record Edit(String text, TextChange.Replacement replacement, boolean saved, String before) {
     }
 
     /**
@@ -70,7 +71,7 @@ public interface WorkspaceFiles {
             String result = content.substring(0, replacement.offset()) + replacement.text()
                     + content.substring(replacement.offset() + replacement.length());
             Files.writeString(file, bom + result, StandardCharsets.UTF_8);
-            return new Edit(result, replacement, true);
+            return new Edit(result, replacement, true, content);
         } catch (IOException e) {
             throw new ToolException("Не удалось изменить " + path + ": " + e.getMessage());
         }

@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import io.github.hansglorias.edtai.core.context.BslModulePath;
 
@@ -20,14 +21,29 @@ import io.github.hansglorias.edtai.core.context.BslModulePath;
  */
 public final class EditTools {
 
-    private final WorkspaceFiles files;
+    /**
+     * Правка модуля моделью: файл до и после — для диффа и отката.
+     *
+     * @param path путь относительно проекта
+     */
+    public record Change(String project, String path, String before, String after) {
+    }
 
-    private EditTools(WorkspaceFiles files) {
+    private final WorkspaceFiles files;
+    private final Consumer<Change> changes;
+
+    private EditTools(WorkspaceFiles files, Consumer<Change> changes) {
         this.files = files;
+        this.changes = changes;
     }
 
     public static List<Tool> create(WorkspaceFiles files) {
-        return List.of(new EditTools(files).new EditModule());
+        return create(files, change -> { });
+    }
+
+    /** @param changes получает каждую применённую правку, из потока ответа */
+    public static List<Tool> create(WorkspaceFiles files, Consumer<Change> changes) {
+        return List.of(new EditTools(files, changes).new EditModule());
     }
 
     private final class EditModule implements Tool {
@@ -74,6 +90,7 @@ public final class EditTools {
             Object newText = input.get("new_text");
             WorkspaceFiles.Edit edit = files.edit(project, path,
                     TextChange.replace(oldText == null ? "" : String.valueOf(oldText), newText == null ? "" : String.valueOf(newText)));
+            changes.accept(new Change(project, path, edit.before(), edit.text()));
             int first = line(edit.text(), edit.replacement().offset());
             int last = line(edit.text(), edit.replacement().offset() + Math.max(0, edit.replacement().text().length() - 1));
             String name = BslModulePath.metadataName(path).orElse(path);
