@@ -60,7 +60,7 @@ class SettingsStoreTest {
 
     @Test
     void savesAndLoadsSettings() throws Exception {
-        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "test-model", 2048, false,
+        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "test-model", 2048, "", false,
                 "/etc/ssl/corp-ca.pem", List.of(
                         new McpServer("fs", McpTransport.STDIO, "server --stdio", true),
                         new McpServer("web", McpTransport.HTTP, "http://localhost:8080/mcp", false)));
@@ -72,11 +72,28 @@ class SettingsStoreTest {
 
     @Test
     void emptyValuesAreRemovedFromPreferences() throws Exception {
-        store.save(new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", 0, true, "", List.of()));
-        store.save(new AiSettings(Protocol.ANTHROPIC, "", "", 0, true, "", List.of()));
+        String prompt = AiSettings.DEFAULT_SYSTEM_PROMPT;
+        store.save(new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", 100, "свой", true, "", List.of()));
+        store.save(new AiSettings(Protocol.ANTHROPIC, "", "", 0, prompt, true, "", List.of()));
 
         assertEquals(List.of(SettingsStore.KEY_PROTOCOL, SettingsStore.KEY_USE_SYSTEM_TRUST_STORE),
                 List.of(preferences.keys()).stream().sorted().toList());
+    }
+
+    @Test
+    void defaultSystemPromptIsNotStoredButEmptyOneIs() throws Exception {
+        assertEquals(AiSettings.DEFAULT_SYSTEM_PROMPT, store.load().systemPrompt());
+
+        store.save(new AiSettings(null, "", "", 0, "", true, "", List.of()));
+        assertEquals("", preferences.get(SettingsStore.KEY_SYSTEM_PROMPT, null));
+        assertEquals("", store.load().systemPrompt());
+
+        store.save(new AiSettings(null, "", "", 0, "Отвечай кратко.\nБез воды.", true, "", List.of()));
+        assertEquals("Отвечай кратко.\nБез воды.", store.load().systemPrompt());
+
+        store.save(AiSettings.defaults());
+        assertEquals(null, preferences.get(SettingsStore.KEY_SYSTEM_PROMPT, null));
+        assertEquals(AiSettings.DEFAULT_SYSTEM_PROMPT, store.load().systemPrompt());
     }
 
     @Test

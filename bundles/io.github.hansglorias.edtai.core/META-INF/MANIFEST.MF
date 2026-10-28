@@ -14,5 +14,6 @@ Import-Package: javax.net.ssl
 Export-Package: io.github.hansglorias.edtai.core.chat,
  io.github.hansglorias.edtai.core.json,
  io.github.hansglorias.edtai.core.llm,
+ io.github.hansglorias.edtai.core.markdown,
  io.github.hansglorias.edtai.core.settings,
  io.github.hansglorias.edtai.core.tls

@@ -1,5 +1,6 @@
 package io.github.hansglorias.edtai.core.llm;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,7 +23,12 @@ final class OpenAiAdapter extends ProtocolAdapter {
 
     @Override
     Map<String, Object> body(ModelConnection connection, List<ChatMessage> history) {
-        Map<String, Object> body = mutable("model", connection.model(), "messages", messages(history), "stream", true);
+        List<Object> messages = new ArrayList<>();
+        if (!connection.systemPrompt().isEmpty()) {
+            messages.add(Json.object("role", "system", "content", connection.systemPrompt()));
+        }
+        messages.addAll(messages(history));
+        Map<String, Object> body = mutable("model", connection.model(), "messages", messages, "stream", true);
         // Без явного ограничения не передаём: часть моделей OpenAI не принимает max_tokens.
         if (connection.maxTokens() > 0) {
             body.put("max_tokens", connection.maxTokens());

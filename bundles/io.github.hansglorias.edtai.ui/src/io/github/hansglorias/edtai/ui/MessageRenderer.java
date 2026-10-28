@@ -1,0 +1,245 @@
+package io.github.hansglorias.edtai.ui;
+
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Set;
+
+import org.eclipse.jface.preference.JFacePreferences;
+import org.eclipse.jface.resource.JFaceResources;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.StyleRange;
+import org.eclipse.swt.custom.StyledText;
+import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Font;
+import org.eclipse.swt.graphics.RGB;
+
+import io.github.hansglorias.edtai.core.chat.ChatMessage;
+import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.markdown.CodeBlock;
+import io.github.hansglorias.edtai.core.markdown.Kind;
+import io.github.hansglorias.edtai.core.markdown.Markdown;
+import io.github.hansglorias.edtai.core.markdown.RichText;
+import io.github.hansglorias.edtai.core.markdown.Segment;
+
+/**
+ * Текст и оформление одного сообщения в ленте: заголовок с именем, временем
+ * и действиями, тело — Markdown для ответа модели, обычный текст для
+ * остального.
+ */
+final class MessageRenderer {
+
+    static final String COPY = "Копировать";
+    static final String RETRY = "Повторить";
+    static final String EDIT = "Изменить";
+    static final String INSERT = "Вставить в редактор";
+
+    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault());
+    private static final List<String> CODE_ACTIONS = List.of(COPY, INSERT);
+
+    /** Действия у сообщения в строке заголовка. */
+    enum Action {
+        COPY(MessageRenderer.COPY), RETRY(MessageRenderer.RETRY), EDIT(MessageRenderer.EDIT);
+
+        final String label;
+
+        Action(String label) {
+            this.label = label;
+        }
+    }
+
+    /** Что делать по ссылкам в ленте. */
+    interface Callbacks {
+        void copy(String text);
+
+        void insert(String code);
+
+        void retry();
+
+        void edit(int index);
+
+        void open(String url);
+    }
+
+    private final StyledText history;
+    private final Callbacks callbacks;
+    private Color codeBackground;
+    private RGB codeBackgroundFrom;
+
+    MessageRenderer(StyledText history, Callbacks callbacks) {
+        this.history = history;
+        this.callbacks = callbacks;
+    }
+
+    /**
+     * Дописывает сообщение в {@code text}, оформление — в {@code styles}
+     * (по возрастанию, без пересечений), диапазоны блоков кода для фона — в
+     * {@code codeRanges}. Смещения — от начала ленты: {@code offset} — где в
+     * ленте начинается {@code text}.
+     */
+    void render(ChatMessage message, int index, boolean separator, Set<Action> actions, int offset, StringBuilder text,
+            List<StyleRange> styles, List<int[]> codeRanges) {
+        if (separator) {
+            text.append("\n\n");
+        }
+        header(message, index, actions, offset, text, styles);
+        String body = message.text();
+        if (body.isEmpty() && message.role() == ChatRole.ASSISTANT) {
+            String placeholder = switch (message.status()) {
+                case STREAMING -> "…";
+                case STOPPED -> "(ответ не получен)";
+                case DONE -> "(пустой ответ)";
+            };
+            styles.add(style(offset + text.length(), placeholder.length(), metaColor(), SWT.ITALIC));
+            text.append(placeholder);
+        } else if (message.role() == ChatRole.ASSISTANT) {
+            RichText rich = Markdown.render(body, CODE_ACTIONS);
+            markdown(rich, offset + text.length(), styles, codeRanges);
+            text.append(rich.text());
+        } else {
+            if (message.role() == ChatRole.ERROR) {
+                styles.add(style(offset + text.length(), body.length(), errorColor(), SWT.NORMAL));
+            }
+            text.append(body);
+        }
+    }
+
+    private void header(ChatMessage message, int index, Set<Action> actions, int offset, StringBuilder text, List<StyleRange> styles) {
+        String name;
+        Color nameColor;
+        switch (message.role()) {
+            case USER -> {
+                name = "Вы";
+                nameColor = null;
+            }
+            case ASSISTANT -> {
+                name = "Ассистент";
+                nameColor = color(JFacePreferences.COUNTER_COLOR, SWT.COLOR_DARK_BLUE);
+            }
+            default -> {
+                name = "Ошибка";
+                nameColor = errorColor();
+            }
+        }
+        styles.add(style(offset + text.length(), name.length(), nameColor, SWT.BOLD));
+        text.append(name);
+
+        String meta = "  " + TIME.format(message.time()) + switch (message.status()) {
+            case STREAMING -> " · пишет…";
+            case STOPPED -> message.role() == ChatRole.ASSISTANT ? " · остановлено" : "";
+            case DONE -> "";
+        };
+        styles.add(style(offset + text.length(), meta.length(), metaColor(), SWT.NORMAL));
+        text.append(meta);
+
+        for (Action action : Action.values()) {
+            if (actions.contains(action)) {
+                text.append("   ");
+                Runnable run = switch (action) {
+                    case COPY -> () -> callbacks.copy(message.text());
+                    case RETRY -> callbacks::retry;
+                    case EDIT -> () -> callbacks.edit(index);
+                };
+                StyleRange link = new StyleRange(offset + text.length(), action.label.length(), linkColor(), null);
+                link.data = run;
+                styles.add(link);
+                text.append(action.label);
+            }
+        }
+        text.append('\n');
+    }
+
+    private void markdown(RichText rich, int offset, List<StyleRange> styles, List<int[]> codeRanges) {
+        for (CodeBlock block : rich.codeBlocks()) {
+            codeRanges.add(new int[] { offset + block.start(), offset + block.end() });
+        }
+        for (Segment segment : rich.segments()) {
+            styles.add(style(segment, offset, rich.codeBlocks()));
+        }
+    }
+
+    private StyleRange style(Segment segment, int offset, List<CodeBlock> blocks) {
+        StyleRange range = new StyleRange();
+        range.start = offset + segment.start();
+        range.length = segment.length();
+        boolean bold = segment.has(Kind.BOLD) || segment.headingLevel() >= 3;
+        boolean italic = segment.has(Kind.ITALIC) || segment.has(Kind.QUOTE);
+        if (segment.monospace()) {
+            range.font = monospace(bold, italic);
+        } else if (segment.headingLevel() == 1 || segment.headingLevel() == 2) {
+            range.font = JFaceResources.getHeaderFont();
+        } else {
+            range.fontStyle = (bold ? SWT.BOLD : SWT.NORMAL) | (italic ? SWT.ITALIC : SWT.NORMAL);
+        }
+        if (segment.has(Kind.CODE)) {
+            range.background = codeBackground();
+        }
+        range.strikeout = segment.has(Kind.STRIKE);
+        if (segment.has(Kind.MARKER) || segment.has(Kind.QUOTE) || segment.has(Kind.CODE_HEADER)) {
+            range.foreground = metaColor();
+        }
+        if (segment.link() != null) {
+            String url = segment.link();
+            range.foreground = linkColor();
+            range.underline = true;
+            range.data = (Runnable) () -> callbacks.open(url);
+        }
+        if (segment.action() != null) {
+            int colon = segment.action().lastIndexOf(':');
+            String label = segment.action().substring(0, colon);
+            String code = blocks.get(Integer.parseInt(segment.action().substring(colon + 1))).code();
+            range.foreground = linkColor();
+            Runnable run = INSERT.equals(label) ? () -> callbacks.insert(code) : () -> callbacks.copy(code);
+            range.data = run;
+        }
+        return range;
+    }
+
+    private static StyleRange style(int start, int length, Color foreground, int fontStyle) {
+        return new StyleRange(start, length, foreground, null, fontStyle);
+    }
+
+    private static Font monospace(boolean bold, boolean italic) {
+        if (bold) {
+            return JFaceResources.getFontRegistry().getBold(JFaceResources.TEXT_FONT);
+        }
+        if (italic) {
+            return JFaceResources.getFontRegistry().getItalic(JFaceResources.TEXT_FONT);
+        }
+        return JFaceResources.getTextFont();
+    }
+
+    /** Фон кода: цвет текста, чуть подмешанный к фону ленты. Читается и в светлой, и в тёмной теме. */
+    Color codeBackground() {
+        RGB background = history.getBackground().getRGB();
+        RGB foreground = history.getForeground().getRGB();
+        if (codeBackground == null || !background.equals(codeBackgroundFrom)) {
+            double share = 0.07;
+            codeBackground = new Color(mix(background.red, foreground.red, share), mix(background.green, foreground.green, share),
+                    mix(background.blue, foreground.blue, share));
+            codeBackgroundFrom = background;
+        }
+        return codeBackground;
+    }
+
+    private static int mix(int from, int to, double share) {
+        return (int) Math.round(from + (to - from) * share);
+    }
+
+    private Color color(String key, int fallback) {
+        Color color = JFaceResources.getColorRegistry().get(key);
+        return color != null ? color : history.getDisplay().getSystemColor(fallback);
+    }
+
+    private Color errorColor() {
+        return color(JFacePreferences.ERROR_COLOR, SWT.COLOR_RED);
+    }
+
+    private Color metaColor() {
+        return color(JFacePreferences.QUALIFIER_COLOR, SWT.COLOR_DARK_GRAY);
+    }
+
+    private Color linkColor() {
+        return color(JFacePreferences.HYPERLINK_COLOR, SWT.COLOR_LINK_FOREGROUND);
+    }
+}

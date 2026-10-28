@@ -14,7 +14,8 @@ import io.github.hansglorias.edtai.core.tls.TrustSettings;
  * Всё, что нужно для запроса к модели.
  *
  * @param token     токен, пустая строка — без авторизации. Не попадает в {@link #toString()}
- * @param maxTokens ограничение длины ответа, 0 — по умолчанию для протокола
+ * @param maxTokens    ограничение длины ответа, 0 — по умолчанию для протокола
+ * @param systemPrompt системный промпт, пустая строка — без него
  */
 public record ModelConnection(
         Protocol protocol,
@@ -22,6 +23,7 @@ public record ModelConnection(
         String model,
         String token,
         int maxTokens,
+        String systemPrompt,
         TrustSettings trust) {
 
     /** Anthropic требует max_tokens; столько, если в настройках не задано. */
@@ -36,16 +38,17 @@ public record ModelConnection(
         model = Objects.requireNonNullElse(model, "").strip();
         token = Objects.requireNonNullElse(token, "").strip();
         maxTokens = Math.max(0, maxTokens);
+        systemPrompt = Objects.requireNonNullElse(systemPrompt, "").strip();
         Objects.requireNonNull(trust, "trust");
     }
 
     public static ModelConnection of(AiSettings settings, String token) {
         return new ModelConnection(settings.protocol(), settings.baseUrl(), settings.model(), token,
-                settings.maxTokens(), TrustSettings.from(settings));
+                settings.maxTokens(), settings.systemPrompt(), TrustSettings.from(settings));
     }
 
     public ModelConnection withMaxTokens(int value) {
-        return new ModelConnection(protocol, baseUrl, model, token, value, trust);
+        return new ModelConnection(protocol, baseUrl, model, token, value, systemPrompt, trust);
     }
 
     /**
@@ -90,6 +93,6 @@ public record ModelConnection(
     @Override
     public String toString() {
         return "ModelConnection[protocol=" + protocol + ", baseUrl=" + baseUrl + ", model=" + model
-                + ", token=" + (token.isEmpty() ? "нет" : "***") + ", maxTokens=" + maxTokens + ", trust=" + trust + "]";
+                + ", token=" + (token.isEmpty() ? "нет" : "***") + ", maxTokens=" + maxTokens + ", systemPrompt=" + systemPrompt.length() + " символов, trust=" + trust + "]";
     }
 }

@@ -27,7 +27,7 @@ class ModelChatProviderTest {
             server.handler((request, response) -> response.sse(List.of(
                     "data: {\"choices\":[{\"delta\":{\"content\":\"Да\"}}]}\n\n",
                     "data: {\"choices\":[{\"delta\":{\"content\":\", работает\"}}]}\n\n", "data: [DONE]\n\n"), 10));
-            ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "m", "", 0,
+            ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "m", "", 0, "",
                     new TrustSettings(false, Optional.empty()));
             ChatSession session = new ChatSession(new ModelChatProvider(() -> connection, new ModelClient()));
 

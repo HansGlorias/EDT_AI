@@ -58,6 +58,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Text baseUrl;
     private Text model;
     private Text maxTokens;
+    private Text systemPrompt;
     private Text token;
     private Label tokenState;
     private Button removeToken;
@@ -121,6 +122,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         maxTokens.setToolTipText("Пусто — по умолчанию: для Anthropic " + 8192 + ", для OpenAI-совместимого не передаётся.");
         GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(maxTokens);
         maxTokens.addModifyListener(event -> validate());
+
+        Label promptLabel = label(group, "Системный промпт:");
+        GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.BEGINNING).indent(0, 3).applyTo(promptLabel);
+        systemPrompt = new Text(group, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+        systemPrompt.setToolTipText("Инструкция модели перед каждым диалогом. Пусто — без системного промпта."
+                + " «Restore Defaults» возвращает промпт по умолчанию.");
+        GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, systemPrompt.getLineHeight() * 4)
+                .applyTo(systemPrompt);
 
         label(group, "Токен:");
         token = new Text(group, SWT.BORDER | SWT.PASSWORD);
@@ -320,6 +329,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         baseUrl.setText(settings.baseUrl());
         model.setText(settings.model());
         maxTokens.setText(settings.maxTokens() > 0 ? String.valueOf(settings.maxTokens()) : "");
+        systemPrompt.setText(settings.systemPrompt());
         useSystemTrustStore.setSelection(settings.useSystemTrustStore());
         caFile.setText(settings.caCertificateFile());
         servers.clear();
@@ -330,7 +340,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     AiSettings current() {
         return new AiSettings(Protocol.values()[Math.max(0, protocol.getSelectionIndex())], baseUrl.getText(),
-                model.getText(), Math.max(0, maxTokensValue()), useSystemTrustStore.getSelection(), caFile.getText(), servers);
+                model.getText(), Math.max(0, maxTokensValue()), systemPrompt.getText(), useSystemTrustStore.getSelection(),
+                caFile.getText(), servers);
     }
 
     /** @return число из поля, 0 — пусто, -1 — не число */
@@ -462,9 +473,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         return group;
     }
 
-    private static void label(Composite parent, String text) {
+    private static Label label(Composite parent, String text) {
         Label label = new Label(parent, SWT.NONE);
         label.setText(text);
+        return label;
     }
 
     private static Button button(Composite parent, String text) {
@@ -486,6 +498,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     Text maxTokensField() {
         return maxTokens;
+    }
+
+    Text systemPromptField() {
+        return systemPrompt;
     }
 
     Button checkButton() {
