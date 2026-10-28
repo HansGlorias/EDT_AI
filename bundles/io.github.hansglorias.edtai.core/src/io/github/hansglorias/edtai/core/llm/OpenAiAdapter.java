@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.tools.Tool;
 
@@ -59,6 +60,9 @@ final class OpenAiAdapter extends ProtocolAdapter {
         if ("length".equals(Json.stringAt(json, "choices", 0, "finish_reason"))) {
             state.truncated();
         }
+        // usage приходит последней частью, если сервер его шлёт в потоке (vLLM, LM Studio, шлюзы); не шлёт — оценим сами.
+        Object usage = Json.at(json, "usage");
+        state.usage(tokens(usage, new Object[] { "prompt_tokens" }), tokens(usage, new Object[] { "completion_tokens" }));
         Object delta = Json.at(json, "choices", 0, "delta");
         state.text(Json.stringAt(delta, "content"));
         List<Object> calls = Json.asList(Json.at(delta, "tool_calls"));
@@ -88,8 +92,12 @@ final class OpenAiAdapter extends ProtocolAdapter {
             String id = Json.stringAt(call, "id");
             result.add(new ToolCall(id != null ? id : "call_" + i, Json.stringAt(call, "function", "name"), arguments(call)));
         }
+        Object usage = Json.at(json, "usage");
+        long input = tokens(usage, new Object[] { "prompt_tokens" });
+        long output = tokens(usage, new Object[] { "completion_tokens" });
         return new ModelReply(ThinkFilter.strip(text != null ? text : ""), result,
-                "length".equals(Json.stringAt(json, "choices", 0, "finish_reason")));
+                "length".equals(Json.stringAt(json, "choices", 0, "finish_reason")),
+                input < 0 && output < 0 ? null : TokenUsage.step(Math.max(0, input), Math.max(0, output), false));
     }
 
     @Override

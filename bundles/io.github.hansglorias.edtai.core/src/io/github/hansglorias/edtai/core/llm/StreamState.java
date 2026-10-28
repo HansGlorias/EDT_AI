@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.function.Consumer;
 
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
+
 /**
  * Что накоплено из потока ответа: текст и вызовы инструментов. Аргументы
  * вызова приходят кусками JSON, их склеиваем по номеру вызова.
@@ -17,6 +19,8 @@ final class StreamState {
     private final Consumer<String> onText;
     private final ThinkFilter thinking = new ThinkFilter();
     private boolean truncated;
+    private long inputTokens = -1;
+    private long outputTokens = -1;
 
     StreamState(Consumer<String> onText) {
         this.onText = onText;
@@ -32,6 +36,16 @@ final class StreamState {
     /** Ответ оборвался по лимиту длины (max_tokens). */
     void truncated() {
         truncated = true;
+    }
+
+    /** Токены из usage; -1 — в этом событии нет. Приходят частями: вход в начале, выход в конце. */
+    void usage(long input, long output) {
+        if (input >= 0) {
+            inputTokens = input;
+        }
+        if (output >= 0) {
+            outputTokens = output;
+        }
     }
 
     private void visible(String part) {
@@ -64,7 +78,9 @@ final class StreamState {
                 result.add(new ToolCall(call.id != null ? call.id : "call_" + entry.getKey(), call.name, call.arguments.toString()));
             }
         }
-        return new ModelReply(ThinkFilter.strip(text.toString()), result, truncated);
+        TokenUsage usage = inputTokens < 0 && outputTokens < 0 ? null
+                : TokenUsage.step(Math.max(0, inputTokens), Math.max(0, outputTokens), false);
+        return new ModelReply(ThinkFilter.strip(text.toString()), result, truncated, usage);
     }
 
     private static final class Builder {

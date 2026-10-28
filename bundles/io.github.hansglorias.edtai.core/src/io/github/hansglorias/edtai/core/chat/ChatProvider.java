@@ -32,6 +32,25 @@ public interface ChatProvider {
     }
 
     /**
+     * То же, и провайдер сообщает в {@code onUsage} токены ответа по мере
+     * шагов: каждый раз — итог ответа на этот момент.
+     */
+    default CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
+            Consumer<TokenUsage> onUsage) {
+        return reply(history, onText, onTool);
+    }
+
+    /** Окно модели в токенах; 0 — неизвестно. */
+    default long window() {
+        return 0;
+    }
+
+    /** Сколько токенов займёт история в запросе, по оценке; 0 — неизвестно. */
+    default long estimateTokens(List<ChatMessage> history) {
+        return 0;
+    }
+
+    /**
      * Сколько первых сообщений истории сжать в краткое содержание перед
      * ответом, потому что история перестаёт помещаться в окно модели.
      *

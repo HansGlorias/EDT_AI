@@ -10,6 +10,7 @@ import java.util.function.Consumer;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatProvider;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
@@ -30,6 +31,8 @@ public final class ModelChatProvider implements ChatProvider {
     }
 
     private final ConnectionSource source;
+    /** Подключение без токена: для окна и оценки, чтобы не открывать Secure Storage из UI. */
+    private final ConnectionSource withoutToken;
     private final ModelClient client;
     private final ToolSource tools;
     private final ToolApprover approver;
@@ -45,7 +48,13 @@ public final class ModelChatProvider implements ChatProvider {
      * @param approver спрашивает пользователя перед вызовом инструментов, которым нужно подтверждение
      */
     public ModelChatProvider(ConnectionSource source, ModelClient client, ToolSource tools, ToolApprover approver) {
+        this(source, source, client, tools, approver);
+    }
+
+    private ModelChatProvider(ConnectionSource source, ConnectionSource withoutToken, ModelClient client, ToolSource tools,
+            ToolApprover approver) {
         this.source = source;
+        this.withoutToken = withoutToken;
         this.client = client;
         this.tools = tools;
         this.approver = approver;
@@ -53,12 +62,12 @@ public final class ModelChatProvider implements ChatProvider {
 
     /** Подключение из настроек рабочей области и токен из Secure Storage. */
     public static ModelChatProvider forStore(SettingsStore store, ModelClient client) {
-        return new ModelChatProvider(() -> connection(store), client);
+        return forStore(store, client, ToolSource.NONE, ToolApprover.ALLOW_ALL);
     }
 
     /** То же с инструментами. */
     public static ModelChatProvider forStore(SettingsStore store, ModelClient client, ToolSource tools, ToolApprover approver) {
-        return new ModelChatProvider(() -> connection(store), client, tools, approver);
+        return new ModelChatProvider(() -> connection(store), () -> ModelConnection.of(store.load(), ""), client, tools, approver);
     }
 
     /**
@@ -91,6 +100,12 @@ public final class ModelChatProvider implements ChatProvider {
 
     @Override
     public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool) {
+        return reply(history, onText, onTool, usage -> { });
+    }
+
+    @Override
+    public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
+            Consumer<TokenUsage> onUsage) {
         ModelConnection connection;
         try {
             connection = source.get();
@@ -108,9 +123,20 @@ public final class ModelChatProvider implements ChatProvider {
             if (fitted.trimmed()) {
                 onTool.accept(fitted.notice());
             }
-            return client.stream(plain, fitted.history(), onText);
+            CompletableFuture<ModelReply> request = client.request(plain, fitted.history(), List.of(), List.of(), onText);
+            CompletableFuture<String> text = request.thenApply(reply -> {
+                onUsage.accept(reply.usage() != null ? reply.usage()
+                        : AgentLoop.estimate(RequestBudget.size(plain, fitted.history(), List.of(), List.of()), reply));
+                return reply.text();
+            });
+            text.whenComplete((answer, error) -> {
+                if (text.isCancelled()) {
+                    request.cancel(true);
+                }
+            });
+            return text;
         }
-        AgentLoop loop = new AgentLoop(client, connection, history, tools, approver, onText, onTool);
+        AgentLoop loop = new AgentLoop(client, connection, history, tools, approver, onText, onTool, onUsage);
         CompletableFuture<String> reply = loop.start();
         reply.whenComplete((answer, error) -> {
             if (loop.toolsRejected()) {
@@ -118,6 +144,26 @@ public final class ModelChatProvider implements ChatProvider {
             }
         });
         return reply;
+    }
+
+    @Override
+    public long window() {
+        try {
+            return withoutToken.get().window();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** По длине запроса без инструментов, их результатов и сведений о проекте: сколько займёт сама история. */
+    @Override
+    public long estimateTokens(List<ChatMessage> history) {
+        try {
+            ModelConnection connection = withoutToken.get();
+            return RequestBudget.size(connection, history, List.of(), List.of()) / RequestBudget.CHARS_PER_TOKEN;
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     /**

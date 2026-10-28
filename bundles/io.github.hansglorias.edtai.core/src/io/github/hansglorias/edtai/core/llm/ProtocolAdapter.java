@@ -40,6 +40,17 @@ abstract class ProtocolAdapter {
      */
     abstract boolean onEvent(SseEvent event, StreamState state) throws ModelException;
 
+    /** Сумма чисел по путям; -1 — ни одного нет. */
+    static long tokens(Object json, Object[]... paths) {
+        long sum = -1;
+        for (Object[] path : paths) {
+            if (Json.at(json, path) instanceof Number number) {
+                sum = Math.max(sum, 0) + number.longValue();
+            }
+        }
+        return sum;
+    }
+
     /**
      * Ответ целиком, если сервер не стал стримить.
      *

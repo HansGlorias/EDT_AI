@@ -10,6 +10,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.json.JsonException;
@@ -52,6 +53,7 @@ final class AgentLoop {
     private final List<ChatMessage> history;
     private final Consumer<String> onText;
     private final Consumer<ToolUse> onTool;
+    private final Consumer<TokenUsage> onUsage;
     private final ProtocolAdapter adapter;
     private final ToolSource source;
     private final ToolApprover approver;
@@ -78,13 +80,15 @@ final class AgentLoop {
     private int shrink;
     /** Сервер отклонил запрос с инструментами: больше их не передаём. */
     private boolean toolsRejected;
+    /** Токены ответа за прошедшие шаги. */
+    private TokenUsage usage;
 
     /**
      * @param source   инструменты; запрашиваются в фоновом потоке перед первым запросом
      * @param approver спрашивает пользователя перед вызовом инструмента, которому нужно подтверждение
      */
     AgentLoop(ModelClient client, ModelConnection connection, List<ChatMessage> history, ToolSource source, ToolApprover approver,
-            Consumer<String> onText, Consumer<ToolUse> onTool) {
+            Consumer<String> onText, Consumer<ToolUse> onTool, Consumer<TokenUsage> onUsage) {
         this.client = client;
         this.base = connection;
         this.history = history;
@@ -92,6 +96,7 @@ final class AgentLoop {
         this.approver = approver;
         this.onText = onText;
         this.onTool = onTool;
+        this.onUsage = onUsage;
         this.adapter = ProtocolAdapter.of(connection.protocol());
     }
 
@@ -196,7 +201,12 @@ final class AgentLoop {
         while (true) {
             try {
                 Prepared request = prepare();
-                return await(client.request(connection(), request.history(), request.extra(), tools, this::text));
+                ModelReply reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
+                TokenUsage step = reply.usage() != null ? reply.usage()
+                        : estimate(RequestBudget.size(connection(), request.history(), request.extra(), tools), reply);
+                usage = usage == null ? step : usage.plus(step);
+                onUsage.accept(usage);
+                return reply;
             } catch (ModelException e) {
                 // Сервер говорит «не помещается» (окно угадали или задали больше настоящего): урезаем и повторяем.
                 if (e.contextOverflow() && shrink < MAX_SHRINK) {
@@ -219,6 +229,12 @@ final class AgentLoop {
                 }
             }
         }
+    }
+
+    /** Сервер не прислал usage: по длине запроса и ответа. */
+    static TokenUsage estimate(int requestChars, ModelReply reply) {
+        int answerChars = reply.text().length() + reply.calls().stream().mapToInt(call -> call.name().length() + call.arguments().length()).sum();
+        return TokenUsage.step(requestChars / RequestBudget.CHARS_PER_TOKEN, answerChars / RequestBudget.CHARS_PER_TOKEN, true);
     }
 
     /** Подключение; если есть инструменты — с правилами работы с ними в системном промпте. */

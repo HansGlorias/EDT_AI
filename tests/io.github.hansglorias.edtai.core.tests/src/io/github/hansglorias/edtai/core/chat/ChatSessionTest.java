@@ -2,6 +2,7 @@ package io.github.hansglorias.edtai.core.chat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -81,6 +82,34 @@ class ChatSessionTest {
         assertEquals(new ChatMessage(ChatRole.ASSISTANT, "Привет", last(session).time(), Status.DONE), reply.get(TIMEOUT, TimeUnit.SECONDS));
         assertEquals(List.of("added:USER", "busy:true", "added:ASSISTANT/STREAMING:При", "updated:1/STREAMING:Привет",
                 "updated:1/DONE:Привет", "busy:false"), events);
+    }
+
+    @Test
+    void activityAndUsageFollowTheAnswer() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        assertNull(session.activity());
+
+        CompletableFuture<ChatMessage> reply = session.send("вопрос");
+        assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase());
+        provider.part("Смотрю.");
+        assertEquals(ReplyActivity.Phase.WRITING, session.activity().phase());
+        provider.onTool.accept(new ToolUse("1", "read_module", "Читает модуль Общий", "", ToolUse.Status.RUNNING));
+        assertEquals(new ReplyActivity(ReplyActivity.Phase.TOOL, "Читает модуль Общий", session.activity().started()),
+                session.activity());
+        provider.onTool.accept(new ToolUse("1", "read_module", "Читает модуль Общий", "10 строк", ToolUse.Status.DONE));
+        assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase());
+        provider.onUsage.accept(new TokenUsage(100, 5, 105, false));
+        provider.complete("Смотрю.");
+        reply.get(TIMEOUT, TimeUnit.SECONDS);
+
+        assertNull(session.activity());
+        assertEquals(new TokenUsage(100, 5, 105, false), session.usage());
+        // Токены пришли после конца ответа — не его.
+        provider.onUsage.accept(new TokenUsage(1, 1, 2, false));
+        assertEquals(105, session.usage().context());
+        session.clear();
+        assertNull(session.usage());
     }
 
     @Test
@@ -416,6 +445,8 @@ class ChatSessionTest {
 
         List<ChatMessage> history;
         Consumer<String> onText;
+        Consumer<ToolUse> onTool = use -> { };
+        Consumer<TokenUsage> onUsage = usage -> { };
         CompletableFuture<String> reply;
 
         @Override
@@ -429,6 +460,14 @@ class ChatSessionTest {
             onText = consumer;
             reply = new CompletableFuture<>();
             return reply;
+        }
+
+        @Override
+        public CompletableFuture<String> reply(List<ChatMessage> request, Consumer<String> text, Consumer<ToolUse> tool,
+                Consumer<TokenUsage> usage) {
+            onTool = tool;
+            onUsage = usage;
+            return reply(request, text);
         }
 
         void part(String text) {

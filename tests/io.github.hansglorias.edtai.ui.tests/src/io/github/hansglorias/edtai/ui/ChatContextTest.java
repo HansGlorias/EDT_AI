@@ -20,6 +20,7 @@ import org.eclipse.jface.action.IContributionItem;
 import org.eclipse.jface.action.MenuManager;
 import org.eclipse.jface.action.Separator;
 import org.eclipse.jface.bindings.TriggerSequence;
+import org.eclipse.jface.fieldassist.IContentProposal;
 import org.eclipse.jface.bindings.keys.KeySequence;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
@@ -39,6 +40,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
@@ -291,6 +293,24 @@ class ChatContextTest extends AbstractChatTest {
 
         view.attach(AttachedContext.wholeFile(catalog));
         assertEquals(List.of("Справочник.Номенклатура.МодульОбъекта"), view.contextBar().labels());
+    }
+
+    @Test
+    void atMentionAttachesModule() throws Exception {
+        createFile("src/Catalogs/Номенклатура/ObjectModule.bsl", "Процедура ПередЗаписью(Отказ)\nКонецПроцедуры\n");
+        ChatView view = showView();
+        String typed = "смотри @номенкл";
+
+        IContentProposal[] proposals = view.inputAssist().proposals(typed, typed.length());
+        assertEquals(List.of("Справочник.Номенклатура.МодульОбъекта"), Arrays.stream(proposals).map(IContentProposal::getLabel).toList());
+        view.input().setText(typed);
+        view.input().setSelection(typed.length());
+        view.inputAssist().acceptForTest(proposals[0]);
+
+        assertEquals("смотри @Справочник.Номенклатура.МодульОбъекта ", view.input().getText());
+        assertEquals(List.of("Справочник.Номенклатура.МодульОбъекта"), view.contextBar().labels());
+        assertEquals(SlashCommand.values().length, view.inputAssist().proposals("/", 1).length);
+        assertEquals(0, view.inputAssist().proposals("a/", 2).length);
     }
 
     @Test

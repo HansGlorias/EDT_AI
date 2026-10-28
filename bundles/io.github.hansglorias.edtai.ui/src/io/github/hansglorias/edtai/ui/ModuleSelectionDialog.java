@@ -1,7 +1,9 @@
 package io.github.hansglorias.edtai.ui;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Consumer;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -125,19 +127,36 @@ final class ModuleSelectionDialog extends FilteredItemsSelectionDialog {
                 if (monitor.isCanceled()) {
                     return;
                 }
-                if (project.isAccessible()) {
-                    project.accept(proxy -> {
-                        if (proxy.getType() == IResource.FILE && proxy.getName().endsWith(".bsl")) {
-                            contentProvider.add(proxy.requestResource(), itemsFilter);
-                        }
-                        // Служебные каталоги (.settings, bin, target) — не модули конфигурации.
-                        return proxy.getType() != IResource.FOLDER || !proxy.isDerived() && !proxy.getName().startsWith(".");
-                    }, IResource.NONE);
-                }
+                visit(project, file -> contentProvider.add(file, itemsFilter));
                 monitor.worked(1);
             }
         } finally {
             monitor.done();
+        }
+    }
+
+    /** Модули всех открытых проектов: для подсказок после «@». */
+    static List<IFile> modules() {
+        List<IFile> modules = new ArrayList<>();
+        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
+            try {
+                visit(project, modules::add);
+            } catch (CoreException e) {
+                // Проект закрылся во время обхода: без его модулей.
+            }
+        }
+        return modules;
+    }
+
+    private static void visit(IProject project, Consumer<IFile> modules) throws CoreException {
+        if (project.isAccessible()) {
+            project.accept(proxy -> {
+                if (proxy.getType() == IResource.FILE && proxy.getName().endsWith(".bsl")) {
+                    modules.accept((IFile) proxy.requestResource());
+                }
+                // Служебные каталоги (.settings, bin, target) — не модули конфигурации.
+                return proxy.getType() != IResource.FOLDER || !proxy.isDerived() && !proxy.getName().startsWith(".");
+            }, IResource.NONE);
         }
     }
 

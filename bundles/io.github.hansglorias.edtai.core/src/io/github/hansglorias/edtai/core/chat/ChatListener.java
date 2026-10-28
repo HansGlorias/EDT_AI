@@ -19,4 +19,8 @@ public interface ChatListener {
 
     default void busyChanged(boolean busy) {
     }
+
+    /** Пришли токены идущего ответа: {@link ChatSession#usage()}. */
+    default void usageChanged(TokenUsage usage) {
+    }
 }

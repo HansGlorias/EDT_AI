@@ -18,6 +18,7 @@ import java.util.stream.Stream;
 import org.eclipse.core.runtime.ILogListener;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IViewPart;
 import org.eclipse.ui.IWorkbenchPage;
@@ -56,6 +57,7 @@ abstract class AbstractChatTest {
         page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
         page.getWorkbenchWindow().getShell().setBounds(0, 0, 720, 780);
         SettingsStore.workspace().save(AiSettings.defaults());
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         deleteChats();
         Platform.addLogListener(logListener);
     }
@@ -71,6 +73,7 @@ abstract class AbstractChatTest {
             server.close();
         }
         SettingsStore.workspace().save(AiSettings.defaults());
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         deleteChats();
         Platform.removeLogListener(logListener);
         assertEquals(List.of(), loggedErrors.stream().map(AbstractChatTest::describe).toList());
