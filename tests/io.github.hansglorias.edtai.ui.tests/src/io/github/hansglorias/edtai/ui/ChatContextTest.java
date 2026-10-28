@@ -186,7 +186,12 @@ class ChatContextTest extends AbstractChatTest {
 
         ask(view, "Что делает эта процедура?");
 
-        String content = Json.stringAt(Json.parse(server.requests().get(0).body()), "messages", 0, "content");
+        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(0).body()).get("messages"));
+        // Первое — системное сообщение со сведениями о проекте, вопрос — последним.
+        String content = Json.stringAt(messages.get(messages.size() - 1), "content");
+        String system = Json.stringAt(messages.get(0), "content");
+        assertTrue(system.contains("Проект в IDE: edtai-context-test.") && system.contains("Открыт в редакторе: ОбщийМодуль.Тест.Модуль"),
+                system);
         assertEquals(NAME + " (проект " + PROJECT + ", " + MODULE_PATH + "), строки 7–10:\n```bsl\n"
                 + "Процедура Вывести() Экспорт\n\tСообщить(Сумма(1, 2));\n\tСообщить(\"Готово\");\nКонецПроцедуры\n```\n\n"
                 + "Что делает эта процедура?", content);

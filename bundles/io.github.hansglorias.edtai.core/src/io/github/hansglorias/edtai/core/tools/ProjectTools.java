@@ -316,20 +316,23 @@ public final class ProjectTools {
             }
             return asked;
         }
+        return defaultProject(files).orElseThrow(() -> new ToolException("В рабочей области нет открытых проектов"));
+    }
+
+    /** Проект по умолчанию: проект активного редактора, иначе первый проект конфигурации, иначе первый. */
+    static Optional<String> defaultProject(WorkspaceFiles files) {
+        List<String> projects = files.projects();
         Optional<String> preferred = files.preferredProject().filter(projects::contains);
         if (preferred.isPresent()) {
-            return preferred.get();
+            return preferred;
         }
         for (String project : projects) {
             Optional<Path> root = files.root(project);
             if (root.isPresent() && Files.isRegularFile(root.get().resolve("src/Configuration/Configuration.mdo"))) {
-                return project;
+                return Optional.of(project);
             }
         }
-        if (projects.isEmpty()) {
-            throw new ToolException("В рабочей области нет открытых проектов");
-        }
-        return projects.get(0);
+        return projects.stream().findFirst();
     }
 
     private Path root(String project) throws ToolException {

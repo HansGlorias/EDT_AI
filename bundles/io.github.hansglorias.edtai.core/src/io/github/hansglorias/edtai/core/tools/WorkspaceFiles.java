@@ -21,6 +21,16 @@ public interface WorkspaceFiles {
         return Optional.empty();
     }
 
+    /** Файл активного редактора в {@link #preferredProject()}: путь относительно проекта, разделитель {@code /}. */
+    default Optional<String> activeFile() {
+        return Optional.empty();
+    }
+
+    /** Строка курсора в активном редакторе, с 1; 0 — неизвестно. */
+    default int activeLine() {
+        return 0;
+    }
+
     /**
      * Текст файла с несохранёнными правками, если он открыт в редакторе.
      *

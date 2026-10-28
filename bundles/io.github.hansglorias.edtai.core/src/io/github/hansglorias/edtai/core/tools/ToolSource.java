@@ -18,4 +18,12 @@ public interface ToolSource {
      * @param problems получает строки для ленты о серверах, которые не подключились; ответ при этом продолжается
      */
     List<Tool> tools(Consumer<ToolUse> problems);
+
+    /**
+     * Сведения о проекте для системного промпта: см. {@link ProjectBrief}.
+     * Вызывается перед каждым ответом, в UI-потоке; пустая строка — нет.
+     */
+    default String brief() {
+        return "";
+    }
 }
