@@ -41,6 +41,10 @@ final class MessageRenderer {
     static final String CONTEXT = "Контекст: ";
     static final String TOOL = "→ ";
     static final String CHANGED = "Изменено: ";
+    static final String SHOW_CALLS = "показать";
+    static final String HIDE_CALLS = "свернуть";
+    /** Больше стольких вызовов подряд — сворачиваются в одну строку. */
+    static final int COLLAPSE = 3;
 
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault());
     private static final List<String> CODE_ACTIONS = List.of(COPY, INSERT);
@@ -83,12 +87,20 @@ final class MessageRenderer {
 
         /** Сравнение одного изменённого файла. */
         void showChange(ChatMessage answer, String path);
+
+        /** Развёрнута ли свёрнутая группа вызовов номер {@code group} в ответе. */
+        boolean expanded(ChatMessage answer, int group);
+
+        /** «показать» / «свернуть» у группы вызовов. */
+        void toggle(ChatMessage answer, int group);
     }
 
     private final StyledText history;
     private final Callbacks callbacks;
     private Color codeBackground;
     private RGB codeBackgroundFrom;
+    private Color userBackground;
+    private RGB userBackgroundFrom;
 
     MessageRenderer(StyledText history, Callbacks callbacks) {
         this.history = history;
@@ -113,6 +125,7 @@ final class MessageRenderer {
             // Текст и вызовы по порядку, как шёл ответ: видно, что модель делает между абзацами.
             List<AnswerParts.Part> parts = AnswerParts.split(body, message.tools());
             boolean afterTools = false;
+            int group = 0;
             for (int i = 0; i < parts.size(); i++) {
                 AnswerParts.Part part = parts.get(i);
                 if (i > 0) {
@@ -123,7 +136,7 @@ final class MessageRenderer {
                     markdown(rich, offset + text.length(), styles, codeRanges);
                     text.append(rich.text());
                 } else {
-                    tools(part.tools(), offset, text, styles);
+                    tools(message, group++, part.tools(), offset, text, styles);
                 }
                 afterTools = !part.isText();
             }
@@ -201,8 +214,32 @@ final class MessageRenderer {
         text.append('\n');
     }
 
-    /** Строки о вызванных инструментах: «→ Читает модуль Х — строки 1–120 из 120», без перевода строки в конце. */
-    private void tools(List<ToolUse> uses, int offset, StringBuilder text, List<StyleRange> styles) {
+    /**
+     * Строки о вызванных инструментах: «→ Читает модуль Х — строки 1–120 из
+     * 120», без перевода строки в конце. Больше {@link #COLLAPSE} подряд —
+     * одна строка «Вызовы инструментов: N» со ссылкой «показать» (пока
+     * ответ идёт — и последний вызов под ней).
+     */
+    private void tools(ChatMessage message, int group, List<ToolUse> uses, int offset, StringBuilder text, List<StyleRange> styles) {
+        List<ToolUse> shown = uses;
+        if (uses.size() > COLLAPSE) {
+            boolean expanded = callbacks.expanded(message, group);
+            long failed = uses.stream().filter(use -> use.status() == ToolUse.Status.FAILED).count();
+            String summary = TOOL + "Вызовы инструментов: " + uses.size() + (failed > 0 ? ", с ошибкой: " + failed : "");
+            styles.add(style(offset + text.length(), summary.length(), failed > 0 ? errorColor() : metaColor(), SWT.NORMAL));
+            text.append(summary).append("   ");
+            String label = expanded ? HIDE_CALLS : SHOW_CALLS;
+            StyleRange link = new StyleRange(offset + text.length(), label.length(), linkColor(), null);
+            link.data = (Runnable) () -> callbacks.toggle(message, group);
+            styles.add(link);
+            text.append(label);
+            if (!expanded && message.status() != ChatMessage.Status.STREAMING) {
+                return;
+            }
+            text.append('\n');
+            shown = expanded ? uses : uses.subList(uses.size() - 1, uses.size());
+        }
+        uses = shown;
         for (int i = 0; i < uses.size(); i++) {
             ToolUse use = uses.get(i);
             String line = TOOL + use.label();
@@ -335,6 +372,19 @@ final class MessageRenderer {
             codeBackgroundFrom = background;
         }
         return codeBackground;
+    }
+
+    /** Фон вопросов пользователя: лёгкий оттенок цвета выделения — вопросы видно среди ответов. */
+    Color userBackground() {
+        RGB background = history.getBackground().getRGB();
+        if (userBackground == null || !background.equals(userBackgroundFrom)) {
+            RGB accent = history.getDisplay().getSystemColor(SWT.COLOR_LIST_SELECTION).getRGB();
+            double share = 0.12;
+            userBackground = new Color(mix(background.red, accent.red, share), mix(background.green, accent.green, share),
+                    mix(background.blue, accent.blue, share));
+            userBackgroundFrom = background;
+        }
+        return userBackground;
     }
 
     private static int mix(int from, int to, double share) {

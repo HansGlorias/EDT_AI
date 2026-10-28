@@ -71,6 +71,7 @@ class ChatViewTest extends AbstractChatTest {
         waitUntil(() -> view.history().getText().contains("часовой пояс") && ChatView.STOP.equals(view.sendButton().getText()));
         assertFalse(view.isEmptyStateShown());
         assertTrue(view.history().getText().contains("пишет…"), view.history().getText());
+        assertNotNull(view.sendButton().getImage(), "у «Стоп» значок");
         assertTrue(view.status().getText().matches("test-model · пишет ответ… \\d+ с"), view.status().getText());
         Screenshots.capture(view.control(), "chat-streaming");
 

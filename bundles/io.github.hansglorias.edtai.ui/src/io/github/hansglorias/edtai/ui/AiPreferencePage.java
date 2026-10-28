@@ -18,10 +18,10 @@ import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.CheckboxTableViewer;
 import org.eclipse.jface.viewers.ColumnLabelProvider;
 import org.eclipse.jface.viewers.ICheckStateProvider;
+import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.viewers.TableViewerColumn;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
@@ -30,12 +30,11 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Menu;
-import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
+import org.eclipse.ui.dialogs.ElementListSelectionDialog;
 
 import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.llm.ModelConnection;
@@ -231,15 +230,18 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 showCheckResult("Сервер не вернул ни одной модели.");
             } else {
                 showCheckResult("Моделей на сервере: " + ids.size() + ".");
-                Menu menu = new Menu(listModels);
-                for (String id : ids) {
-                    MenuItem item = new MenuItem(menu, SWT.PUSH);
-                    item.setText(id);
-                    item.addListener(SWT.Selection, event -> model.setText(id));
+                // Диалог с поиском и прокруткой: меню с сотней моделей не помещалось на экран.
+                ElementListSelectionDialog dialog = new ElementListSelectionDialog(listModels.getShell(), new LabelProvider());
+                dialog.setTitle("Модель");
+                dialog.setMessage("Модели сервера (начните вводить имя для поиска):");
+                dialog.setElements(ids.toArray());
+                dialog.setMultipleSelection(false);
+                if (ids.contains(model.getText())) {
+                    dialog.setInitialSelections(model.getText());
                 }
-                Rectangle bounds = listModels.getBounds();
-                menu.setLocation(listModels.getParent().toDisplay(bounds.x, bounds.y + bounds.height));
-                menu.setVisible(true);
+                if (dialog.open() == Window.OK && dialog.getFirstResult() instanceof String id) {
+                    model.setText(id);
+                }
             }
         }));
     }

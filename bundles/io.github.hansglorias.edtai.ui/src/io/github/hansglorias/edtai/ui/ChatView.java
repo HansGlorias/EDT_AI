@@ -65,6 +65,7 @@ import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Cursor;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.Button;
@@ -197,6 +198,8 @@ public class ChatView extends ViewPart {
     private volatile String lateKey;
     private volatile long lateUntil;
     private static final long LATE_CHANGES_MS = 10_000;
+    /** Развёрнутые группы вызовов: «ключ ответа#номер группы». */
+    private final Set<String> expandedCalls = new java.util.HashSet<>();
     /** Открыт сохранённый чат — прокрутить ленту в конец. */
     private boolean scrollToEnd;
     private SashForm sash;
@@ -234,8 +237,8 @@ public class ChatView extends ViewPart {
      * Что сейчас нарисовано в ленте: сообщение, его действия, с какого символа
      * оно начинается и где в нём блоки кода (для фона).
      */
-    private record Rendered(ChatMessage message, Set<MessageRenderer.Action> actions, List<String> files, int start,
-            List<int[]> codeRanges) {
+    private record Rendered(ChatMessage message, Set<MessageRenderer.Action> actions, List<String> files, Set<String> expanded,
+            int start, List<int[]> codeRanges) {
     }
 
     private final List<Rendered> rendered = new ArrayList<>();
@@ -453,6 +456,20 @@ public class ChatView extends ViewPart {
             }
 
             @Override
+            public boolean expanded(ChatMessage answer, int group) {
+                return expandedCalls.contains(changeKey(answer) + "#" + group);
+            }
+
+            @Override
+            public void toggle(ChatMessage answer, int group) {
+                String key = changeKey(answer) + "#" + group;
+                if (!expandedCalls.remove(key)) {
+                    expandedCalls.add(key);
+                }
+                refresh();
+            }
+
+            @Override
             public void showChange(ChatMessage answer, String path) {
                 ChatView.this.showChanges(answer, path);
             }
@@ -476,6 +493,8 @@ public class ChatView extends ViewPart {
         history.addLineBackgroundListener(event -> {
             if (isInCode(event.lineOffset)) {
                 event.lineBackground = renderer.codeBackground();
+            } else if (isInQuestion(event.lineOffset)) {
+                event.lineBackground = renderer.userBackground();
             }
         });
 
@@ -562,8 +581,10 @@ public class ChatView extends ViewPart {
         int width = 0;
         for (String text : new String[] { SEND, STOP }) {
             sendButton.setText(text);
+            sendButton.setImage(STOP.equals(text) ? stopImage() : null);
             width = Math.max(width, sendButton.computeSize(SWT.DEFAULT, SWT.DEFAULT).x);
         }
+        sendButton.setImage(null);
         GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).hint(width, SWT.DEFAULT).applyTo(sendButton);
         sendButton.addListener(SWT.Selection, event -> sendOrStop());
         updateInputHeight();
@@ -1273,7 +1294,10 @@ public class ChatView extends ViewPart {
         boolean idle = !session.isBusy();
         List<Set<MessageRenderer.Action>> actions = new ArrayList<>();
         List<List<String>> files = new ArrayList<>();
+        List<Set<String>> expanded = new ArrayList<>();
         for (int i = 0; i < messages.size(); i++) {
+            String prefix = changeKey(messages.get(i)) + "#";
+            expanded.add(expandedCalls.stream().filter(key -> key.startsWith(prefix)).collect(Collectors.toSet()));
             files.add(idle && messages.get(i).role() == ChatRole.ASSISTANT ? changedPaths(messages.get(i)) : List.of());
             actions.add(actions(messages, i, idle));
             String key = changeKey(messages.get(i));
@@ -1286,7 +1310,8 @@ public class ChatView extends ViewPart {
         while (first < rendered.size() && first < messages.size()
                 && rendered.get(first).message().equals(messages.get(first))
                 && rendered.get(first).actions().equals(actions.get(first))
-                && rendered.get(first).files().equals(files.get(first))) {
+                && rendered.get(first).files().equals(files.get(first))
+                && rendered.get(first).expanded().equals(expanded.get(first))) {
             first++;
         }
         if (first < rendered.size() || first < messages.size()) {
@@ -1298,7 +1323,8 @@ public class ChatView extends ViewPart {
             List<StyleRange> styles = new ArrayList<>();
             for (int i = first; i < messages.size(); i++) {
                 List<int[]> codeRanges = new ArrayList<>();
-                rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), start + text.length(), codeRanges));
+                rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), expanded.get(i), start + text.length(),
+                        codeRanges));
                 renderer.render(messages.get(i), i, i > 0, actions.get(i), start, text, styles, codeRanges);
             }
             history.replaceTextRange(start, history.getCharCount() - start, text.toString());
@@ -1356,6 +1382,19 @@ public class ChatView extends ViewPart {
                 if (offset >= range[0] && offset <= range[1]) {
                     return true;
                 }
+            }
+        }
+        return false;
+    }
+
+    /** Строка вопроса пользователя (без пустой строки перед ним). */
+    private boolean isInQuestion(int offset) {
+        for (int i = 0; i < rendered.size(); i++) {
+            Rendered item = rendered.get(i);
+            int start = item.start() + (i > 0 ? 2 : 0);
+            int end = i + 1 < rendered.size() ? rendered.get(i + 1).start() : history.getCharCount() + 1;
+            if (offset >= start && offset < end) {
+                return item.message().role() == ChatRole.USER;
             }
         }
         return false;
@@ -1448,6 +1487,8 @@ public class ChatView extends ViewPart {
         String text = busy ? STOP : SEND;
         if (!Objects.equals(sendButton.getText(), text)) {
             sendButton.setText(text);
+            // «Стоп» с красным значком: видно, что идёт ответ и его можно остановить.
+            sendButton.setImage(busy ? stopImage() : null);
         }
         sendButton.setEnabled(busy || !input.getText().isBlank());
     }
@@ -1457,6 +1498,10 @@ public class ChatView extends ViewPart {
      * сколько секунд; потом — сколько окна занято и токены ответа (в чате
      * без ответов в этом сеансе — оценка по истории).
      */
+    private static Image stopImage() {
+        return PlatformUI.getWorkbench().getSharedImages().getImage(ISharedImages.IMG_ELCL_STOP);
+    }
+
     private void updateStatus() {
         String text;
         if (notice != null) {

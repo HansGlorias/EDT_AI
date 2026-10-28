@@ -101,6 +101,38 @@ class ChatToolsTest extends AbstractChatTest {
     }
 
     @Test
+    void manyCallsAreCollapsed() throws Exception {
+        StringBuilder calls = new StringBuilder();
+        String[] queries = { "Сообщить", "Тест", "Процедура", "КонецПроцедуры" };
+        for (int i = 0; i < queries.length; i++) {
+            calls.append(i == 0 ? "" : ",").append("{\"index\":").append(i).append(",\"id\":\"call_").append(i)
+                    .append("\",\"type\":\"function\",\"function\":{\"name\":\"search_code\",\"arguments\":")
+                    .append(Json.write("{\"query\":\"" + queries[i] + "\"}")).append("}}");
+        }
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"tool_calls\":[" + calls + "]}}]}\n\n", "data: [DONE]\n\n"), 5);
+            } else {
+                response.sse(List.of(openAiPart("Нашёл."), "data: [DONE]\n\n"), 5);
+            }
+        });
+        configure(server);
+        ChatView view = showView();
+
+        ask(view, "Где что?");
+
+        String transcript = view.history().getText();
+        assertTrue(transcript.contains(MessageRenderer.TOOL + "Вызовы инструментов: 4   " + MessageRenderer.SHOW_CALLS + "\nНашёл."),
+                transcript);
+        assertFalse(transcript.contains("Ищет"), "отдельные вызовы свёрнуты");
+        view.linkAction(MessageRenderer.SHOW_CALLS).run();
+        transcript = view.history().getText();
+        assertTrue(transcript.contains(MessageRenderer.HIDE_CALLS + "\n" + MessageRenderer.TOOL + "Ищет"), transcript);
+        view.linkAction(MessageRenderer.HIDE_CALLS).run();
+        assertFalse(view.history().getText().contains("Ищет"));
+    }
+
+    @Test
     void toolsCanBeTurnedOff() throws Exception {
         answering(List.of("Без инструментов."));
         SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, "", 0, false, false, "",
