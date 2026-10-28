@@ -1,0 +1,15 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: EDT AI UI
+Bundle-SymbolicName: io.github.hansglorias.edtai.ui;singleton:=true
+Bundle-Version: 0.1.0.qualifier
+Bundle-Vendor: EDT AI
+Bundle-RequiredExecutionEnvironment: JavaSE-17
+Bundle-ActivationPolicy: lazy
+Automatic-Module-Name: io.github.hansglorias.edtai.ui
+Require-Bundle: io.github.hansglorias.edtai.core;bundle-version="[0.1.0,1.0.0)",
+ org.eclipse.core.runtime;bundle-version="3.26.0",
+ org.eclipse.equinox.preferences;bundle-version="3.10.0",
+ org.eclipse.equinox.security;bundle-version="1.3.0",
+ org.eclipse.ui;bundle-version="3.200.0"
+Export-Package: io.github.hansglorias.edtai.ui

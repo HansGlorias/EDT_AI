@@ -1,0 +1,11 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: EDT AI UI Tests
+Bundle-SymbolicName: io.github.hansglorias.edtai.ui.tests
+Bundle-Version: 0.1.0.qualifier
+Bundle-Vendor: EDT AI
+Fragment-Host: io.github.hansglorias.edtai.ui
+Bundle-RequiredExecutionEnvironment: JavaSE-17
+Automatic-Module-Name: io.github.hansglorias.edtai.ui.tests
+Import-Package: org.junit.jupiter.api;version="[5.9.0,6.0.0)",
+ org.junit.jupiter.api.function;version="[5.9.0,6.0.0)"

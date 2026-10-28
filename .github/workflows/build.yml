@@ -1,0 +1,55 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # Maven берётся из wrapper (.mvn/wrapper): Tycho 4.0.x не стартует на
+      # более новом Maven, который стоит на runner.
+      # UI-тесты на Linux идут под xvfb с GTK 3 — ближе всего к Astra Linux.
+      - name: Build and test (Linux, GTK под xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" ./mvnw -B -ntp verify
+
+      - name: Build and test (Windows)
+        if: runner.os == 'Windows'
+        run: .\mvnw.cmd -B -ntp verify
+
+      - name: Test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.os }}
+          path: |
+            tests/*/target/surefire-reports/
+            tests/*/target/work/data/.metadata/.log
+          if-no-files-found: ignore
+
+      # Выгружаем содержимое update-site, а не готовый zip: GitHub сам
+      # упакует артефакт в zip, и скачанный файл сразу ставится в EDT.
+      - name: Update site
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: edtai-update-site
+          path: releng/io.github.hansglorias.edtai.repository/target/repository/
+          if-no-files-found: error

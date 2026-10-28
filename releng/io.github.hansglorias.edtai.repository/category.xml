@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<site>
+   <feature id="io.github.hansglorias.edtai.feature" version="0.0.0">
+      <category name="edtai"/>
+   </feature>
+   <category-def name="edtai" label="EDT AI">
+      <description>Чат с языковой моделью для 1C:EDT</description>
+   </category-def>
+</site>
