@@ -21,6 +21,7 @@ import org.eclipse.jface.viewers.ICheckStateProvider;
 import org.eclipse.jface.viewers.TableViewerColumn;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
@@ -29,6 +30,8 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
@@ -70,6 +73,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Button removeToken;
     private boolean tokenRemovalRequested;
     private Button checkButton;
+    private Button listModels;
     private Label checkResult;
     private CompletableFuture<String> check;
     private Button useSystemTrustStore;
@@ -120,9 +124,34 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).applyTo(baseUrl);
         baseUrl.addModifyListener(event -> validate());
 
+        label(group, "Токен:");
+        token = new Text(group, SWT.BORDER | SWT.PASSWORD);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(token);
+        token.addModifyListener(event -> {
+            if (!token.getText().isEmpty()) {
+                tokenRemovalRequested = false;
+            }
+            updateTokenState();
+        });
+        removeToken = new Button(group, SWT.PUSH);
+        removeToken.setText("Удалить");
+        removeToken.addListener(SWT.Selection, event -> {
+            token.setText("");
+            tokenRemovalRequested = true;
+            updateTokenState();
+        });
+
+        new Label(group, SWT.NONE);
+        tokenState = new Label(group, SWT.WRAP);
+        GridDataFactory.fillDefaults().grab(true, false).span(2, 1).applyTo(tokenState);
+
         label(group, "Модель:");
         model = new Text(group, SWT.BORDER);
-        GridDataFactory.fillDefaults().grab(true, false).span(2, 1).applyTo(model);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(model);
+        listModels = new Button(group, SWT.PUSH);
+        listModels.setText("Список…");
+        listModels.setToolTipText("Загрузить модели сервера (GET /v1/models) и выбрать из списка");
+        listModels.addListener(SWT.Selection, event -> chooseModel());
 
         label(group, "Макс. токенов ответа:");
         maxTokens = new Text(group, SWT.BORDER);
@@ -164,33 +193,59 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 + " не поддерживает инструменты.");
         GridDataFactory.fillDefaults().span(2, 1).applyTo(toolsEnabled);
 
-        label(group, "Токен:");
-        token = new Text(group, SWT.BORDER | SWT.PASSWORD);
-        GridDataFactory.fillDefaults().grab(true, false).applyTo(token);
-        token.addModifyListener(event -> {
-            if (!token.getText().isEmpty()) {
-                tokenRemovalRequested = false;
-            }
-            updateTokenState();
-        });
-        removeToken = new Button(group, SWT.PUSH);
-        removeToken.setText("Удалить");
-        removeToken.addListener(SWT.Selection, event -> {
-            token.setText("");
-            tokenRemovalRequested = true;
-            updateTokenState();
-        });
-
-        new Label(group, SWT.NONE);
-        tokenState = new Label(group, SWT.WRAP);
-        GridDataFactory.fillDefaults().grab(true, false).span(2, 1).applyTo(tokenState);
-
         checkButton = new Button(group, SWT.PUSH);
         checkButton.setText("Проверить подключение");
         GridDataFactory.fillDefaults().applyTo(checkButton);
         checkButton.addListener(SWT.Selection, event -> checkConnection());
         checkResult = new Label(group, SWT.WRAP);
         GridDataFactory.fillDefaults().grab(true, false).hint(300, SWT.DEFAULT).span(2, 1).applyTo(checkResult);
+    }
+
+    /** Список моделей сервера с текущими значениями полей; выбранная попадает в поле «Модель». */
+    private void chooseModel() {
+        AiSettings settings = current();
+        if (settings.baseUrl().isEmpty()) {
+            showCheckResult("Укажите адрес сервера.");
+            return;
+        }
+        String tokenValue;
+        try {
+            tokenValue = tokenValue();
+        } catch (Exception e) {
+            showCheckResult("Не удалось прочитать токен из Secure Storage: " + e.getMessage());
+            return;
+        }
+        listModels.setEnabled(false);
+        showCheckResult("Загружаю список моделей…");
+        Display display = listModels.getDisplay();
+        new ModelClient().models(ModelConnection.of(settings, tokenValue)).whenComplete((ids, error) -> display.asyncExec(() -> {
+            if (listModels.isDisposed()) {
+                return;
+            }
+            listModels.setEnabled(true);
+            Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
+            if (cause != null) {
+                showCheckResult("Список моделей не получен: " + cause.getMessage());
+            } else if (ids.isEmpty()) {
+                showCheckResult("Сервер не вернул ни одной модели.");
+            } else {
+                showCheckResult("Моделей на сервере: " + ids.size() + ".");
+                Menu menu = new Menu(listModels);
+                for (String id : ids) {
+                    MenuItem item = new MenuItem(menu, SWT.PUSH);
+                    item.setText(id);
+                    item.addListener(SWT.Selection, event -> model.setText(id));
+                }
+                Rectangle bounds = listModels.getBounds();
+                menu.setLocation(listModels.getParent().toDisplay(bounds.x, bounds.y + bounds.height));
+                menu.setVisible(true);
+            }
+        }));
+    }
+
+    /** Токен из поля, а если оно пусто — сохранённый (если его не удаляют). */
+    private String tokenValue() throws Exception {
+        return !token.getText().isEmpty() ? token.getText() : tokenRemovalRequested || !store.hasToken() ? "" : store.loadToken();
     }
 
     /** Короткий запрос к модели с текущими значениями полей, ещё не сохранёнными. */
@@ -206,8 +261,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         }
         String tokenValue;
         try {
-            tokenValue = !token.getText().isEmpty() ? token.getText()
-                    : tokenRemovalRequested || !store.hasToken() ? "" : store.loadToken();
+            tokenValue = tokenValue();
         } catch (Exception e) {
             showCheckResult("Не удалось прочитать токен из Secure Storage: " + e.getMessage());
             return;

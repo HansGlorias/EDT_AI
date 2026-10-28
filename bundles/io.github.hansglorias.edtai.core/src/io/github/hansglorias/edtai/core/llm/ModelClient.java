@@ -12,6 +12,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -132,6 +133,61 @@ public final class ModelClient {
                     return "Подключение работает: модель " + connection.model() + " ответила за " + millis + " мс"
                             + (shown.isEmpty() ? "." : ": «" + shown + "».");
                 });
+    }
+
+    /**
+     * Модели сервера: {@code GET …/v1/models} (OpenAI-совместимые серверы,
+     * Ollama, LM Studio, vLLM, Anthropic).
+     *
+     * @return идентификаторы моделей по алфавиту
+     */
+    public CompletableFuture<List<String>> models(ModelConnection connection) {
+        CompletableFuture<List<String>> result = new CompletableFuture<>();
+        Thread thread = new Thread(() -> {
+            try {
+                result.complete(listModels(connection));
+            } catch (Throwable e) {
+                result.completeExceptionally(e);
+            }
+        }, "EDT AI: список моделей");
+        thread.setDaemon(true);
+        thread.start();
+        return result;
+    }
+
+    private List<String> listModels(ModelConnection connection) throws ModelException {
+        URI chat = connection.endpoint();
+        String path = chat.getRawPath();
+        String base = path.substring(0, path.length() - (path.endsWith("/chat/completions") ? "/chat/completions" : "/messages").length());
+        URI uri = URI.create(chat.getScheme() + "://" + chat.getRawAuthority() + base + "/models");
+        try {
+            // Заголовки — внутри try: некорректный токен в тексте исключения редактируется ниже.
+            HttpRequest.Builder request = HttpRequest.newBuilder(uri).timeout(connectTimeout.plusSeconds(30))
+                    .header("User-Agent", USER_AGENT).header("Accept", "application/json").GET();
+            ProtocolAdapter.of(connection.protocol()).headers(connection).forEach(request::header);
+            HttpResponse<String> response = client(connection.trust()).send(request.build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() / 100 != 2) {
+                throw ModelErrors.http(response.statusCode(), response.body(), uri);
+            }
+            List<String> ids = new ArrayList<>();
+            for (Object model : Json.asList(Json.at(Json.parse(response.body()), "data"))) {
+                String id = Json.stringAt(model, "id");
+                if (id != null && !id.isBlank()) {
+                    ids.add(id);
+                }
+            }
+            ids.sort(String.CASE_INSENSITIVE_ORDER);
+            return ids;
+        } catch (ModelException e) {
+            throw new ModelException(ModelErrors.redact(e.getMessage(), connection.token()), e.getCause(), false);
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            ModelException error = ModelErrors.of(e, uri, connectTimeout, responseTimeout, null);
+            throw new ModelException(ModelErrors.redact(error.getMessage(), connection.token()), error.getCause(), false);
+        }
     }
 
     private synchronized HttpClient client(TrustSettings trust) throws ModelException {

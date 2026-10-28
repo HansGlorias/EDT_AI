@@ -46,6 +46,18 @@ Update-site после сборки:
   было проверить без UI.
 - Перед пушем `./mvnw -B verify` должен быть зелёным.
 
+## Локальная работа (Windows, Astra)
+
+- JDK 17 (`JAVA_HOME`), Maven не нужен — `./mvnw` (на Windows
+  `mvnw.cmd`) скачает 3.9.11 сам. Первая сборка качает target platform
+  Eclipse 2023-12 (~1 ГБ) — нужен доступ к `download.eclipse.org`.
+- Сборка с тестами: `./mvnw -B verify`. UI-тесты открывают окно Eclipse:
+  на Windows и в графической сессии Astra — просто запуск; по SSH без
+  дисплея — `xvfb-run -a`.
+- Быстро только ядро: `./mvnw -B verify -pl releng/edtai.target,bundles/io.github.hansglorias.edtai.core,tests/io.github.hansglorias.edtai.core.tests -am`.
+- Список доработок с приоритетами — `docs/REVIEW.md`, что уже сделано —
+  этап 7 в SPEC.md.
+
 ## Облачная сессия
 
 - Окружению нужен доступ к `download.eclipse.org`, `repo.maven.apache.org`,
