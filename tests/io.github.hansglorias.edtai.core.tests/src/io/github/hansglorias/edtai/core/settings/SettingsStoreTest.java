@@ -60,7 +60,7 @@ class SettingsStoreTest {
 
     @Test
     void savesAndLoadsSettings() throws Exception {
-        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "test-model", 2048, "", 12_000, false,
+        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "test-model", 2048, "", 12_000, true, false,
                 "/etc/ssl/corp-ca.pem", List.of(
                         new McpServer("fs", McpTransport.STDIO, "server --stdio", true),
                         new McpServer("web", McpTransport.HTTP, "http://localhost:8080/mcp", false)));
@@ -73,8 +73,8 @@ class SettingsStoreTest {
     @Test
     void emptyValuesAreRemovedFromPreferences() throws Exception {
         String prompt = AiSettings.DEFAULT_SYSTEM_PROMPT;
-        store.save(new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", 100, "свой", 0, true, "", List.of()));
-        store.save(new AiSettings(Protocol.ANTHROPIC, "", "", 0, prompt, 0, true, "", List.of()));
+        store.save(new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "m", 100, "свой", 0, true, true, "", List.of()));
+        store.save(new AiSettings(Protocol.ANTHROPIC, "", "", 0, prompt, 0, true, true, "", List.of()));
 
         assertEquals(List.of(SettingsStore.KEY_PROTOCOL, SettingsStore.KEY_USE_SYSTEM_TRUST_STORE),
                 List.of(preferences.keys()).stream().sorted().toList());
@@ -84,11 +84,11 @@ class SettingsStoreTest {
     void defaultSystemPromptIsNotStoredButEmptyOneIs() throws Exception {
         assertEquals(AiSettings.DEFAULT_SYSTEM_PROMPT, store.load().systemPrompt());
 
-        store.save(new AiSettings(null, "", "", 0, "", 0, true, "", List.of()));
+        store.save(new AiSettings(null, "", "", 0, "", 0, true, true, "", List.of()));
         assertEquals("", preferences.get(SettingsStore.KEY_SYSTEM_PROMPT, null));
         assertEquals("", store.load().systemPrompt());
 
-        store.save(new AiSettings(null, "", "", 0, "Отвечай кратко.\nБез воды.", 0, true, "", List.of()));
+        store.save(new AiSettings(null, "", "", 0, "Отвечай кратко.\nБез воды.", 0, true, true, "", List.of()));
         assertEquals("Отвечай кратко.\nБез воды.", store.load().systemPrompt());
 
         store.save(AiSettings.defaults());
@@ -100,13 +100,25 @@ class SettingsStoreTest {
     void defaultContextLimitIsNotStored() throws Exception {
         assertEquals(AiSettings.DEFAULT_CONTEXT_LIMIT, store.load().contextLimit());
 
-        store.save(new AiSettings(null, "", "", 0, "", 5_000, true, "", List.of()));
+        store.save(new AiSettings(null, "", "", 0, "", 5_000, true, true, "", List.of()));
         assertEquals(5_000, preferences.getInt(SettingsStore.KEY_CONTEXT_LIMIT, 0));
         assertEquals(5_000, store.load().contextLimit());
 
-        store.save(new AiSettings(null, "", "", 0, "", 0, true, "", List.of()));
+        store.save(new AiSettings(null, "", "", 0, "", 0, true, true, "", List.of()));
         assertEquals(null, preferences.get(SettingsStore.KEY_CONTEXT_LIMIT, null));
         assertEquals(AiSettings.DEFAULT_CONTEXT_LIMIT, store.load().contextLimit());
+    }
+
+    @Test
+    void toolsAreOnByDefaultAndOffIsStored() throws Exception {
+        assertTrue(store.load().toolsEnabled());
+
+        store.save(new AiSettings(null, "", "", 0, "", 0, false, true, "", List.of()));
+        assertEquals("false", preferences.get(SettingsStore.KEY_TOOLS_ENABLED, null));
+        assertFalse(store.load().toolsEnabled());
+
+        store.save(AiSettings.defaults());
+        assertEquals(null, preferences.get(SettingsStore.KEY_TOOLS_ENABLED, null));
     }
 
     @Test

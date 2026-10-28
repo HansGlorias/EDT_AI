@@ -262,6 +262,27 @@ class ChatSessionTest {
     }
 
     @Test
+    void toolUsesGoIntoAnswerAndUnfinishedAreInterrupted() throws Exception {
+        ToolProvider provider = new ToolProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> reply = session.send("что в проекте?");
+
+        provider.tool.accept(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "", ToolUse.Status.RUNNING));
+        assertEquals(List.of(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "", ToolUse.Status.RUNNING)),
+                last(session).tools());
+        assertEquals(Status.STREAMING, last(session).status());
+        provider.tool.accept(new ToolUse("1", "project_info", "Смотрит сведения о проекте", "Демо 1.0", ToolUse.Status.DONE));
+        provider.tool.accept(new ToolUse("2", "read_module", "Читает модуль Х", "", ToolUse.Status.RUNNING));
+        provider.text.accept("Ответ");
+        session.cancel();
+        reply.get(TIMEOUT, TimeUnit.SECONDS);
+
+        assertEquals(List.of("Смотрит сведения о проекте — Демо 1.0", "Читает модуль Х — ошибка: прервано"),
+                last(session).tools().stream().map(ToolUse::label).toList());
+        assertEquals("Ответ", last(session).text());
+    }
+
+    @Test
     void restoreReplacesHistory() {
         ChatSession session = new ChatSession(new ManualProvider());
         List<String> events = record(session);
@@ -367,6 +388,30 @@ class ChatSessionTest {
     }
 
     /** Провайдер, которым управляет тест: части ответа, завершение, ошибка. */
+    /** Провайдер, который сообщает о вызовах инструментов. */
+    private static final class ToolProvider implements ChatProvider {
+
+        Consumer<String> text;
+        Consumer<ToolUse> tool;
+
+        @Override
+        public String name() {
+            return "tools";
+        }
+
+        @Override
+        public CompletableFuture<String> reply(List<ChatMessage> request, Consumer<String> consumer) {
+            throw new AssertionError("сессия должна вызывать вариант с инструментами");
+        }
+
+        @Override
+        public CompletableFuture<String> reply(List<ChatMessage> request, Consumer<String> onText, Consumer<ToolUse> onTool) {
+            text = onText;
+            tool = onTool;
+            return new CompletableFuture<>();
+        }
+    }
+
     private static final class ManualProvider implements ChatProvider {
 
         List<ChatMessage> history;

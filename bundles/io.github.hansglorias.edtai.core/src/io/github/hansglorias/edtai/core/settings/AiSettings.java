@@ -13,6 +13,7 @@ import java.util.Objects;
  * @param maxTokens           ограничение длины ответа в токенах, 0 — по умолчанию для протокола
  * @param systemPrompt        системный промпт, пустая строка — без него
  * @param contextLimit        сколько символов кода из EDT прикреплять к одному сообщению, 0 — по умолчанию
+ * @param toolsEnabled        давать модели инструменты чтения проекта
  * @param useSystemTrustStore доверять корневым сертификатам ОС в дополнение к JDK
  * @param caCertificateFile   путь к дополнительному PEM-файлу с сертификатами CA, пусто — нет
  * @param mcpServers          MCP-серверы
@@ -24,12 +25,14 @@ public record AiSettings(
         int maxTokens,
         String systemPrompt,
         int contextLimit,
+        boolean toolsEnabled,
         boolean useSystemTrustStore,
         String caCertificateFile,
         List<McpServer> mcpServers) {
 
     public static final Protocol DEFAULT_PROTOCOL = Protocol.OPENAI_COMPATIBLE;
     public static final boolean DEFAULT_USE_SYSTEM_TRUST_STORE = true;
+    public static final boolean DEFAULT_TOOLS_ENABLED = true;
     public static final int MAX_TOKENS_LIMIT = 1_000_000;
     /**
      * Лимит контекста по умолчанию: около 15–25 тысяч токенов кириллицы —
@@ -54,7 +57,8 @@ public record AiSettings(
     }
 
     public static AiSettings defaults() {
-        return new AiSettings(DEFAULT_PROTOCOL, "", "", 0, DEFAULT_SYSTEM_PROMPT, DEFAULT_CONTEXT_LIMIT, DEFAULT_USE_SYSTEM_TRUST_STORE, "", List.of());
+        return new AiSettings(DEFAULT_PROTOCOL, "", "", 0, DEFAULT_SYSTEM_PROMPT, DEFAULT_CONTEXT_LIMIT, DEFAULT_TOOLS_ENABLED,
+                DEFAULT_USE_SYSTEM_TRUST_STORE, "", List.of());
     }
 
     /** Заданы ли адрес и модель — минимум, чтобы отправлять запросы. */

@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.chat;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -166,7 +167,8 @@ public final class ChatSession {
             checkIdle();
             messages.clear();
             for (ChatMessage message : saved) {
-                messages.add(message.status() == Status.STREAMING ? message.with(message.text(), Status.STOPPED) : message);
+                ChatMessage restored = message.status() == Status.STREAMING ? message.with(message.text(), Status.STOPPED) : message;
+                messages.add(restored.withTools(restored.tools().stream().map(ChatSession::interrupted).toList()));
             }
         }
         listeners.forEach(ChatListener::historyChanged);
@@ -189,7 +191,7 @@ public final class ChatSession {
 
         CompletableFuture<String> reply;
         try {
-            reply = provider.reply(history, part -> onPart(request, part));
+            reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use));
         } catch (RuntimeException e) {
             reply = CompletableFuture.failedFuture(e);
         }
@@ -210,10 +212,31 @@ public final class ChatSession {
         }
     }
 
+    private void onTool(Request request, ToolUse use) {
+        synchronized (lock) {
+            if (request.finished) {
+                return;
+            }
+            int existing = -1;
+            for (int i = 0; i < request.tools.size() && existing < 0; i++) {
+                if (!use.id().isEmpty() && request.tools.get(i).id().equals(use.id())) {
+                    existing = i;
+                }
+            }
+            if (existing >= 0) {
+                request.tools.set(existing, use);
+            } else {
+                request.tools.add(use);
+            }
+            put(request, request.text.toString(), Status.STREAMING);
+        }
+    }
+
     private ChatMessage finish(Request request, String answer, Throwable error) {
         ChatMessage result;
         synchronized (lock) {
             request.finished = true;
+            request.tools.replaceAll(ChatSession::interrupted);
             Throwable cause = unwrap(error);
             String partial = request.text.toString();
             if (cause == null) {
@@ -238,12 +261,12 @@ public final class ChatSession {
     /** Добавляет или обновляет ответ ассистента этого запроса. Под {@link #lock}. */
     private ChatMessage put(Request request, String text, Status status) {
         if (request.index < 0 || request.index >= messages.size()) {
-            ChatMessage message = new ChatMessage(ChatRole.ASSISTANT, text, Instant.now(), status);
+            ChatMessage message = new ChatMessage(ChatRole.ASSISTANT, text, Instant.now(), status, List.of(), request.tools);
             request.index = messages.size();
             add(message);
             return message;
         }
-        ChatMessage message = messages.get(request.index).with(text, status);
+        ChatMessage message = messages.get(request.index).with(text, status).withTools(request.tools);
         messages.set(request.index, message);
         int index = request.index;
         listeners.forEach(listener -> listener.messageUpdated(index, message));
@@ -253,6 +276,13 @@ public final class ChatSession {
     private void add(ChatMessage message) {
         messages.add(message);
         listeners.forEach(listener -> listener.messageAdded(message));
+    }
+
+    /** Инструмент, который не успел завершиться до конца ответа. */
+    private static ToolUse interrupted(ToolUse use) {
+        return use.status() == ToolUse.Status.RUNNING
+                ? new ToolUse(use.id(), use.name(), use.summary(), "прервано", ToolUse.Status.FAILED)
+                : use;
     }
 
     private static Throwable unwrap(Throwable error) {
@@ -270,6 +300,7 @@ public final class ChatSession {
 
     private static final class Request {
         final StringBuilder text = new StringBuilder();
+        final List<ToolUse> tools = new ArrayList<>();
         /** Номер ответа ассистента в истории, -1 — ещё не добавлен. */
         int index = -1;
         boolean finished;

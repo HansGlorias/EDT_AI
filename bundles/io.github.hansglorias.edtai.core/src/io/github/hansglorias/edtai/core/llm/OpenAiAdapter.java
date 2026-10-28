@@ -4,10 +4,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Consumer;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.json.Json;
+import io.github.hansglorias.edtai.core.tools.Tool;
 
 /** OpenAI-совместимый {@code /v1/chat/completions}: OpenAI, vLLM, Ollama, LM Studio, шлюзы. */
 final class OpenAiAdapter extends ProtocolAdapter {
@@ -22,22 +22,31 @@ final class OpenAiAdapter extends ProtocolAdapter {
     }
 
     @Override
-    Map<String, Object> body(ModelConnection connection, List<ChatMessage> history) {
+    Map<String, Object> body(ModelConnection connection, List<ChatMessage> history, List<Object> extra, List<Tool> tools) {
         List<Object> messages = new ArrayList<>();
         if (!connection.systemPrompt().isEmpty()) {
             messages.add(Json.object("role", "system", "content", connection.systemPrompt()));
         }
         messages.addAll(messages(history));
+        messages.addAll(extra);
         Map<String, Object> body = mutable("model", connection.model(), "messages", messages, "stream", true);
         // Без явного ограничения не передаём: часть моделей OpenAI не принимает max_tokens.
         if (connection.maxTokens() > 0) {
             body.put("max_tokens", connection.maxTokens());
         }
+        if (!tools.isEmpty()) {
+            List<Object> definitions = new ArrayList<>();
+            for (Tool tool : tools) {
+                definitions.add(Json.object("type", "function", "function",
+                        Json.object("name", tool.name(), "description", tool.description(), "parameters", tool.inputSchema())));
+            }
+            body.put("tools", definitions);
+        }
         return body;
     }
 
     @Override
-    boolean onEvent(SseEvent event, Consumer<String> onText) throws ModelException {
+    boolean onEvent(SseEvent event, StreamState state) throws ModelException {
         String data = event.data().strip();
         if (data.equals("[DONE]")) {
             return true;
@@ -47,22 +56,66 @@ final class OpenAiAdapter extends ProtocolAdapter {
             String error = errorText(json);
             throw new ModelException("Сервер прервал ответ с ошибкой: " + (error != null ? error : data));
         }
-        String text = Json.stringAt(json, "choices", 0, "delta", "content");
-        if (text != null && !text.isEmpty()) {
-            onText.accept(text);
+        Object delta = Json.at(json, "choices", 0, "delta");
+        state.text(Json.stringAt(delta, "content"));
+        List<Object> calls = Json.asList(Json.at(delta, "tool_calls"));
+        for (int i = 0; i < calls.size(); i++) {
+            Object call = calls.get(i);
+            // Ollama и часть шлюзов не присылают index: тогда номер — позиция в массиве.
+            int index = Json.at(call, "index") instanceof Number number ? number.intValue() : i;
+            state.call(index, Json.stringAt(call, "id"), Json.stringAt(call, "function", "name"), arguments(call));
         }
         return false;
     }
 
     @Override
-    String fullResponse(Object json) throws ModelException {
-        String text = Json.stringAt(json, "choices", 0, "message", "content");
-        if (text != null) {
-            return text;
+    ModelReply fullResponse(Object json) throws ModelException {
+        Object message = Json.at(json, "choices", 0, "message");
+        String text = Json.stringAt(message, "content");
+        List<Object> calls = Json.asList(Json.at(message, "tool_calls"));
+        if (text == null && calls.isEmpty()) {
+            String error = errorText(json);
+            throw new ModelException(error != null
+                    ? "Сервер вернул ошибку: " + error
+                    : "В ответе сервера нет текста (choices[0].message.content). Проверьте протокол в настройках.");
         }
-        String error = errorText(json);
-        throw new ModelException(error != null
-                ? "Сервер вернул ошибку: " + error
-                : "В ответе сервера нет текста (choices[0].message.content). Проверьте протокол в настройках.");
+        List<ToolCall> result = new ArrayList<>();
+        for (int i = 0; i < calls.size(); i++) {
+            Object call = calls.get(i);
+            String id = Json.stringAt(call, "id");
+            result.add(new ToolCall(id != null ? id : "call_" + i, Json.stringAt(call, "function", "name"), arguments(call)));
+        }
+        return new ModelReply(text != null ? text : "", result);
+    }
+
+    @Override
+    Object assistantMessage(ModelReply reply) {
+        List<Object> calls = new ArrayList<>();
+        for (ToolCall call : reply.calls()) {
+            calls.add(Json.object("id", call.id(), "type", "function", "function",
+                    Json.object("name", call.name(), "arguments", call.arguments())));
+        }
+        Map<String, Object> message = mutable("role", "assistant");
+        if (!reply.text().isEmpty()) {
+            message.put("content", reply.text());
+        }
+        message.put("tool_calls", calls);
+        return message;
+    }
+
+    @Override
+    List<Object> toolResults(List<ToolResult> results) {
+        List<Object> messages = new ArrayList<>();
+        for (ToolResult result : results) {
+            messages.add(Json.object("role", "tool", "tool_call_id", result.call().id(), "content",
+                    result.error() ? "Ошибка: " + result.text() : result.text()));
+        }
+        return messages;
+    }
+
+    /** Аргументы — строка JSON; некоторые серверы присылают сразу объект. */
+    private static String arguments(Object call) {
+        Object arguments = Json.at(call, "function", "arguments");
+        return arguments == null ? null : arguments instanceof String text ? text : Json.write(arguments);
     }
 }

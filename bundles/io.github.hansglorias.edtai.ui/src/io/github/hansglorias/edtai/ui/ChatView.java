@@ -68,6 +68,8 @@ import io.github.hansglorias.edtai.core.llm.ModelChatProvider;
 import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
+import io.github.hansglorias.edtai.core.tools.ProjectTools;
+import io.github.hansglorias.edtai.core.tools.Tool;
 
 /**
  * Вид «AI Chat»: лента диалога, панель прикреплённых фрагментов кода и
@@ -91,7 +93,8 @@ public class ChatView extends ViewPart {
     private static final int MAX_INPUT_LINES = 10;
     private static final int NOTICE_MS = 4000;
 
-    private final ChatSession session = new ChatSession(ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient()));
+    private final ChatSession session = new ChatSession(
+            ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), ChatView::tools));
     private final ChatHistoryFile historyFile = new ChatHistoryFile(
             Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath().resolve(HISTORY_FILE));
 
@@ -781,6 +784,12 @@ public class ChatView extends ViewPart {
                 runnable.run();
             }
         });
+    }
+
+    /** Инструменты для очередного запроса: читаются настройки и активный проект. Вызывается в UI-потоке. */
+    private static List<Tool> tools() {
+        AiSettings current = SettingsStore.workspace().load();
+        return current.toolsEnabled() ? ProjectTools.create(EclipseWorkspaceFiles.current(), current::contextLimit) : List.of();
     }
 
     private static IEclipsePreferences preferences() {

@@ -30,6 +30,7 @@ import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.tls.TlsContextFactory;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
+import io.github.hansglorias.edtai.core.tools.Tool;
 
 /**
  * Запросы к модели по HTTP со стримингом. Каждый запрос выполняется в своём
@@ -75,8 +76,28 @@ public final class ModelClient {
      * @return полный текст ответа; завершается {@link ModelException} при ошибке
      */
     public CompletableFuture<String> stream(ModelConnection connection, List<ChatMessage> history, Consumer<String> onText) {
-        CompletableFuture<String> result = new CompletableFuture<>();
-        Exchange exchange = new Exchange(connection, history, onText, result);
+        CompletableFuture<ModelReply> reply = request(connection, history, List.of(), List.of(), onText);
+        CompletableFuture<String> text = reply.thenApply(ModelReply::text);
+        text.whenComplete((answer, error) -> {
+            if (text.isCancelled()) {
+                reply.cancel(true);
+            }
+        });
+        return text;
+    }
+
+    /**
+     * Один запрос к модели с инструментами.
+     *
+     * @param extra   сообщения после истории в формате протокола: прошлые вызовы инструментов и их результаты
+     * @param tools   инструменты, которые модель может вызвать
+     * @param onText  получает части текста ответа по мере генерации, из фонового потока
+     * @return текст и вызовы инструментов; завершается {@link ModelException} при ошибке
+     */
+    CompletableFuture<ModelReply> request(ModelConnection connection, List<ChatMessage> history, List<Object> extra,
+            List<Tool> tools, Consumer<String> onText) {
+        CompletableFuture<ModelReply> result = new CompletableFuture<>();
+        Exchange exchange = new Exchange(connection, history, extra, tools, onText, result);
         Thread thread = new Thread(exchange::run, "EDT AI: запрос к модели");
         thread.setDaemon(true);
         exchange.thread = thread;
@@ -149,8 +170,10 @@ public final class ModelClient {
 
         private final ModelConnection connection;
         private final List<ChatMessage> history;
+        private final List<Object> extra;
+        private final List<Tool> tools;
         private final Consumer<String> onText;
-        private final CompletableFuture<String> result;
+        private final CompletableFuture<ModelReply> result;
         private final ProtocolAdapter adapter;
 
         volatile Thread thread;
@@ -159,9 +182,12 @@ public final class ModelClient {
         private volatile boolean idleExpired;
         private volatile long lastActivity;
 
-        Exchange(ModelConnection connection, List<ChatMessage> history, Consumer<String> onText, CompletableFuture<String> result) {
+        Exchange(ModelConnection connection, List<ChatMessage> history, List<Object> extra, List<Tool> tools, Consumer<String> onText,
+                CompletableFuture<ModelReply> result) {
             this.connection = connection;
             this.history = history;
+            this.extra = extra;
+            this.tools = tools;
             this.onText = onText;
             this.result = result;
             this.adapter = ProtocolAdapter.of(connection.protocol());
@@ -180,7 +206,7 @@ public final class ModelClient {
                         .header("Content-Type", "application/json")
                         .header("Accept", "text/event-stream, application/json")
                         .header("User-Agent", USER_AGENT)
-                        .POST(HttpRequest.BodyPublishers.ofString(Json.write(adapter.body(connection, history)), StandardCharsets.UTF_8));
+                        .POST(HttpRequest.BodyPublishers.ofString(Json.write(adapter.body(connection, history, extra, tools)), StandardCharsets.UTF_8));
                 for (Map.Entry<String, String> header : adapter.headers(connection).entrySet()) {
                     request.header(header.getKey(), header.getValue());
                 }
@@ -199,7 +225,7 @@ public final class ModelClient {
                     throw ModelErrors.http(status, readLimited(body), uri);
                 }
                 String type = response.headers().firstValue("Content-Type").orElse("").toLowerCase(Locale.ROOT);
-                String answer = type.contains("text/event-stream") ? readStream(body) : readFull(body);
+                ModelReply answer = type.contains("text/event-stream") ? readStream(body) : readFull(body);
                 result.complete(answer);
             } catch (Throwable e) {
                 if (!result.isDone()) {
@@ -207,7 +233,8 @@ public final class ModelClient {
                             ? new ModelException("Ошибка запроса к модели: " + e.getMessage(), e)
                             : ModelErrors.of(e, Objects.requireNonNullElse(uri, URI.create("http://localhost")),
                                     connectTimeout, responseTimeout, idleExpired ? idleTimeout : null);
-                    result.completeExceptionally(new ModelException(ModelErrors.redact(error.getMessage(), connection.token()), error.getCause()));
+                    result.completeExceptionally(new ModelException(ModelErrors.redact(error.getMessage(), connection.token()),
+                            error.getCause(), error.rejectsTools()));
                 }
             } finally {
                 if (watchdog != null) {
@@ -217,37 +244,35 @@ public final class ModelClient {
             }
         }
 
-        private String readStream(InputStream in) throws IOException, ModelException {
-            StringBuilder answer = new StringBuilder();
-            Consumer<String> collect = part -> {
-                answer.append(part);
+        private ModelReply readStream(InputStream in) throws IOException, ModelException {
+            StreamState state = new StreamState(part -> {
                 if (!result.isDone()) {
                     onText.accept(part);
                 }
-            };
+            });
             SseParser parser = new SseParser();
             BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
             String line;
             while ((line = reader.readLine()) != null) {
                 lastActivity = System.nanoTime();
                 SseEvent event = parser.line(line);
-                if (event != null && adapter.onEvent(event, collect)) {
-                    return answer.toString();
+                if (event != null && adapter.onEvent(event, state)) {
+                    return state.reply();
                 }
             }
             SseEvent last = parser.finish();
             if (last != null) {
-                adapter.onEvent(last, collect);
+                adapter.onEvent(last, state);
             }
             // Часть серверов закрывает поток без [DONE] или message_stop — считаем это концом ответа.
-            return answer.toString();
+            return state.reply();
         }
 
-        private String readFull(InputStream in) throws IOException, ModelException {
+        private ModelReply readFull(InputStream in) throws IOException, ModelException {
             String text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            String answer = adapter.fullResponse(Json.parse(text));
-            if (!answer.isEmpty() && !result.isDone()) {
-                onText.accept(answer);
+            ModelReply answer = adapter.fullResponse(Json.parse(text));
+            if (!answer.text().isEmpty() && !result.isDone()) {
+                onText.accept(answer.text());
             }
             return answer;
         }

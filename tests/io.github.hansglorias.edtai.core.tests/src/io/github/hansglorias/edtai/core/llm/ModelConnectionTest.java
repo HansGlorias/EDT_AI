@@ -60,7 +60,7 @@ class ModelConnectionTest {
 
     @Test
     void takesValuesFromSettings() {
-        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, " https://llm.example.invalid ", "m", 100, "", 0, false, "", List.of());
+        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, " https://llm.example.invalid ", "m", 100, "", 0, true, false, "", List.of());
 
         ModelConnection connection = ModelConnection.of(settings, " t ");
 

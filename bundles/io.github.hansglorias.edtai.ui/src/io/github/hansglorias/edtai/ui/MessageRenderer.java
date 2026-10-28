@@ -16,6 +16,7 @@ import org.eclipse.swt.graphics.RGB;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.markdown.CodeBlock;
 import io.github.hansglorias.edtai.core.markdown.Kind;
@@ -35,6 +36,7 @@ final class MessageRenderer {
     static final String EDIT = "Изменить";
     static final String INSERT = "Вставить в редактор";
     static final String CONTEXT = "Контекст: ";
+    static final String TOOL = "→ ";
 
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault());
     private static final List<String> CODE_ACTIONS = List.of(COPY, INSERT);
@@ -89,6 +91,7 @@ final class MessageRenderer {
         }
         header(message, index, actions, offset, text, styles);
         context(message, offset, text, styles);
+        tools(message, offset, text, styles);
         String body = message.text();
         if (body.isEmpty() && message.role() == ChatRole.ASSISTANT) {
             String placeholder = switch (message.status()) {
@@ -153,6 +156,16 @@ final class MessageRenderer {
             }
         }
         text.append('\n');
+    }
+
+    /** Строки о вызванных инструментах: «→ Читает модуль Х — строки 1–120 из 120». */
+    private void tools(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles) {
+        for (ToolUse use : message.tools()) {
+            String line = TOOL + use.label();
+            styles.add(style(offset + text.length(), line.length(),
+                    use.status() == ToolUse.Status.FAILED ? errorColor() : metaColor(), SWT.NORMAL));
+            text.append(line).append('\n');
+        }
     }
 
     /** Строка «Контекст:» с подписями фрагментов-ссылками. */

@@ -43,7 +43,9 @@ class ChatHistoryFileTest {
         ContextItem file = ContextItem.of("Демо", "notes.txt", 1, 1, 1, "заметка");
         List<ChatMessage> messages = List.of(
                 new ChatMessage(ChatRole.USER, "что тут?", Instant.parse("2026-10-28T09:00:00Z"), Status.DONE, List.of(lines, file)),
-                new ChatMessage(ChatRole.ASSISTANT, "ответ", Instant.parse("2026-10-28T09:00:05Z"), Status.DONE));
+                new ChatMessage(ChatRole.ASSISTANT, "ответ", Instant.parse("2026-10-28T09:00:05Z"), Status.DONE, List.of(),
+                        List.of(new ToolUse("call_1", "read_module", "Читает модуль Х", "строки 1–5 из 5", ToolUse.Status.DONE),
+                                new ToolUse("call_2", "search_code", "Ищет «А»", "нет доступа", ToolUse.Status.FAILED))));
         ChatHistoryFile history = new ChatHistoryFile(temp.resolve("chat.json"));
 
         history.save(messages);

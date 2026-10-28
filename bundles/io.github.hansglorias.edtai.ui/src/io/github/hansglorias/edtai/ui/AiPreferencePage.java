@@ -60,6 +60,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Text maxTokens;
     private Text systemPrompt;
     private Text contextLimit;
+    private Button toolsEnabled;
     private Text token;
     private Label tokenState;
     private Button removeToken;
@@ -139,6 +140,13 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 + " обрезается по строкам. Пусто — " + AiSettings.DEFAULT_CONTEXT_LIMIT + ".");
         GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(contextLimit);
         contextLimit.addModifyListener(event -> validate());
+
+        new Label(group, SWT.NONE);
+        toolsEnabled = new Button(group, SWT.CHECK);
+        toolsEnabled.setText("Инструменты: модель сама читает модули и ищет по проекту");
+        toolsEnabled.setToolTipText("Модель может вызвать: сведения о проекте, список объектов, чтение модуля, поиск по коду."
+                + " Только чтение. Выключите, если сервер модели не поддерживает инструменты.");
+        GridDataFactory.fillDefaults().span(2, 1).applyTo(toolsEnabled);
 
         label(group, "Токен:");
         token = new Text(group, SWT.BORDER | SWT.PASSWORD);
@@ -341,6 +349,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         systemPrompt.setText(settings.systemPrompt());
         contextLimit.setText(
                 settings.contextLimit() == AiSettings.DEFAULT_CONTEXT_LIMIT ? "" : String.valueOf(settings.contextLimit()));
+        toolsEnabled.setSelection(settings.toolsEnabled());
         useSystemTrustStore.setSelection(settings.useSystemTrustStore());
         caFile.setText(settings.caCertificateFile());
         servers.clear();
@@ -352,7 +361,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     AiSettings current() {
         return new AiSettings(Protocol.values()[Math.max(0, protocol.getSelectionIndex())], baseUrl.getText(),
                 model.getText(), Math.max(0, maxTokensValue()), systemPrompt.getText(), Math.max(0, number(contextLimit)),
-                useSystemTrustStore.getSelection(), caFile.getText(), servers);
+                toolsEnabled.getSelection(), useSystemTrustStore.getSelection(), caFile.getText(), servers);
     }
 
     private int maxTokensValue() {

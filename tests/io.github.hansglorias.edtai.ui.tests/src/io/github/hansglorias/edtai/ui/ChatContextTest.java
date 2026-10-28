@@ -228,7 +228,7 @@ class ChatContextTest extends AbstractChatTest {
     void contextOverLimitIsMarked() throws Exception {
         IFile big = createFile("src/CommonModules/Большой/Module.bsl", "А = 1;\n".repeat(400));
         SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, "http://localhost:9", "test-model", 0, "",
-                AiSettings.MIN_CONTEXT_LIMIT, false, "", new ArrayList<>()));
+                AiSettings.MIN_CONTEXT_LIMIT, true, false, "", new ArrayList<>()));
         ChatView view = showView();
         settle();
 

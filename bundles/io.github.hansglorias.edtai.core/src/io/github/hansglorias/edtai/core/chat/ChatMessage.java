@@ -12,8 +12,10 @@ import io.github.hansglorias.edtai.core.context.ContextPrompt;
  *
  * @param status  для ответа ассистента: идёт генерация, готов или остановлен
  * @param context фрагменты кода, прикреплённые к сообщению пользователя
+ * @param tools   инструменты, которые модель вызвала, пока готовила этот ответ
  */
-public record ChatMessage(ChatRole role, String text, Instant time, Status status, List<ContextItem> context) {
+public record ChatMessage(ChatRole role, String text, Instant time, Status status, List<ContextItem> context,
+        List<ToolUse> tools) {
 
     public enum Status {
         /** Сообщение целиком. */
@@ -30,10 +32,15 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         Objects.requireNonNull(time, "time");
         status = Objects.requireNonNullElse(status, Status.DONE);
         context = List.copyOf(Objects.requireNonNullElse(context, List.of()));
+        tools = List.copyOf(Objects.requireNonNullElse(tools, List.of()));
     }
 
     public ChatMessage(ChatRole role, String text, Instant time, Status status) {
-        this(role, text, time, status, List.of());
+        this(role, text, time, status, List.of(), List.of());
+    }
+
+    public ChatMessage(ChatRole role, String text, Instant time, Status status, List<ContextItem> context) {
+        this(role, text, time, status, context, List.of());
     }
 
     public static ChatMessage of(ChatRole role, String text) {
@@ -41,7 +48,11 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
     }
 
     public ChatMessage with(String newText, Status newStatus) {
-        return new ChatMessage(role, newText, time, newStatus, context);
+        return new ChatMessage(role, newText, time, newStatus, context, tools);
+    }
+
+    public ChatMessage withTools(List<ToolUse> newTools) {
+        return new ChatMessage(role, text, time, status, context, newTools);
     }
 
     /** Текст для модели: фрагменты кода, затем сам текст. */

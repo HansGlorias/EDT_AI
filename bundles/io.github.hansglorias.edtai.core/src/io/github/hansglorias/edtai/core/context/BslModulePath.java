@@ -148,6 +148,25 @@ public final class BslModulePath {
         return Optional.empty();
     }
 
+    /** Каталоги типов в {@code src} по порядку: «CommonModules», «Catalogs»… */
+    public static List<String> typeDirectories() {
+        return TYPES.stream().map(Type::directory).toList();
+    }
+
+    /** «Catalogs» → «Справочник»; пусто, если каталог не тип метаданных. */
+    public static Optional<String> typeName(String directory) {
+        return TYPES.stream().filter(type -> type.directory().equals(directory)).map(Type::russian).findFirst();
+    }
+
+    /**
+     * Каталог типа по имени: «Справочник», «Catalog», «Catalogs», регистр и «ё» не важны.
+     */
+    public static Optional<String> typeDirectory(String name) {
+        return TYPES.stream()
+                .filter(type -> same(name, type.russian(), type.english()) || normalize(name).equals(normalize(type.directory())))
+                .map(Type::directory).findFirst();
+    }
+
     private static String defaultModule(Type type) {
         return switch (type.directory()) {
             case "CommonModules", "CommonForms", "WebServices", "HTTPServices" -> "Module.bsl";

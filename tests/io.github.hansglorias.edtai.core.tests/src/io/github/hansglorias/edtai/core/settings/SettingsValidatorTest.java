@@ -41,7 +41,7 @@ class SettingsValidatorTest {
 
     @Test
     void reportsBadBaseUrl() {
-        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "llm", "model", 0, "", 0, true, "", List.of());
+        AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "llm", "model", 0, "", 0, true, true, "", List.of());
 
         List<String> errors = SettingsValidator.validate(settings);
 
@@ -52,23 +52,23 @@ class SettingsValidatorTest {
     @Test
     void limitsContext() {
         for (int limit : new int[] { AiSettings.MIN_CONTEXT_LIMIT - 1, AiSettings.MAX_CONTEXT_LIMIT + 1 }) {
-            List<String> errors = SettingsValidator.validate(new AiSettings(null, "", "", 0, "", limit, true, "", List.of()));
+            List<String> errors = SettingsValidator.validate(new AiSettings(null, "", "", 0, "", limit, true, true, "", List.of()));
             assertEquals(1, errors.size(), String.valueOf(limit));
             assertTrue(errors.get(0).startsWith("Лимит контекста"), errors.get(0));
         }
-        assertTrue(SettingsValidator.validate(new AiSettings(null, "", "", 0, "", AiSettings.MIN_CONTEXT_LIMIT, true, "", List.of()))
+        assertTrue(SettingsValidator.validate(new AiSettings(null, "", "", 0, "", AiSettings.MIN_CONTEXT_LIMIT, true, true, "", List.of()))
                 .isEmpty());
     }
 
     @Test
     void limitsMaxTokens() {
-        AiSettings settings = new AiSettings(null, "", "", AiSettings.MAX_TOKENS_LIMIT + 1, "", 0, true, "", List.of());
+        AiSettings settings = new AiSettings(null, "", "", AiSettings.MAX_TOKENS_LIMIT + 1, "", 0, true, true, "", List.of());
 
         List<String> errors = SettingsValidator.validate(settings);
 
         assertEquals(1, errors.size());
         assertTrue(errors.get(0).startsWith("Макс. токенов"), errors.get(0));
-        assertTrue(SettingsValidator.validate(new AiSettings(null, "", "", 4096, "", 0, true, "", List.of())).isEmpty());
+        assertTrue(SettingsValidator.validate(new AiSettings(null, "", "", 4096, "", 0, true, true, "", List.of())).isEmpty());
     }
 
     @Test
@@ -85,7 +85,7 @@ class SettingsValidatorTest {
 
     @Test
     void reportsMissingCertificateFile() {
-        AiSettings settings = new AiSettings(null, "", "", 0, "", 0, true, temp.resolve("missing.pem").toString(), List.of());
+        AiSettings settings = new AiSettings(null, "", "", 0, "", 0, true, true, temp.resolve("missing.pem").toString(), List.of());
 
         List<String> errors = SettingsValidator.validate(settings);
 
@@ -96,7 +96,7 @@ class SettingsValidatorTest {
     @Test
     void acceptsExistingCertificateFile() throws IOException {
         Path file = Files.writeString(temp.resolve("ca.pem"), "-----BEGIN CERTIFICATE-----");
-        AiSettings settings = new AiSettings(null, "", "", 0, "", 0, true, file.toString(), List.of());
+        AiSettings settings = new AiSettings(null, "", "", 0, "", 0, true, true, file.toString(), List.of());
 
         assertTrue(SettingsValidator.validate(settings).isEmpty());
     }

@@ -87,7 +87,7 @@ class TlsContextFactoryTest {
 
     @Test
     void buildsContextFromSettings() throws Exception {
-        AiSettings settings = new AiSettings(Protocol.OPENAI_COMPATIBLE, "https://llm.example.invalid", "m", 0, "", 0, true,
+        AiSettings settings = new AiSettings(Protocol.OPENAI_COMPATIBLE, "https://llm.example.invalid", "m", 0, "", 0, true, true,
                 copy("two-cas.pem").toString(), List.of());
 
         SSLContext context = TlsContextFactory.create(TrustSettings.from(settings));
