@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.json.JsonException;
 import io.github.hansglorias.edtai.core.tools.Tool;
@@ -73,7 +74,14 @@ final class AnthropicAdapter extends ProtocolAdapter {
                 }
                 return false;
             }
+            case "message_start" -> {
+                Object usage = Json.at(json, "message", "usage");
+                state.usage(input(usage), tokens(usage, new Object[] { "output_tokens" }));
+                return false;
+            }
             case "message_delta" -> {
+                Object usage = Json.at(json, "usage");
+                state.usage(input(usage), tokens(usage, new Object[] { "output_tokens" }));
                 if ("max_tokens".equals(Json.stringAt(json, "delta", "stop_reason"))) {
                     state.truncated();
                 }
@@ -87,7 +95,7 @@ final class AnthropicAdapter extends ProtocolAdapter {
                 throw new ModelException("Сервер прервал ответ с ошибкой: " + (error != null ? error : event.data()));
             }
             default -> {
-                // message_start, content_block_stop, message_delta, ping
+                // content_block_stop, ping
                 return false;
             }
         }
@@ -112,7 +120,17 @@ final class AnthropicAdapter extends ProtocolAdapter {
                 calls.add(new ToolCall(Json.stringAt(block, "id"), Json.stringAt(block, "name"), input == null ? "{}" : Json.write(input)));
             }
         }
-        return new ModelReply(ThinkFilter.strip(text.toString()), calls, "max_tokens".equals(Json.stringAt(json, "stop_reason")));
+        Object usage = Json.at(json, "usage");
+        long input = input(usage);
+        long output = tokens(usage, new Object[] { "output_tokens" });
+        return new ModelReply(ThinkFilter.strip(text.toString()), calls, "max_tokens".equals(Json.stringAt(json, "stop_reason")),
+                input < 0 && output < 0 ? null : TokenUsage.step(Math.max(0, input), Math.max(0, output), false));
+    }
+
+    /** Вход с кэшем подсказок: кэшированные токены тоже занимают окно. */
+    private static long input(Object usage) {
+        return tokens(usage, new Object[] { "input_tokens" }, new Object[] { "cache_creation_input_tokens" },
+                new Object[] { "cache_read_input_tokens" });
     }
 
     @Override

@@ -28,6 +28,8 @@ public final class ChatSession {
 
     /** Текущий запрос, {@code null} — ничего не выполняется. Под {@link #lock}. */
     private Request current;
+    /** Токены последнего ответа в этом диалоге; {@code null} — ответа ещё не было. */
+    private volatile TokenUsage usage;
 
     public ChatSession(ChatProvider provider) {
         this.provider = provider;
@@ -45,6 +47,27 @@ public final class ChatSession {
         synchronized (lock) {
             return current != null;
         }
+    }
+
+    /** Что происходит с идущим ответом; {@code null} — ответа нет. */
+    public ReplyActivity activity() {
+        synchronized (lock) {
+            return current == null ? null : current.activity;
+        }
+    }
+
+    /** Токены последнего ответа в этом диалоге; {@code null} — ответа ещё не было (после открытия чата тоже). */
+    public TokenUsage usage() {
+        return usage;
+    }
+
+    /** Сколько токенов займёт диалог в запросе к модели, по оценке провайдера; 0 — неизвестно. */
+    public long estimateTokens() {
+        List<ChatMessage> history;
+        synchronized (lock) {
+            history = history();
+        }
+        return history.isEmpty() ? 0 : provider.estimateTokens(history);
     }
 
     public void addListener(ChatListener listener) {
@@ -137,6 +160,7 @@ public final class ChatSession {
         cancel();
         synchronized (lock) {
             messages.clear();
+            usage = null;
         }
         listeners.forEach(ChatListener::historyChanged);
     }
@@ -172,6 +196,7 @@ public final class ChatSession {
         synchronized (lock) {
             checkIdle();
             messages.clear();
+            usage = null;
             for (ChatMessage message : saved) {
                 ChatMessage restored = message.status() == Status.STREAMING ? message.with(message.text(), Status.STOPPED) : message;
                 messages.add(restored.withTools(restored.tools().stream().map(ChatSession::interrupted).toList()));
@@ -221,7 +246,8 @@ public final class ChatSession {
     }
 
     private CompletableFuture<String> reply(Request request, List<ChatMessage> history) {
-        CompletableFuture<String> reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use));
+        CompletableFuture<String> reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use),
+                tokens -> onUsage(request, tokens));
         request.inner = reply;
         return reply;
     }
@@ -272,6 +298,9 @@ public final class ChatSession {
                 return;
             }
             request.text.append(part);
+            if (request.activity.phase() != ReplyActivity.Phase.WRITING) {
+                request.activity = request.activity.next(ReplyActivity.Phase.WRITING, "");
+            }
             put(request, request.text.toString(), Status.STREAMING);
         }
     }
@@ -292,8 +321,21 @@ public final class ChatSession {
             } else {
                 request.tools.add(use);
             }
+            boolean working = use.status() == ToolUse.Status.RUNNING || use.status() == ToolUse.Status.AWAITING;
+            request.activity = request.activity.next(working ? ReplyActivity.Phase.TOOL : ReplyActivity.Phase.THINKING,
+                    working ? use.summary() : "");
             put(request, request.text.toString(), Status.STREAMING);
         }
+    }
+
+    private void onUsage(Request request, TokenUsage tokens) {
+        synchronized (lock) {
+            if (request.finished || tokens == null) {
+                return;
+            }
+            usage = tokens;
+        }
+        listeners.forEach(listener -> listener.usageChanged(tokens));
     }
 
     private ChatMessage finish(Request request, String answer, Throwable error) {
@@ -371,5 +413,7 @@ public final class ChatSession {
         CompletableFuture<String> reply;
         /** Запрос, который идёт сейчас: сжатие истории или сам ответ. */
         volatile CompletableFuture<String> inner;
+        /** Под {@link ChatSession#lock}. */
+        ReplyActivity activity = new ReplyActivity(ReplyActivity.Phase.THINKING, "", Instant.now());
     }
 }

@@ -134,6 +134,30 @@ class ChatMcpTest extends AbstractChatTest {
     }
 
     @Test
+    void autoModeStopsAsking() throws Exception {
+        ChatView view = configured(mcp.url() + "/mcp");
+
+        view.input().setText("Какая версия?");
+        view.send();
+        waitUntil(() -> view.approvalBar().isShown());
+        click(view.approvalBar().alwaysButton());
+        waitUntil(() -> !view.session().isBusy() && view.session().messages().size() == 2);
+        waitUntil(() -> view.status().getText().startsWith("Авторежим включён"), () -> view.status().getText());
+
+        view.newChatForTest();
+        ask(view, "А ещё раз?");
+        assertEquals(List.of("get_edt_version", "get_edt_version"), calls, "в новом чате тоже без вопроса");
+        assertFalse(view.approvalBar().isShown());
+
+        view.setAutoApprove(false);
+        view.input().setText("И снова?");
+        view.send();
+        waitUntil(() -> view.approvalBar().isShown());
+        click(view.approvalBar().denyButton());
+        waitUntil(() -> !view.session().isBusy());
+    }
+
+    @Test
     void stopWhileAskingDismissesQuestion() throws Exception {
         ChatView view = configured(mcp.url() + "/mcp");
 

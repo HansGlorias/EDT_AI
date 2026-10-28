@@ -20,7 +20,8 @@ import io.github.hansglorias.edtai.core.tools.ToolApprover.Decision;
 
 /**
  * Панель над полем ввода: модель хочет вызвать инструмент MCP-сервера —
- * «Разрешить», «Разрешать в этом чате» или «Отклонить» (Esc). Видна,
+ * «Разрешить», «Разрешать в этом чате», «Авторежим» (больше не спрашивать)
+ * или «Отклонить» (Esc). Видна,
  * только пока есть вопрос. Фокус на «Разрешить» переходит, только если он
  * уже был в виде чата: иначе случайный пробел в редакторе разрешил бы
  * вызов, которого пользователь не видел.
@@ -29,6 +30,7 @@ final class ApprovalBar {
 
     static final String ALLOW = "Разрешить";
     static final String ALLOW_IN_CHAT = "Разрешать в этом чате";
+    static final String ALWAYS = "Авторежим";
     static final String DENY = "Отклонить";
     private static final int MAX_ARGUMENTS = 2000;
 
@@ -42,6 +44,7 @@ final class ApprovalBar {
     private final Text arguments;
     private final Button allow;
     private final Button allowInChat;
+    private final Button always;
     private final Button deny;
     private final Callbacks callbacks;
     private CompletableFuture<Decision> pending;
@@ -68,6 +71,9 @@ final class ApprovalBar {
         buttons.setLayout(row);
         allow = button(buttons, ALLOW, Decision.ALLOW);
         allowInChat = button(buttons, ALLOW_IN_CHAT, Decision.ALLOW_IN_CHAT);
+        always = button(buttons, ALWAYS, Decision.ALWAYS);
+        always.setToolTipText("Разрешить и вызывать инструменты дальше без вопроса во всех чатах; выключается кнопкой"
+                + " «Авторежим» на панели вида или командой /auto");
         deny = button(buttons, DENY, Decision.DENY);
         setVisible(false);
     }
@@ -176,6 +182,10 @@ final class ApprovalBar {
 
     Button allowInChatButton() {
         return allowInChat;
+    }
+
+    Button alwaysButton() {
+        return always;
     }
 
     Button denyButton() {

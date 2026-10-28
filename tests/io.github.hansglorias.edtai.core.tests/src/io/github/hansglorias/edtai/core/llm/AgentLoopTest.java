@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.Protocol;
@@ -65,6 +66,7 @@ class AgentLoopTest {
 
     private final List<String> parts = new CopyOnWriteArrayList<>();
     private final List<ToolUse> uses = new CopyOnWriteArrayList<>();
+    private final List<TokenUsage> usages = new CopyOnWriteArrayList<>();
     private FakeModelServer server;
 
     @AfterEach
@@ -332,6 +334,52 @@ class AgentLoopTest {
         assertNull(Json.parseObject(server.requests().get(0).body()).get("tools"));
     }
 
+    @Test
+    void anthropicUsageIsSummedOverSteps() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> {
+            boolean first = !request.body().contains("tool_result");
+            response.sse(List.of(
+                    "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":"
+                            + (first ? "100,\"cache_read_input_tokens\":50" : "200") + ",\"output_tokens\":1}}}\n\n",
+                    first ? "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":"
+                            + "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_module\",\"input\":{}}}\n\n"
+                            : "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":"
+                                    + "{\"type\":\"text_delta\",\"text\":\"Готово.\"}}\n\n",
+                    "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"output_tokens\":"
+                            + (first ? 20 : 10) + "}}\n\n",
+                    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"), 0);
+        });
+
+        assertEquals("Готово.", runWithUsage(Protocol.ANTHROPIC));
+
+        assertEquals(List.of(new TokenUsage(150, 20, 170, false), new TokenUsage(350, 30, 210, false)), usages);
+    }
+
+    @Test
+    void openAiUsageFromLastChunk() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Да.\"}}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}\n\n",
+                "data: [DONE]\n\n"), 0));
+
+        runWithUsage(Protocol.OPENAI_COMPATIBLE);
+
+        assertEquals(List.of(new TokenUsage(12, 3, 15, false)), usages);
+    }
+
+    @Test
+    void usageWithoutServerDataIsEstimated() throws Exception {
+        server = FakeModelServer.http().handler(this::oneToolCallThenText);
+
+        runWithUsage(Protocol.OPENAI_COMPATIBLE);
+
+        assertEquals(2, usages.size());
+        TokenUsage last = usages.get(1);
+        assertTrue(last.estimated());
+        assertTrue(last.input() > usages.get(0).input(), "второй шаг добавляет запрос целиком: " + usages);
+        assertTrue(last.context() > 0 && last.context() < last.input());
+    }
+
     private void oneToolCallThenText(FakeModelServer.Request request, FakeModelServer.Response response) throws Exception {
         if (!request.body().contains("\"role\":\"tool\"")) {
             response.sse(List.of(toolCalls("{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"read_module\",\"arguments\":"
@@ -452,6 +500,14 @@ class AgentLoopTest {
                 new TrustSettings(false, Optional.empty()));
         ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), tools, approver);
         return provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS);
+    }
+
+    private String runWithUsage(Protocol protocol) throws Exception {
+        ModelConnection connection = new ModelConnection(protocol, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()));
+        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(READ),
+                ToolApprover.ALLOW_ALL);
+        return provider.reply(HISTORY, parts::add, uses::add, usages::add).get(15, TimeUnit.SECONDS);
     }
 
     private ModelConnection connectionOpenAi() {

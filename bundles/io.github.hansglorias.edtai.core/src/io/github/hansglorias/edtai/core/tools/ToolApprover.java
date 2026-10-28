@@ -12,6 +12,8 @@ public interface ToolApprover {
         ALLOW,
         /** Разрешить этот инструмент до конца диалога. */
         ALLOW_IN_CHAT,
+        /** Разрешить и больше не спрашивать: авторежим. */
+        ALWAYS,
         DENY
     }
 

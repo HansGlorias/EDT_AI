@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -82,6 +83,9 @@ import org.osgi.framework.FrameworkUtil;
 import io.github.hansglorias.edtai.core.chat.ChatHistoryFile;
 import io.github.hansglorias.edtai.core.chat.ChatListener;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
+import io.github.hansglorias.edtai.core.chat.ReplyActivity;
+import io.github.hansglorias.edtai.core.chat.SlashCommand;
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
@@ -140,6 +144,11 @@ public class ChatView extends ViewPart {
     private static final int MIN_INPUT_LINES = 2;
     private static final int MAX_INPUT_LINES = 10;
     private static final int NOTICE_MS = 4000;
+    /** Как часто обновлять секунды в строке состояния, пока идёт ответ. */
+    private static final int TICK_MS = 1000;
+    /** Авторежим: инструменты MCP вызываются без вопроса, во всех чатах. Хранится в настройках рабочей области. */
+    static final String AUTO_APPROVE = "autoApproveTools";
+    static final String AUTO_MODE = "Авторежим";
 
     /** Подключения к MCP-серверам из настроек. */
     private final McpHub mcp = new McpHub();
@@ -187,6 +196,16 @@ public class ChatView extends ViewPart {
     private Button sendButton;
     private Label status;
     private Cursor handCursor;
+    private Action autoAction;
+    private InputAssist inputAssist;
+    /** Вкладка вида помечена как занятая (идёт ответ). */
+    private boolean busyShown;
+    private boolean ticking;
+    /** Оценка занятого окна для открытого чата, пока не было ответа: пересчитывается, когда меняется история. */
+    private long estimate;
+    /** Окно модели из настроек, в токенах. */
+    private long window;
+    private List<ChatMessage> estimated;
 
     /**
      * Что сейчас нарисовано в ленте: сообщение, его действия, с какого символа
@@ -221,8 +240,14 @@ public class ChatView extends ViewPart {
         }
 
         @Override
+        public void usageChanged(TokenUsage usage) {
+            inUi(ChatView.this::updateStatus);
+        }
+
+        @Override
         public void busyChanged(boolean busy) {
             scheduleRefresh();
+            inUi(() -> markBusy(busy));
             if (!busy) {
                 inUi(() -> {
                     attachChanges();
@@ -247,6 +272,11 @@ public class ChatView extends ViewPart {
             background("EDT AI: переподключение MCP", mcp::reset);
         }
         contextBar.setLimit(settings.contextLimit());
+        if (autoAction != null) {
+            autoAction.setChecked(isAutoApprove());
+        }
+        estimated = null;
+        window = session.provider().window();
         updateStatus();
         updateEmptyState();
     });
@@ -299,6 +329,7 @@ public class ChatView extends ViewPart {
         preferences().addPreferenceChangeListener(preferenceListener);
         settings = SettingsStore.workspace().load();
         contextBar.setLimit(settings.contextLimit());
+        window = session.provider().window();
         restoreHistory();
         updateStatus();
         updateEmptyState();
@@ -441,6 +472,7 @@ public class ChatView extends ViewPart {
             updateInputHeight();
         });
         input.addListener(SWT.Resize, event -> updateInputHeight());
+        inputAssist = new InputAssist(input, file -> attach(AttachedContext.wholeFile(file)));
         // Пока пользователь правил модуль, строки фрагментов могли сдвинуться.
         input.addListener(SWT.FocusIn, event -> {
             if (!contextBar.isEmpty()) {
@@ -500,6 +532,18 @@ public class ChatView extends ViewPart {
             }
         };
         preferencesAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_DEF_VIEW));
+
+        autoAction = new Action(AUTO_MODE, IAction.AS_CHECK_BOX) {
+            @Override
+            public void run() {
+                setAutoApprove(isChecked());
+            }
+        };
+        autoAction.setToolTipText("Авторежим: модель вызывает инструменты MCP без вопроса (правка модулей и git — всегда без"
+                + " вопроса). Команда /auto");
+        autoAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_ELCL_SYNCED));
+        autoAction.setChecked(isAutoApprove());
+        toolBar.add(autoAction);
         toolBar.add(preferencesAction);
 
         IMenuManager menu = getViewSite().getActionBars().getMenuManager();
@@ -773,6 +817,9 @@ public class ChatView extends ViewPart {
     // ---- ввод ----
 
     void onInputKey(Event event) {
+        if (inputAssist != null && inputAssist.isOpen()) {
+            return; // Enter, Esc и стрелки — списку подсказок
+        }
         boolean enter = event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR;
         if (enter && (event.stateMask & SWT.SHIFT) == 0) {
             event.doit = false;
@@ -853,13 +900,49 @@ public class ChatView extends ViewPart {
     /** Отправляет текст из поля ввода. Ничего не делает, если текст пуст или ждём ответа. */
     void send() {
         String text = input.getText();
-        if (text.isBlank() || session.isBusy()) {
+        if (text.isBlank()) {
             return;
+        }
+        SlashCommand.Invocation command = SlashCommand.parse(text).orElse(null);
+        if (command != null && command.command() != SlashCommand.REVIEW && command.command() != SlashCommand.COMMIT) {
+            input.setText("");
+            run(command.command());
+            return;
+        }
+        if (session.isBusy()) {
+            return;
+        }
+        if (command != null) {
+            String prompt = command.command() == SlashCommand.REVIEW ? REVIEW_PROMPT : COMMIT_PROMPT;
+            text = command.argument().isEmpty() ? prompt : prompt + "\n\n" + command.argument();
         }
         List<ContextItem> context = contextBar.snapshot();
         input.setText("");
         session.send(text, context);
         contextBar.clear();
+    }
+
+    /** Команда поля ввода, кроме тех, что отправляют вопрос. */
+    private void run(SlashCommand command) {
+        switch (command) {
+            case NEW -> newChat();
+            case ATTACH -> attachModule();
+            case AUTO -> setAutoApprove(!isAutoApprove());
+            default -> throw new IllegalArgumentException(command.text());
+        }
+    }
+
+    private static boolean isAutoApprove() {
+        return preferences().getBoolean(AUTO_APPROVE, false);
+    }
+
+    void setAutoApprove(boolean on) {
+        preferences().putBoolean(AUTO_APPROVE, on);
+        if (autoAction != null) {
+            autoAction.setChecked(on);
+        }
+        showNotice(on ? "Авторежим включён: инструменты MCP вызываются без вопроса"
+                : "Авторежим выключен: перед вызовом инструмента MCP — вопрос");
     }
 
     /** Добавляет фрагмент на панель над полем ввода и ставит фокус в поле. */
@@ -1172,6 +1255,11 @@ public class ChatView extends ViewPart {
         sendButton.setEnabled(busy || !input.getText().isBlank());
     }
 
+    /**
+     * Строка под полем ввода: модель; пока идёт ответ — что она делает и
+     * сколько секунд; потом — сколько окна занято и токены ответа (в чате
+     * без ответов в этом сеансе — оценка по истории).
+     */
     private void updateStatus() {
         String text;
         if (notice != null) {
@@ -1179,13 +1267,70 @@ public class ChatView extends ViewPart {
         } else if (!settings.isConfigured()) {
             text = "Модель не настроена";
         } else {
-            String state = approvalBar != null && approvalBar.isShown() ? " · ждёт вашего решения"
-                    : session.isBusy() ? " · генерирует ответ…" : "";
-            text = settings.model() + " · " + host(settings.baseUrl()) + state;
+            List<String> parts = new ArrayList<>(List.of(settings.model()));
+            ReplyActivity activity = session.activity();
+            TokenUsage usage = session.usage();
+            if (approvalBar != null && approvalBar.isShown()) {
+                parts.add("ждёт вашего решения");
+            } else if (activity != null) {
+                parts.add(activity.describe(Instant.now()));
+            } else if (usage != null) {
+                parts.add(usage.describe(window));
+            } else if (estimate() > 0) {
+                parts.add(TokenUsage.describeEstimate(estimate(), window));
+            } else {
+                parts.add(host(settings.baseUrl()));
+            }
+            if (isAutoApprove()) {
+                parts.add(AUTO_MODE.toLowerCase(Locale.ROOT));
+            }
+            text = String.join(" · ", parts);
         }
         if (!text.equals(status.getText())) {
             status.setText(text);
+            status.setToolTipText(settings.isConfigured() ? settings.model() + " · " + settings.baseUrl() : null);
             status.getParent().layout(true);
+        }
+    }
+
+    /** Оценка занятого окна для чата без ответов в этом сеансе; считается заново, только когда изменилась история. */
+    private long estimate() {
+        List<ChatMessage> messages = session.messages();
+        if (!messages.equals(estimated)) {
+            estimated = messages;
+            estimate = session.estimateTokens();
+        }
+        return estimate;
+    }
+
+    /** Идёт ответ: вкладка вида помечена занятой, секунды в строке состояния идут. */
+    private void markBusy(boolean busy) {
+        markTabBusy(busy);
+        if (busy && !ticking) {
+            ticking = true;
+            history.getDisplay().timerExec(TICK_MS, this::tick);
+        }
+        updateStatus();
+    }
+
+    private void markTabBusy(boolean busy) {
+        IWorkbenchSiteProgressService progress = getSite().getService(IWorkbenchSiteProgressService.class);
+        if (busy != busyShown && progress != null) {
+            busyShown = busy;
+            if (busy) {
+                progress.incrementBusy();
+            } else {
+                progress.decrementBusy();
+            }
+        }
+    }
+
+    private void tick() {
+        ticking = false;
+        if (!history.isDisposed() && session.isBusy()) {
+            updateStatus();
+            ticking = true;
+            history.getDisplay().timerExec(TICK_MS, this::tick);
         }
     }
 
@@ -1235,13 +1380,15 @@ public class ChatView extends ViewPart {
 
     /** Вопрос пользователю перед вызовом инструмента MCP-сервера: панель над полем ввода. */
     private CompletableFuture<Decision> approve(ToolUse use, String arguments) {
-        if (allowedInChat.contains(use.name())) {
+        if (allowedInChat.contains(use.name()) || isAutoApprove()) {
             return CompletableFuture.completedFuture(Decision.ALLOW);
         }
         CompletableFuture<Decision> decision = new CompletableFuture<>();
         decision.thenAccept(value -> {
             if (value == Decision.ALLOW_IN_CHAT) {
                 allowedInChat.add(use.name());
+            } else if (value == Decision.ALWAYS) {
+                inUi(() -> setAutoApprove(true));
             }
         });
         inUi(() -> approvalBar.ask(use, arguments, decision));
@@ -1265,6 +1412,7 @@ public class ChatView extends ViewPart {
 
     @Override
     public void dispose() {
+        markTabBusy(false);
         contextBar.clear();
         session.removeListener(chatListener);
         session.cancel();
@@ -1331,6 +1479,10 @@ public class ChatView extends ViewPart {
 
     Label status() {
         return status;
+    }
+
+    InputAssist inputAssist() {
+        return inputAssist;
     }
 
     /** Действие ссылки с текстом {@code text} в ленте или {@code null}; если таких несколько — последней. */
