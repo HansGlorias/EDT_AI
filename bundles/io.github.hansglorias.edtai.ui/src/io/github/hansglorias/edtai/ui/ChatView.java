@@ -61,6 +61,8 @@ import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IMemento;
+import org.eclipse.ui.IViewSite;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
@@ -113,6 +115,8 @@ public class ChatView extends ViewPart {
     static final String HISTORY_FILE = "chat.json";
     static final String CHATS_DIRECTORY = "chats";
     private static final int HISTORY_MENU = 30;
+    private static final String MEMENTO_HISTORY = "historyShown";
+    private static final String MEMENTO_HISTORY_WIDTH = "historyWidth";
     private static final DateTimeFormatter CHAT_TIME = DateTimeFormatter.ofPattern("dd.MM HH:mm");
     static final String REVIEW_CHANGES = "Ревью моих изменений";
     static final String COMMIT_MESSAGE = "Сообщение коммита";
@@ -152,6 +156,10 @@ public class ChatView extends ViewPart {
 
     private Composite root;
     private SashForm sash;
+    /** Видна ли панель чатов и как поделена ширина: запоминаются между запусками (состояние вида). */
+    private boolean historyShown;
+    private int[] historyWeights = { 30, 70 };
+    private Action historyAction;
     private ChatHistoryPanel historyPanel;
     private Composite top;
     private StackLayout topLayout;
@@ -257,8 +265,8 @@ public class ChatView extends ViewPart {
             }
         });
         top = new Composite(sash, SWT.NONE);
-        sash.setWeights(new int[] { 30, 70 });
-        sash.setMaximizedControl(top);
+        sash.setWeights(historyWeights);
+        sash.setMaximizedControl(historyShown ? null : top);
         topLayout = new StackLayout();
         top.setLayout(topLayout);
         createHistory(top);
@@ -281,6 +289,7 @@ public class ChatView extends ViewPart {
         updateEmptyState();
         updateSendButton();
         refresh();
+        refreshHistoryPanel();
     }
 
     private void createHistory(Composite parent) {
@@ -429,14 +438,15 @@ public class ChatView extends ViewPart {
         ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
         IToolBarManager toolBar = getViewSite().getActionBars().getToolBarManager();
 
-        Action history = new Action("История чатов", IAction.AS_CHECK_BOX) {
+        historyAction = new Action("История чатов", IAction.AS_CHECK_BOX) {
             @Override
             public void run() {
                 showHistoryPanel(isChecked());
             }
         };
-        history.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_OBJ_FOLDER));
-        toolBar.add(history);
+        historyAction.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_OBJ_FOLDER));
+        historyAction.setChecked(historyShown);
+        toolBar.add(historyAction);
 
         Action newChat = new Action("Новый чат") {
             @Override
@@ -559,8 +569,34 @@ public class ChatView extends ViewPart {
 
     /** Показывает или прячет боковую панель со списком чатов. */
     void showHistoryPanel(boolean shown) {
+        historyShown = shown;
+        if (historyAction != null) {
+            historyAction.setChecked(shown);
+        }
         sash.setMaximizedControl(shown ? null : top);
         refreshHistoryPanel();
+    }
+
+    @Override
+    public void init(IViewSite site, IMemento memento) throws PartInitException {
+        super.init(site, memento);
+        if (memento != null) {
+            historyShown = Boolean.TRUE.equals(memento.getBoolean(MEMENTO_HISTORY));
+            Integer left = memento.getInteger(MEMENTO_HISTORY_WIDTH);
+            if (left != null && left > 5 && left < 95) {
+                historyWeights = new int[] { left, 100 - left };
+            }
+        }
+    }
+
+    @Override
+    public void saveState(IMemento memento) {
+        super.saveState(memento);
+        memento.putBoolean(MEMENTO_HISTORY, historyShown);
+        if (sash != null && !sash.isDisposed() && historyShown) {
+            int[] weights = sash.getWeights();
+            memento.putInteger(MEMENTO_HISTORY_WIDTH, weights[0] * 100 / Math.max(1, weights[0] + weights[1]));
+        }
     }
 
     /** Обновляет список чатов на панели, если она открыта. */
