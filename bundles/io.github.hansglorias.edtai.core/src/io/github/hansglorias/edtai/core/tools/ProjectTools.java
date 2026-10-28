@@ -263,12 +263,24 @@ public final class ProjectTools {
             List<String> found = new ArrayList<>();
             int total = 0;
             int modules = 0;
+            int unreadable = 0;
+            // Открытые в редакторе модули — с несохранёнными правками, как в read_module.
+            Map<String, String> unsaved = files.unsavedTexts(project);
             for (Path file : bslFiles(where)) {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new ToolException("Поиск прерван");
                 }
                 String path = root.relativize(file).toString().replace('\\', '/');
-                List<String> lines = List.of(readUnchecked(file).split("\r\n|\r|\n", -1));
+                String content = unsaved.get(path);
+                if (content == null) {
+                    try {
+                        content = read(file);
+                    } catch (IOException e) {
+                        unreadable++;
+                        continue;
+                    }
+                }
+                List<String> lines = List.of(content.split("\r\n|\r|\n", -1));
                 boolean matched = false;
                 for (int i = 0; i < lines.size(); i++) {
                     if (normalize(lines.get(i)).contains(needle)) {
@@ -290,6 +302,9 @@ public final class ProjectTools {
             StringBuilder text = new StringBuilder("«" + query + "»: совпадений — " + total + ", модулей — " + modules);
             if (total > found.size()) {
                 text.append(", показаны первые ").append(found.size());
+            }
+            if (unreadable > 0) {
+                text.append(", не прочитано файлов: ").append(unreadable);
             }
             int budget = limit.getAsInt();
             for (String line : found) {

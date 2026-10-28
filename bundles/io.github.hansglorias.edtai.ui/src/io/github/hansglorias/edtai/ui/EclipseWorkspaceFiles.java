@@ -2,16 +2,20 @@ package io.github.hansglorias.edtai.ui;
 
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.filebuffers.FileBuffers;
+import org.eclipse.core.filebuffers.IFileBuffer;
 import org.eclipse.core.filebuffers.ITextFileBuffer;
 import org.eclipse.core.filebuffers.LocationKind;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IWorkbenchPage;
@@ -97,6 +101,21 @@ final class EclipseWorkspaceFiles implements WorkspaceFiles {
         };
         inUi(read);
         return Optional.ofNullable(text.get());
+    }
+
+    @Override
+    public Map<String, String> unsavedTexts(String project) {
+        Map<String, String> texts = new HashMap<>();
+        inUi(() -> {
+            for (IFileBuffer buffer : FileBuffers.getTextFileBufferManager().getFileBuffers()) {
+                IPath location = buffer.getLocation();
+                if (buffer instanceof ITextFileBuffer text && text.isDirty() && location != null && location.segmentCount() > 1
+                        && location.segment(0).equals(project)) {
+                    texts.put(location.removeFirstSegments(1).toString(), text.getDocument().get());
+                }
+            }
+        });
+        return texts;
     }
 
     /** Выполняет в UI-потоке и ждёт. */

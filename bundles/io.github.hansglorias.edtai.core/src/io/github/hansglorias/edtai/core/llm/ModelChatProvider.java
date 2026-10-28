@@ -72,6 +72,11 @@ public final class ModelChatProvider implements ChatProvider {
         return ModelConnection.of(settings, token);
     }
 
+    /** Настройки изменились: снова пробовать инструменты с серверами, которые их отклоняли. */
+    public void forgetRejections() {
+        withoutTools.clear();
+    }
+
     @Override
     public String name() {
         return "модель";

@@ -186,6 +186,9 @@ public class ChatView extends ViewPart {
     private final IPreferenceChangeListener preferenceListener = event -> inUi(() -> {
         AiSettings previous = settings;
         settings = SettingsStore.workspace().load();
+        if (session.provider() instanceof ModelChatProvider provider) {
+            provider.forgetRejections();
+        }
         if (!previous.mcpServers().equals(settings.mcpServers())
                 || !TrustSettings.from(previous).equals(TrustSettings.from(settings))) {
             // Закрытие сессий — запросы по сети, а вызов инструмента может идти минуты: не в UI-потоке.
