@@ -9,11 +9,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.jface.fieldassist.IContentProposal;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Table;
+import org.eclipse.swt.widgets.TableItem;
 import org.eclipse.swt.widgets.Tree;
 import org.eclipse.swt.widgets.TreeItem;
 import org.junit.jupiter.api.Test;
@@ -28,6 +31,8 @@ import io.github.hansglorias.edtai.core.mcp.McpToolInfo;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.McpTransport;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
+import io.github.hansglorias.edtai.core.skills.Skill;
+import io.github.hansglorias.edtai.core.skills.SkillLibrary;
 
 /** Команды через «/» и строка состояния: что делает модель, токены. */
 class ChatCommandsTest extends AbstractChatTest {
@@ -202,16 +207,59 @@ class ChatCommandsTest extends AbstractChatTest {
         assertEquals(ChatView.SKILL_PROMPT + "\n\nоформление печатных форм", create.text());
         assertEquals("create-skill", create.attachments().get(0).name());
 
-        List<String> shown = new ArrayList<>();
-        List<java.nio.file.Path> opened = new ArrayList<>();
-        view.skillsDialog = text -> shown.add(text);
-        view.openFile = opened::add;
+        List<List<String>> shown = new ArrayList<>();
+        view.skillsDialog = (all, off) -> {
+            shown.add(all.stream().map(Skill::name).toList());
+            return Set.of("html-field", "commit-message");
+        };
         view.input().setText("/skills");
         view.send();
-        assertTrue(shown.get(0).startsWith("Встроенные:\n  /client-server — "), shown.get(0));
-        assertEquals(1, opened.size(), "«Открыть папку своих скиллов»");
-        assertTrue(opened.get(0).endsWith("skills"), opened.toString());
+        assertEquals(SkillLibrary.BUILT_IN.size(), shown.get(0).size(), "в окне все скиллы");
         assertEquals(3, server.requests().size(), "/skills модели не отправляется");
+        assertEquals("commit-message\nhtml-field", InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).get(ChatView.DISABLED_SKILLS, ""));
+        assertEquals("Скиллы: включено " + (SkillLibrary.BUILT_IN.size() - 2) + " из " + SkillLibrary.BUILT_IN.size(),
+                view.status().getText());
+
+        ask(view, "/html-field как поймать двойной клик");
+        assertEquals("/html-field как поймать двойной клик", view.session().messages().get(6).text(), "выключенный — не команда");
+        List<Object> later = Json.asList(Json.parseObject(server.requests().get(3).body()).get("messages"));
+        String system = Json.stringAt(later.get(0), "content");
+        assertFalse(system.contains("- html-field"), "выключенного нет в списке для модели");
+        assertTrue(system.contains("- bsl-style"), system);
+
+        List<java.nio.file.Path> opened = new ArrayList<>();
+        view.openFile = opened::add;
+        view.openSkillsFolder();
+        assertTrue(opened.get(0).endsWith("skills"), opened.toString());
+    }
+
+    @Test
+    void skillsDialogTogglesAndShowsText() throws Exception {
+        ChatView view = showView();
+        List<Skill> all = SkillLibrary.builtIn();
+        List<String> folder = new ArrayList<>();
+        SkillsDialog dialog = new SkillsDialog(view.getSite().getShell(), all, Set.of("posting"), () -> folder.add("open"));
+        dialog.setBlockOnOpen(false);
+        dialog.open();
+        try {
+            Table table = dialog.table();
+            assertEquals(all.size(), table.getItemCount());
+            int posting = all.stream().map(Skill::name).toList().indexOf("posting");
+            assertFalse(table.getItem(posting).getChecked(), "выключенный — без галочки");
+            assertTrue(table.getItem(0).getChecked());
+            assertTrue(dialog.details().getText().startsWith("/create-skill — встроенный\n\n"), dialog.details().getText());
+
+            TableItem first = table.getItem(1);
+            first.setChecked(false);
+            Event check = new Event();
+            check.item = first;
+            check.detail = SWT.CHECK;
+            table.notifyListeners(SWT.Selection, check);
+            assertTrue(dialog.details().getText().startsWith("/bsl-style — встроенный\n\n# Стиль кода 1С"), dialog.details().getText());
+            Screenshots.capture(dialog.getShell(), "skills-dialog");
+        } finally {
+            dialog.close();
+        }
     }
 
     @Test

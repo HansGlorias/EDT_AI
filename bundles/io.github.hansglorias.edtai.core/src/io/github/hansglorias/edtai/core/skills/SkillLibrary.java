@@ -28,8 +28,9 @@ import java.util.stream.Stream;
 public final class SkillLibrary {
 
     /** Встроенные скиллы: файлы {@code builtin/<имя>.md} рядом с классом. */
-    public static final List<String> BUILT_IN = List.of("create-skill", "query-optimize", "code-standards", "posting",
-            "client-server", "method-docs");
+    public static final List<String> BUILT_IN = List.of("create-skill", "bsl-style", "query-style", "query-optimize", "code-standards",
+            "posting", "client-server", "method-docs", "edt-project", "access-rights", "release-update", "html-field", "commit-message",
+            "live-base", "platform-gotchas");
     /** Каталог скиллов внутри проекта. */
     public static final String PROJECT_DIRECTORY = ".edtai/skills";
 
@@ -40,6 +41,7 @@ public final class SkillLibrary {
     private final Path userDirectory;
     private final Supplier<List<Path>> projectDirectories;
     private final Set<String> reserved;
+    private final Supplier<Set<String>> disabled;
 
     /**
      * @param userDirectory      свои скиллы
@@ -47,17 +49,37 @@ public final class SkillLibrary {
      * @param reserved           имена встроенных команд: скилл с таким именем не вызвать командой
      */
     public SkillLibrary(Path userDirectory, Supplier<List<Path>> projectDirectories, Set<String> reserved) {
+        this(userDirectory, projectDirectories, reserved, Set::of);
+    }
+
+    /**
+     * @param disabled имена выключенных скиллов (галочки в окне {@code /skills}): модель их не видит, командой не вызвать
+     */
+    public SkillLibrary(Path userDirectory, Supplier<List<Path>> projectDirectories, Set<String> reserved,
+            Supplier<Set<String>> disabled) {
         this.userDirectory = userDirectory;
         this.projectDirectories = projectDirectories;
         this.reserved = reserved;
+        this.disabled = disabled;
     }
 
     public Path userDirectory() {
         return userDirectory;
     }
 
-    /** Скиллы по имени; нечитаемые и без имени пропускаются. */
+    /** Включённые скиллы по имени. */
     public List<Skill> all() {
+        Set<String> off = disabled.get();
+        return everything().stream().filter(skill -> !off.contains(skill.name())).toList();
+    }
+
+    /** Выключен ли скилл галочкой. */
+    public boolean isDisabled(String name) {
+        return disabled.get().contains(name);
+    }
+
+    /** Все скиллы, и выключенные, по имени; нечитаемые и без имени пропускаются. */
+    public List<Skill> everything() {
         Map<String, Skill> skills = new LinkedHashMap<>();
         builtIn().forEach(skill -> skills.put(skill.name(), skill));
         read(userDirectory, Skill.Source.USER).forEach(skill -> skills.put(skill.name(), skill));
@@ -125,7 +147,7 @@ public final class SkillLibrary {
 
     /** Для команды {@code /skills}: скиллы по источникам и как создать свой. */
     public String describe() {
-        List<Skill> skills = all();
+        List<Skill> skills = everything();
         StringBuilder text = new StringBuilder();
         for (Skill.Source source : Skill.Source.values()) {
             List<Skill> group = skills.stream().filter(skill -> skill.source() == source).toList();
@@ -139,6 +161,9 @@ public final class SkillLibrary {
             }).append(":\n");
             for (Skill skill : group) {
                 text.append("  ").append(skill.command()).append(" — ").append(skill.description());
+                if (isDisabled(skill.name())) {
+                    text.append(" (выключен)");
+                }
                 if (source == Skill.Source.PROJECT) {
                     text.append(" (").append(skill.location()).append(')');
                 }
@@ -149,6 +174,21 @@ public final class SkillLibrary {
         text.append("Создать свой: /skill и описание — модель напишет инструкцию и сохранит. Скилл проекта (общий для команды"
                 + " через git) — файл .md в каталоге ").append(PROJECT_DIRECTORY).append(" проекта, в том же формате.");
         return text.toString();
+    }
+
+    /** Выключенные скиллы: имена через перевод строки, как хранятся в настройках. */
+    public static Set<String> parseDisabled(String stored) {
+        Set<String> names = new java.util.TreeSet<>();
+        for (String line : (stored == null ? "" : stored).split("\n")) {
+            if (!line.isBlank()) {
+                names.add(line.strip().toLowerCase(Locale.ROOT));
+            }
+        }
+        return names;
+    }
+
+    public static String formatDisabled(Set<String> names) {
+        return String.join("\n", new java.util.TreeSet<>(names));
     }
 
     /** Встроенные скиллы из ресурсов плагина. */
