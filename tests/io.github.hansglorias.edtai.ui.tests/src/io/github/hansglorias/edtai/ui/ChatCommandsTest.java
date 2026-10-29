@@ -233,6 +233,10 @@ class ChatCommandsTest extends AbstractChatTest {
         assertTrue(opened.get(0).endsWith("skills"), opened.toString());
     }
 
+    private static String details(SkillsDialog dialog) {
+        return dialog.details().getText().replace("\r\n", "\n");
+    }
+
     @Test
     void skillsDialogTogglesAndShowsText() throws Exception {
         ChatView view = showView();
@@ -247,7 +251,8 @@ class ChatCommandsTest extends AbstractChatTest {
             int posting = all.stream().map(Skill::name).toList().indexOf("posting");
             assertFalse(table.getItem(posting).getChecked(), "выключенный — без галочки");
             assertTrue(table.getItem(0).getChecked());
-            assertTrue(dialog.details().getText().startsWith("/create-skill — встроенный\n\n"), dialog.details().getText());
+            // На Windows поле отдаёт переводы строк как \r\n.
+            assertTrue(details(dialog).startsWith("/create-skill — встроенный\n\n"), details(dialog));
 
             TableItem first = table.getItem(1);
             first.setChecked(false);
@@ -255,7 +260,7 @@ class ChatCommandsTest extends AbstractChatTest {
             check.item = first;
             check.detail = SWT.CHECK;
             table.notifyListeners(SWT.Selection, check);
-            assertTrue(dialog.details().getText().startsWith("/bsl-style — встроенный\n\n# Стиль кода 1С"), dialog.details().getText());
+            assertTrue(details(dialog).startsWith("/bsl-style — встроенный\n\n# Стиль кода 1С"), details(dialog));
             Screenshots.capture(dialog.getShell(), "skills-dialog");
         } finally {
             dialog.close();
