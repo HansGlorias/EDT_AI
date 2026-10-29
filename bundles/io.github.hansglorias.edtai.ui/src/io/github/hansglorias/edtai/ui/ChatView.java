@@ -289,6 +289,8 @@ public class ChatView extends ViewPart {
     private Link emptyLink;
     private ApprovalBar approvalBar;
     private ContextBar contextBar;
+    /** Сообщения, набранные во время ответа. */
+    private QueueBar queueBar;
     private Text input;
     private SendButton sendButton;
     private Label status;
@@ -370,6 +372,7 @@ public class ChatView extends ViewPart {
                     attachChanges();
                     approvalBar.dismiss();
                     generateTitle();
+                    sendQueued();
                 });
             }
         }
@@ -509,6 +512,17 @@ public class ChatView extends ViewPart {
         createHistory(top);
         createEmptyState(top);
         approvalBar = new ApprovalBar(column, this::approvalChanged);
+        queueBar = new QueueBar(column, new QueueBar.Callbacks() {
+            @Override
+            public void edit(QueueBar.Queued message) {
+                returnToInput(message);
+            }
+
+            @Override
+            public void changed() {
+                root.layout(true, true);
+            }
+        });
         createContextBar(column);
         createInput(column);
 
@@ -951,7 +965,8 @@ public class ChatView extends ViewPart {
             @Override
             public void run() {
                 if (session.isBusy()) {
-                    showNotice("Дождитесь ответа или остановите его");
+                    queueBar.add(new QueueBar.Queued(text, contextBar.items(), contextBar.attachments()));
+                    contextBar.detach();
                     return;
                 }
                 session.send(text, contextBar.snapshot(), contextBar.attachments());
@@ -1463,31 +1478,27 @@ public class ChatView extends ViewPart {
         }
     }
 
+    /** Кнопка у поля: идёт ответ и поле пусто — «Стоп», иначе отправить (или в очередь). */
     private void sendOrStop() {
-        if (session.isBusy()) {
+        if (session.isBusy() && input.getText().isBlank()) {
             session.cancel();
         } else {
             send();
         }
     }
 
-    /** Отправляет текст из поля ввода. Ничего не делает, если текст пуст или ждём ответа. */
+    /**
+     * Отправляет текст из поля ввода. Пока идёт ответ — ставит в очередь:
+     * уйдёт, когда ответ закончится. Команды без вопроса модели выполняются
+     * сразу.
+     */
     void send() {
         String text = input.getText();
         if (text.isBlank()) {
             return;
         }
         SlashCommand.Invocation command = SlashCommand.parse(text).orElse(null);
-        String prompt = command == null ? null : switch (command.command()) {
-            case REVIEW -> REVIEW_PROMPT;
-            case COMMIT -> COMMIT_PROMPT;
-            case EXPLAIN -> EXPLAIN_PROMPT;
-            case TESTS -> TESTS_PROMPT;
-            case SKILL -> SKILL_PROMPT;
-            default -> null;
-        };
-        Skill skill = command == null ? invokedSkill(text) : null;
-        if (command != null && prompt == null) {
+        if (command != null && promptOf(command.command()) == null) {
             input.setText("");
             if (command.command() == SlashCommand.MODEL) {
                 modelCommand(command.argument());
@@ -1496,40 +1507,96 @@ public class ChatView extends ViewPart {
             }
             return;
         }
-        if (session.isBusy()) {
+        if (command != null && command.command() == SlashCommand.SKILL && command.argument().isEmpty()) {
+            showNotice("Опишите после /skill, что должен делать скилл: «/skill оформление печатных форм по нашему стандарту»");
             return;
         }
-        List<Attachment> extra = new ArrayList<>();
+        if (command != null && (command.command() == SlashCommand.EXPLAIN || command.command() == SlashCommand.TESTS)) {
+            if (contextBar.isEmpty()) {
+                attachFromEditor();
+            }
+            if (contextBar.isEmpty() && command.argument().isEmpty()) {
+                showNotice("Выделите код в редакторе, прикрепите модуль (@) или напишите после команды, о каком коде речь");
+                return;
+            }
+        }
+        if (session.isBusy()) {
+            queueBar.add(new QueueBar.Queued(text, contextBar.items(), contextBar.attachments()));
+            contextBar.detach();
+            input.setText("");
+            showNotice("В очереди: уйдёт после ответа");
+            return;
+        }
+        submit(text, contextBar.snapshot(), contextBar.attachments());
+        input.setText("");
+        contextBar.clear();
+    }
+
+    /** Готовый вопрос команды ({@code /review}…); {@code null} — команда без вопроса модели. */
+    private static String promptOf(SlashCommand command) {
+        return switch (command) {
+            case REVIEW -> REVIEW_PROMPT;
+            case COMMIT -> COMMIT_PROMPT;
+            case EXPLAIN -> EXPLAIN_PROMPT;
+            case TESTS -> TESTS_PROMPT;
+            case SKILL -> SKILL_PROMPT;
+            default -> null;
+        };
+    }
+
+    /** Вопрос модели: текст как набран (команда, скилл) и прикреплённое. */
+    private void submit(String typed, List<ContextItem> context, List<Attachment> files) {
+        String text = typed;
+        SlashCommand.Invocation command = SlashCommand.parse(text).orElse(null);
+        Skill skill = command == null ? invokedSkill(text) : null;
+        List<Attachment> attachments = new ArrayList<>(files);
         if (skill != null) {
             // Инструкция скилла — вложением: в ленте видно «скилл …», модель получает её целиком.
             String argument = text.strip().substring(skill.command().length()).strip();
             text = argument.isEmpty() ? "Выполни скилл «" + skill.name() + "»." : argument;
-            extra.add(Attachment.skill(skill.name(), skill.body()));
-        }
-        if (command != null && command.command() == SlashCommand.SKILL) {
-            if (command.argument().isEmpty()) {
-                showNotice("Опишите после /skill, что должен делать скилл: «/skill оформление печатных форм по нашему стандарту»");
-                return;
-            }
-            skills.find("create-skill").ifPresent(guide -> extra.add(Attachment.skill(guide.name(), guide.body())));
+            attachments.add(Attachment.skill(skill.name(), skill.body()));
         }
         if (command != null) {
-            boolean aboutCode = command.command() == SlashCommand.EXPLAIN || command.command() == SlashCommand.TESTS;
-            if (aboutCode && contextBar.isEmpty()) {
-                attachFromEditor();
+            if (command.command() == SlashCommand.SKILL) {
+                skills.find("create-skill").ifPresent(guide -> attachments.add(Attachment.skill(guide.name(), guide.body())));
             }
-            if (aboutCode && contextBar.isEmpty() && command.argument().isEmpty()) {
-                showNotice("Выделите код в редакторе, прикрепите модуль (@) или напишите после команды, о каком коде речь");
-                return;
-            }
+            String prompt = promptOf(command.command());
             text = command.argument().isEmpty() ? prompt : prompt + "\n\n" + command.argument();
         }
-        List<ContextItem> context = contextBar.snapshot();
-        List<Attachment> attachments = new ArrayList<>(contextBar.attachments());
-        attachments.addAll(extra);
-        input.setText("");
         session.send(text, context, attachments);
-        contextBar.clear();
+    }
+
+    /**
+     * Ответ закончился: следующее из очереди — модели. Ответ остановили или
+     * он оборвался — очередь возвращается в поле ввода: решать пользователю.
+     */
+    private void sendQueued() {
+        if (queueBar.isEmpty() || session.isBusy()) {
+            return;
+        }
+        List<ChatMessage> messages = session.messages();
+        boolean done = !messages.isEmpty() && messages.get(messages.size() - 1).role() == ChatRole.ASSISTANT
+                && messages.get(messages.size() - 1).status() == Status.DONE;
+        if (!done) {
+            List<QueueBar.Queued> all = queueBar.drain();
+            all.forEach(this::returnToInput);
+            showNotice("Ответ остановлен — сообщения из очереди вернулись в поле ввода");
+            return;
+        }
+        QueueBar.Queued next = queueBar.poll();
+        List<ContextItem> context = contextBar.snapshot(next.context());
+        next.dispose();
+        submit(next.text(), context, next.files());
+    }
+
+    /** Сообщение из очереди — обратно в поле ввода (к набранному) и прикреплённое — на панель. */
+    private void returnToInput(QueueBar.Queued message) {
+        String current = input.getText();
+        input.setText(current.isBlank() ? message.text() : current.stripTrailing() + "\n\n" + message.text());
+        input.setSelection(input.getText().length());
+        message.context().forEach(contextBar::add);
+        message.files().forEach(contextBar::add);
+        input.setFocus();
     }
 
     /** Скилл, если сообщение начинается с его команды: {@code /query-optimize …}. */
@@ -2399,8 +2466,10 @@ public class ChatView extends ViewPart {
             return;
         }
         boolean busy = session.isBusy();
-        sendButton.setBusy(busy);
-        sendButton.setEnabled(busy || !input.getText().isBlank());
+        boolean typed = !input.getText().isBlank();
+        sendButton.setBusy(busy && !typed);
+        sendButton.setQueue(busy && typed);
+        sendButton.setEnabled(busy || typed);
     }
 
     /**
@@ -2622,6 +2691,10 @@ public class ChatView extends ViewPart {
 
     Text input() {
         return input;
+    }
+
+    QueueBar queueBar() {
+        return queueBar;
     }
 
     ContextBar contextBar() {
