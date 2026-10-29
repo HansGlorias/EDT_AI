@@ -122,6 +122,11 @@ final class ContextBar {
 
     void clear() {
         items.forEach(AttachedContext::dispose);
+        detach();
+    }
+
+    /** Убирает всё с панели, не освобождая фрагменты: их забрала очередь сообщений. */
+    void detach() {
         items.clear();
         files.clear();
         refresh();
@@ -137,8 +142,13 @@ final class ContextBar {
 
     /** Фрагменты сейчас, обрезанные по лимиту. */
     List<ContextItem> snapshot() {
+        return snapshot(items);
+    }
+
+    /** Те же фрагменты из другого списка (сообщение из очереди) — по лимиту панели. */
+    List<ContextItem> snapshot(List<AttachedContext> from) {
         List<ContextItem> snapshot = new ArrayList<>();
-        for (AttachedContext item : items) {
+        for (AttachedContext item : from) {
             ContextItem current = item.snapshot();
             if (current != null) {
                 snapshot.add(current);

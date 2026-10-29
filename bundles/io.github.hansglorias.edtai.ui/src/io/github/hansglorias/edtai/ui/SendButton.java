@@ -26,6 +26,7 @@ final class SendButton extends Canvas {
     private Color disabled;
     private RGB disabledFrom;
     private boolean busy;
+    private boolean queue;
     private boolean hover;
 
     SendButton(Composite parent) {
@@ -64,6 +65,14 @@ final class SendButton extends Canvas {
         return busy;
     }
 
+    /** Идёт ответ, а в поле набран текст: стрелка ставит его в очередь. */
+    void setQueue(boolean value) {
+        if (queue != value) {
+            queue = value;
+            updateTooltip();
+        }
+    }
+
     /** Что делает кнопка сейчас: «Отправить» или «Стоп». */
     String getText() {
         return busy ? ChatView.STOP : ChatView.SEND;
@@ -83,7 +92,8 @@ final class SendButton extends Canvas {
     }
 
     private void updateTooltip() {
-        setToolTipText(busy ? "Остановить ответ (Esc)" : "Отправить (Enter)");
+        setToolTipText(busy ? "Остановить ответ (Esc)" : queue ? "В очередь: уйдёт после ответа (Enter). Остановить ответ — Esc"
+                : "Отправить (Enter)");
     }
 
     private void setHover(boolean value) {
