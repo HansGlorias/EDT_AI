@@ -259,13 +259,49 @@ class ChatContextTest extends AbstractChatTest {
         IMenuService menus = PlatformUI.getWorkbench().getService(IMenuService.class);
         menus.populateContributionManager(menu, "popup:#TextEditorContext");
         try {
-            // В E4 пункт — HandledContributionItem с id команды.
-            List<String> ids = Arrays.stream(menu.getItems()).map(IContributionItem::getId).toList();
-            assertTrue(ids.contains(AskAboutSelectionHandler.COMMAND_ID), ids.toString());
+            // Подменю «EDT AI»; в E4 пункт — HandledContributionItem с id команды.
+            IContributionItem group = menu.find("io.github.hansglorias.edtai.ui.editorMenu");
+            MenuManager submenu = assertInstanceOf(MenuManager.class, group, String.valueOf(group));
+            assertEquals("EDT AI", submenu.getMenuText());
+            List<String> ids = Arrays.stream(submenu.getItems()).map(IContributionItem::getId).filter(id -> id != null).toList();
+            assertEquals(List.of(AskAboutSelectionHandler.COMMAND_ID, "actions", CodeActionHandler.EXPLAIN_ID, CodeActionHandler.REVIEW_ID,
+                    CodeActionHandler.REFACTOR_ID), ids);
         } finally {
             menus.releaseContributions(menu);
             menu.dispose();
         }
+    }
+
+    @Test
+    void explainReviewRefactorSendSelection() throws Exception {
+        answering(List.of("Ответ."));
+        ITextEditor editor = openModule();
+        IDocument document = EditorAccess.document(editor);
+        editor.selectAndReveal(document.getLineOffset(2), document.getLineOffset(5) - document.getLineOffset(2));
+
+        ChatView view = run(CodeActionHandler.EXPLAIN_ID);
+        waitUntil(() -> !view.session().isBusy() && view.session().messages().size() == 2, () -> view.history().getText());
+        assertEquals(ChatView.EXPLAIN_PROMPT, view.session().messages().get(0).text());
+        assertEquals(List.of(NAME + ": 3–5"), view.session().messages().get(0).context().stream().map(ContextItem::label).toList());
+        assertTrue(view.contextBar().isEmpty(), "фрагмент ушёл с вопросом");
+
+        page.activate(editor);
+        run(CodeActionHandler.REVIEW_ID);
+        waitUntil(() -> !view.session().isBusy() && view.session().messages().size() == 4, () -> view.history().getText());
+        assertEquals(ChatView.REVIEW_CODE_PROMPT, view.session().messages().get(2).text());
+
+        page.activate(editor);
+        run(CodeActionHandler.REFACTOR_ID);
+        waitUntil(() -> !view.session().isBusy() && view.session().messages().size() == 6, () -> view.history().getText());
+        assertEquals(ChatView.REFACTOR_PROMPT, view.session().messages().get(4).text());
+        String body = server.requests().get(2).body();
+        assertTrue(body.contains("Функция Сумма(А, Б) Экспорт"), body);
+    }
+
+    private ChatView run(String command) throws Exception {
+        PlatformUI.getWorkbench().getService(IHandlerService.class).executeCommand(command, null);
+        settle();
+        return assertInstanceOf(ChatView.class, page.findView(ChatView.ID));
     }
 
     @Test

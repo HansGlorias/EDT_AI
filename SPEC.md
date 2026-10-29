@@ -359,6 +359,20 @@ BSL и сборки текста для модели — в `core` (пакет `
 
 Спорные места — проверить в EDT или обсудить:
 
+- **Подменю «EDT AI» редактора** (`#TextEditorContext`, `<menu>`):
+  «Спросить о выделенном» и команды `explainSelection`, `reviewSelection`,
+  `refactorSelection` (`CodeActionHandler`): фрагмент как у Ctrl+Alt+A и
+  готовый вопрос (`EXPLAIN_PROMPT`, `REVIEW_CODE_PROMPT`,
+  `REFACTOR_PROMPT`) — сразу модели вместе с уже прикреплённым, во время
+  ответа — в очередь (`ChatView.askAboutCode`).
+- **Кнопка в окне коммита EGit**: вклад в `toolbar:org.eclipse.egit.ui.StagingView`
+  без зависимости от EGit (нет вида — нет кнопки), команда `commitMessage`
+  (`CommitMessageHandler`). Поле сообщения — первое редактируемое
+  многострочное `StyledText` вида (виджет части через `MPart`,
+  `org.eclipse.e4.ui.model.workbench`). Чат показывается, не забирая
+  фокус; вопрос `COMMIT_PROMPT`, когда ответ готов (`DONE`), текст первого
+  блока кода (`core.chat.CommitMessage`, без блока — ответ целиком) —
+  в поле. Во время другого ответа — подсказка нажать позже.
 - **Пункт в контекстном меню BSL-редактора.** Вклад в `#TextEditorContext`;
   если EDT регистрирует меню модуля под своим id, пункта не будет (горячая
   клавиша и вид работают). Первый пункт ручной проверки; если не появится —

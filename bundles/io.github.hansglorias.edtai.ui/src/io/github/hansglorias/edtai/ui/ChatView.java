@@ -129,6 +129,7 @@ import io.github.hansglorias.edtai.core.chat.ReplyActivity;
 import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
+import io.github.hansglorias.edtai.core.chat.CommitMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
 import io.github.hansglorias.edtai.core.chat.ChatStore;
@@ -189,6 +190,11 @@ public class ChatView extends ViewPart {
     static final String EXPLAIN_PROMPT = "Объясни этот код: зачем он, что получает и что возвращает, основные шаги, побочные"
             + " эффекты (запись в базу, блокировки, вызовы сервера, транзакции) и неочевидные места. Если код вызывает другие"
             + " методы проекта и без них не понять — прочитай их. Ссылайся на строки: Модуль:строка.";
+    static final String REVIEW_CODE_PROMPT = "Сделай ревью этого кода по скиллам bsl-style и code-standards (запросы — по"
+            + " query-style): найденное списком «строка — что не так — как исправить», от важного к мелкому. Код не правь.";
+    static final String REFACTOR_PROMPT = "Сделай рефакторинг этого кода по скиллу bsl-style: проще и понятнее, поведение не"
+            + " меняй. Правь модуль (edit_module), потом кратко перечисли, что изменил. Если правка рискованная — сначала опиши"
+            + " её и спроси.";
     static final String TESTS_PROMPT = "Напиши тесты для этого кода. Сначала посмотри (search_code, list_objects), есть ли в"
             + " проекте тесты и на чём: YAxUnit (общие модули с ИсполняемыеСценарии), Vanessa Automation (feature-файлы) —"
             + " пиши в том же стиле и скажи, куда положить. Тестов нет — на YAxUnit. Покрой обычный сценарий, граничные"
@@ -292,6 +298,10 @@ public class ChatView extends ViewPart {
     private ContextBar contextBar;
     /** Сообщения, набранные во время ответа. */
     private QueueBar queueBar;
+    /** Куда вставить сообщение коммита, когда ответ готов; {@code null} — не ждём. */
+    private Predicate<String> commitTarget;
+    /** Номер ответа на «Сообщение коммита» в истории. */
+    private int commitAnswer;
     private Text input;
     private SendButton sendButton;
     private Label status;
@@ -375,6 +385,7 @@ public class ChatView extends ViewPart {
                     attachChanges();
                     approvalBar.dismiss();
                     generateTitle();
+                    deliverCommitMessage();
                     sendQueued();
                 });
             }
@@ -2140,6 +2151,56 @@ public class ChatView extends ViewPart {
     }
 
     /** Добавляет фрагмент на панель над полем ввода и ставит фокус в поле. */
+    /**
+     * Кнопка в окне коммита: вопрос «Сообщение коммита»; когда ответ готов,
+     * текст из его блока кода — {@code target} (поле окна коммита).
+     * {@code false} от него — поля нет, текст остаётся в чате.
+     */
+    void requestCommitMessage(Predicate<String> target) {
+        if (session.isBusy()) {
+            showNotice("Дождитесь ответа или остановите его, потом нажмите кнопку ещё раз");
+            return;
+        }
+        commitTarget = target;
+        commitAnswer = session.messages().size() + 1;
+        submit(COMMIT_PROMPT, List.of(), List.of());
+    }
+
+    /** Ответ на «Сообщение коммита» готов: текст — в окно коммита. */
+    private void deliverCommitMessage() {
+        Predicate<String> target = commitTarget;
+        commitTarget = null;
+        List<ChatMessage> messages = session.messages();
+        if (target == null || commitAnswer >= messages.size()) {
+            return;
+        }
+        ChatMessage answer = messages.get(commitAnswer);
+        if (answer.role() != ChatRole.ASSISTANT || answer.status() != Status.DONE) {
+            return;
+        }
+        String text = CommitMessage.extract(answer.text());
+        if (!text.isEmpty() && target.test(text)) {
+            showNotice("Сообщение коммита — в окне коммита");
+        }
+    }
+
+    /**
+     * Команда редактора («Объяснить», «Ревью», «Рефакторинг»): фрагмент и
+     * готовый вопрос — модели сразу, вместе с уже прикреплённым; идёт ответ —
+     * в очередь.
+     */
+    void askAboutCode(AttachedContext context, String prompt) {
+        contextBar.add(context);
+        if (session.isBusy()) {
+            queueBar.add(new QueueBar.Queued(prompt, contextBar.items(), contextBar.attachments()));
+            contextBar.detach();
+            showNotice("В очереди: уйдёт после ответа");
+            return;
+        }
+        submit(prompt, contextBar.snapshot(), contextBar.attachments());
+        contextBar.clear();
+    }
+
     void attach(AttachedContext context) {
         if (!contextBar.add(context)) {
             showNotice("Этот фрагмент уже прикреплён");
