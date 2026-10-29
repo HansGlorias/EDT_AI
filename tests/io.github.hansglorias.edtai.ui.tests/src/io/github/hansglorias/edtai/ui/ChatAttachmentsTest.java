@@ -24,10 +24,30 @@ import org.eclipse.ui.handlers.IHandlerService;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.Attachment;
+import io.github.hansglorias.edtai.core.documents.XlsxWriter;
 import io.github.hansglorias.edtai.core.json.Json;
 
 /** Вложения: файлы с диска и скриншот из буфера — на панели, в запросе модели, в ленте. */
 class ChatAttachmentsTest extends AbstractChatTest {
+
+    @Test
+    void excelAndPdfGoAsText() throws Exception {
+        answering(List.of("Молока больше."));
+        ChatView view = showView();
+        Path folder = Files.createTempDirectory("edtai-documents");
+        Path excel = Files.write(folder.resolve("Остатки.xlsx"), XlsxWriter.fromText("| Товар | Кол-во |\n|---|---|\n| Молоко | 10 |"));
+        Path old = Files.write(folder.resolve("Старый.xls"), new byte[] { (byte) 0xD0, (byte) 0xCF });
+
+        view.attachFiles(List.of(excel.toString(), old.toString()));
+        assertEquals(List.of("Остатки.xlsx, 4 строки"), view.contextBar().labels());
+        assertTrue(view.status().getText().contains("«Старый.xls» — старый формат Office: сохраните как .xlsx"), view.status().getText());
+
+        ask(view, "Чего больше?");
+
+        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(0).body()).get("messages"));
+        String text = Json.stringAt(messages.get(messages.size() - 1), "content");
+        assertTrue(text.contains("Файл Остатки.xlsx (текст документа):\n```\n## Лист «Лист1»\n\nТовар\tКол-во\nМолоко\t10\n```"), text);
+    }
 
     @Test
     void filesAndScreenshotGoToModel() throws Exception {
@@ -39,7 +59,7 @@ class ChatAttachmentsTest extends AbstractChatTest {
 
         view.attachFiles(List.of(log.toString(), binary.toString(), folder.toString()));
         assertEquals(List.of("log.txt, 2 строки"), view.contextBar().labels());
-        assertTrue(view.status().getText().contains("«base.1cd» — не текст и не картинка"), view.status().getText());
+        assertTrue(view.status().getText().contains("«base.1cd» — не текст: приложить можно картинки"), view.status().getText());
         assertTrue(view.status().getText().contains("— папка"), view.status().getText());
 
         view.attachImage(new ImageData(40, 20, 24, new PaletteData(0xFF0000, 0xFF00, 0xFF)));
