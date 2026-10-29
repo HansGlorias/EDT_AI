@@ -91,7 +91,8 @@ final class RequestBudget {
         int withoutCode = 0;
         for (int i = 0; i < last && size.applyAsInt(messages) > budget; i++) {
             ChatMessage message = messages.get(i);
-            if (message.context().stream().anyMatch(item -> !item.text().isEmpty()) || !message.attachments().isEmpty()) {
+            boolean files = !message.attachments().isEmpty() && message.role() != ChatRole.ASSISTANT;
+            if (message.context().stream().anyMatch(item -> !item.text().isEmpty()) || files) {
                 messages.set(i, message.withContext(message.context().stream().map(item -> item.truncate(0)).toList())
                         .withAttachments(List.of()));
                 withoutCode++;

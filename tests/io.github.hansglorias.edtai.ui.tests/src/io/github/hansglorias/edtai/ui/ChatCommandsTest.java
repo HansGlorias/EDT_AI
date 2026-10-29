@@ -12,6 +12,10 @@ import java.util.Map;
 
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.jface.fieldassist.IContentProposal;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Tree;
+import org.eclipse.swt.widgets.TreeItem;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.Attachment;
@@ -19,6 +23,10 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ChatStore;
 import io.github.hansglorias.edtai.core.json.Json;
+import io.github.hansglorias.edtai.core.mcp.McpHub;
+import io.github.hansglorias.edtai.core.mcp.McpToolInfo;
+import io.github.hansglorias.edtai.core.settings.McpServer;
+import io.github.hansglorias.edtai.core.settings.McpTransport;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 /** Команды через «/» и строка состояния: что делает модель, токены. */
@@ -76,14 +84,55 @@ class ChatCommandsTest extends AbstractChatTest {
     void mcpCommandShowsServers() throws Exception {
         answering(List.of("Ответ."));
         ChatView view = showView();
-        List<String> shown = new ArrayList<>();
+        List<List<McpHub.ServerStatus>> shown = new ArrayList<>();
         view.mcpStatus = shown::add;
 
         view.input().setText("/mcp");
         view.send();
         waitUntil(() -> !shown.isEmpty(), () -> view.status().getText());
-        assertEquals(List.of("MCP-серверы не настроены. Добавить: Настройки → EDT AI → MCP-серверы."), shown);
+        assertEquals(List.of(List.of()), shown, "серверов нет");
         assertEquals(0, server.requests().size(), "модели ничего не уходит");
+    }
+
+    @Test
+    void mcpDialogShowsServersAndTools() throws Exception {
+        ChatView view = showView();
+        McpServer edt = new McpServer("EDT", McpTransport.HTTP, "http://localhost:8765/mcp", true, "get_*, update_*");
+        List<McpToolInfo> tools = List.of(new McpToolInfo("get_problems", "Ошибки проекта.\nПодробнее: по всем проектам.", null),
+                new McpToolInfo("update_module", "Меняет модуль", null), new McpToolInfo("run_tests", "Запускает тесты", null));
+        List<McpHub.ServerStatus> servers = List.of(new McpHub.ServerStatus(edt, McpHub.State.CONNECTED, "", "EDT-MCP", tools),
+                new McpHub.ServerStatus(new McpServer("Другой", McpTransport.HTTP, "http://localhost:1/mcp", true),
+                        McpHub.State.FAILED, "соединение отклонено", "", List.of()),
+                new McpHub.ServerStatus(new McpServer("Старый", McpTransport.HTTP, "http://localhost:2/mcp", false),
+                        McpHub.State.DISABLED, "", "", List.of()));
+        List<String> settings = new ArrayList<>();
+        McpStatusDialog dialog = new McpStatusDialog(view.getSite().getShell(), servers, () -> settings.add("open"));
+        dialog.setBlockOnOpen(false);
+        dialog.open();
+        try {
+            Tree tree = dialog.tree();
+            assertEquals(3, tree.getItemCount());
+            TreeItem server = tree.getItem(0);
+            assertEquals(List.of("EDT", "подключён", "Подключено: EDT-MCP. Инструментов: 3, модели доступно: 2"),
+                    List.of(server.getText(0), server.getText(1), server.getText(2)));
+            assertTrue(server.getExpanded());
+            List<String> rows = new ArrayList<>();
+            for (TreeItem tool : server.getItems()) {
+                rows.add(tool.getText(0) + " | " + tool.getText(1) + " | " + tool.getText(2));
+            }
+            assertEquals(List.of("get_problems | " + McpStatusDialog.READS + " | Ошибки проекта.",
+                    "update_module | " + McpStatusDialog.MODIFIES + " | Меняет модуль",
+                    "run_tests | " + McpStatusDialog.FILTERED + " | Запускает тесты"), rows);
+            assertEquals("Не подключён: соединение отклонено", tree.getItem(1).getText(2));
+            assertEquals("выключен", tree.getItem(2).getText(1));
+
+            tree.setSelection(server.getItem(0));
+            tree.notifyListeners(SWT.Selection, new Event());
+            assertEquals("get_problems\nОшибки проекта.\nПодробнее: по всем проектам.", dialog.details().getText());
+            Screenshots.capture(dialog.getShell(), "mcp-status");
+        } finally {
+            dialog.close();
+        }
     }
 
     @Test

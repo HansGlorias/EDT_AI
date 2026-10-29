@@ -52,6 +52,13 @@ public final class Markdown {
         return new RichText(renderer.out.toString(), renderer.spans, renderer.blocks);
     }
 
+    /** Только разметка внутри строки (жирный, курсив, код, ссылки): для абзацев и ячеек документа. */
+    public static RichText renderInline(String text) {
+        Markdown renderer = new Markdown(List.of());
+        renderer.inline(text == null ? "" : text);
+        return new RichText(renderer.out.toString(), renderer.spans, List.of());
+    }
+
     // ---- блоки ----
 
     private void blocks(String markdown) {

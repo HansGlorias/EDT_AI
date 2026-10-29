@@ -52,4 +52,11 @@ class ChatMarkdownTest {
                 Сервер недоступен
                 """, ChatMarkdown.export(" Даты ", messages, ZoneOffset.ofHours(3)));
     }
+
+    @Test
+    void answerFilesAreListed() {
+        ChatMessage answer = new ChatMessage(ChatRole.ASSISTANT, "Готово.", Instant.EPOCH, ChatMessage.Status.DONE, List.of(),
+                List.of(), List.of(new Attachment("Отчёт.md", "text/markdown", "# Отчёт")));
+        assertEquals("# Чат\n\n## Ответ\n\nГотово.\n\nФайл: `Отчёт.md`\n", ChatMarkdown.export("Чат", List.of(answer), ZoneOffset.UTC));
+    }
 }

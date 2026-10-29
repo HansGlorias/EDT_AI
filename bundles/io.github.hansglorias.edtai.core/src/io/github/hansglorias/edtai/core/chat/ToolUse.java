@@ -13,8 +13,9 @@ import java.util.Set;
  * @param outcome итог коротко: «строки 1–120 из 120»; при ошибке — её текст
  * @param at      сколько символов текста ответа было написано до вызова: там строка вызова и стоит в ленте;
  *                -1 — не известно (старые диалоги), строка над текстом
+ * @param file    файл, который вызов приложил к ответу; сессия переносит его в сообщение, в историю не пишется
  */
-public record ToolUse(String id, String name, String summary, String outcome, Status status, int at) {
+public record ToolUse(String id, String name, String summary, String outcome, Status status, int at, Attachment file) {
 
     public enum Status {
         /** Ждёт, пока пользователь разрешит или отклонит вызов. */
@@ -29,12 +30,20 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         status = Objects.requireNonNullElse(status, Status.DONE);
     }
 
+    public ToolUse(String id, String name, String summary, String outcome, Status status, int at) {
+        this(id, name, summary, outcome, status, at, null);
+    }
+
     public ToolUse(String id, String name, String summary, String outcome, Status status) {
         this(id, name, summary, outcome, status, -1);
     }
 
     public ToolUse withAt(int newAt) {
-        return new ToolUse(id, name, summary, outcome, status, newAt);
+        return new ToolUse(id, name, summary, outcome, status, newAt, file);
+    }
+
+    public ToolUse withFile(Attachment newFile) {
+        return new ToolUse(id, name, summary, outcome, status, at, newFile);
     }
 
     /** Служебные строки ленты (сервер не подключился, окно модели), а не вызовы инструментов. */

@@ -1,5 +1,6 @@
 package io.github.hansglorias.edtai.ui;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -107,6 +108,56 @@ class ChatAttachmentsTest extends AbstractChatTest {
         } finally {
             clipboard.dispose();
         }
+    }
+
+    @Test
+    void modelAttachesWordDocument() throws Exception {
+        String arguments = Json.write(Map.of("name", "Инструкция.docx", "content", "# Обмен\n\n1. Откройте настройки\n2. Запустите"));
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
+                        + "\"type\":\"function\",\"function\":{\"name\":\"attach_file\",\"arguments\":" + Json.write(arguments)
+                        + "}}]}}]}\n\n", "data: [DONE]\n\n"), 5);
+            } else {
+                response.sse(List.of(openAiPart("Инструкция в файле."), "data: [DONE]\n\n"), 5);
+            }
+        });
+        configure(server);
+        ChatView view = showView();
+
+        ask(view, "Сделай инструкцию в Word");
+
+        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
+        String result = Json.stringAt(messages.get(messages.size() - 1), "content");
+        assertTrue(result.startsWith("Файл «Инструкция.docx» ("), result);
+        List<Attachment> files = view.session().messages().get(1).attachments();
+        assertEquals(1, files.size());
+        byte[] document = files.get(0).bytes();
+        assertEquals("PK", new String(document, 0, 2, StandardCharsets.US_ASCII), "docx — zip");
+        String transcript = view.history().getText();
+        assertTrue(transcript.contains("Инструкция в файле.\n\n" + MessageRenderer.OBJECT + "Инструкция.docx  "), transcript);
+        assertTrue(transcript.endsWith(MessageRenderer.SAVE_FILE + "   " + MessageRenderer.OPEN_FILE), transcript);
+        int icon = transcript.lastIndexOf(MessageRenderer.OBJECT);
+        assertTrue(view.history().getStyleRangeAtOffset(icon).data instanceof MessageRenderer.FileIcon);
+        assertTrue(view.hasCodeBackground(icon), "строка файла — карточкой, с фоном");
+        Screenshots.capture(view.control(), "answer-file");
+
+        Path folder = Files.createTempDirectory("edtai-save");
+        view.chooseSaveFile = name -> folder.resolve(name);
+        view.linkAction(MessageRenderer.SAVE_FILE).run();
+        assertArrayEquals(document, Files.readAllBytes(folder.resolve("Инструкция.docx")));
+        assertTrue(view.status().getText().startsWith("Сохранено: "), view.status().getText());
+
+        List<Path> opened = new ArrayList<>();
+        view.openFile = opened::add;
+        view.linkAction(MessageRenderer.OPEN_FILE).run();
+        assertEquals("Инструкция.docx", opened.get(0).getFileName().toString());
+        assertArrayEquals(document, Files.readAllBytes(opened.get(0)));
+
+        page.hideView(view);
+        ChatView reopened = showView();
+        assertTrue(reopened.history().getText().contains(MessageRenderer.OBJECT + "Инструкция.docx  "), "файл после перезапуска");
+        assertArrayEquals(document, reopened.session().messages().get(1).attachments().get(0).bytes());
     }
 
     private static List<Attachment> saved(ChatView view) {

@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -133,41 +134,84 @@ public final class McpHub implements AutoCloseable {
         return text.toString();
     }
 
+    /** Состояние сервера для окна {@code /mcp}. */
+    public enum State {
+        CONNECTED, FAILED, DISABLED, UNSUPPORTED
+    }
+
+    /**
+     * Сервер в окне {@code /mcp}.
+     *
+     * @param message    у неподключённого — почему
+     * @param serverName как сервер назвал себя при подключении
+     * @param tools      все инструменты сервера; модели уходят те, что пропускает фильтр сервера
+     */
+    public record ServerStatus(McpServer server, State state, String message, String serverName, List<McpToolInfo> tools) {
+
+        public ServerStatus {
+            message = Objects.requireNonNullElse(message, "");
+            serverName = Objects.requireNonNullElse(serverName, "");
+            tools = List.copyOf(Objects.requireNonNullElse(tools, List.of()));
+        }
+
+        /** Инструменты, которые получает модель. */
+        public List<McpToolInfo> allowed() {
+            return tools.stream().filter(info -> server.allowsTool(info.name())).toList();
+        }
+
+        /** Строка состояния: «Подключено: EDT-MCP. Инструментов: 40, модели доступно: 12». */
+        public String summary() {
+            return switch (state) {
+                case DISABLED -> "Выключен";
+                case UNSUPPORTED -> "stdio пока не поддерживается, нужен адрес http://…/mcp";
+                case FAILED -> "Не подключён: " + message;
+                case CONNECTED -> "Подключено" + (serverName.isEmpty() ? "" : ": " + serverName) + ". Инструментов: " + tools.size()
+                        + ", модели доступно: " + allowed().size();
+            };
+        }
+    }
+
     /**
      * Состояние серверов для команды {@code /mcp}: подключение и какие
-     * инструменты модель получает — отдельно читающие и меняющие проект.
-     * Подключается к включённым серверам, как перед ответом.
+     * инструменты модель получает. Подключается к включённым серверам, как
+     * перед ответом.
      */
+    public List<ServerStatus> status(List<McpServer> servers, TrustSettings trust) {
+        List<ServerStatus> result = new ArrayList<>();
+        for (McpServer server : servers) {
+            if (!server.enabled()) {
+                result.add(new ServerStatus(server, State.DISABLED, "", "", List.of()));
+            } else if (server.transport() == McpTransport.STDIO) {
+                result.add(new ServerStatus(server, State.UNSUPPORTED, "", "", List.of()));
+            } else {
+                try {
+                    Connection connection = connect(server, trust);
+                    result.add(new ServerStatus(server, State.CONNECTED, "", connection.client().serverName(), connection.tools()));
+                } catch (McpException e) {
+                    result.add(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of()));
+                }
+            }
+        }
+        return result;
+    }
+
+    /** Нет серверов — что показать вместо списка. */
+    public static final String NO_SERVERS = "MCP-серверы не настроены. Добавить: Настройки → EDT AI → MCP-серверы.";
+
+    /** {@link #status} текстом: инструменты отдельно читающие и меняющие проект. */
     public String describe(List<McpServer> servers, TrustSettings trust) {
         if (servers.isEmpty()) {
-            return "MCP-серверы не настроены. Добавить: Настройки → EDT AI → MCP-серверы.";
+            return NO_SERVERS;
         }
         StringBuilder text = new StringBuilder();
-        for (McpServer server : servers) {
-            text.append(server.name()).append(" — ").append(server.target()).append('\n');
-            if (!server.enabled()) {
-                text.append("Выключен.\n\n");
-                continue;
-            }
-            if (server.transport() == McpTransport.STDIO) {
-                text.append("stdio пока не поддерживается, нужен адрес http://…/mcp.\n\n");
-                continue;
-            }
-            try {
-                Connection connection = connect(server, trust);
-                List<McpToolInfo> allowed = connection.tools().stream().filter(info -> server.allowsTool(info.name())).toList();
-                text.append("Подключено");
-                if (!connection.client().serverName().isEmpty()) {
-                    text.append(": ").append(connection.client().serverName());
-                }
-                text.append(". Инструментов: ").append(connection.tools().size()).append(", модели доступно: ")
-                        .append(allowed.size()).append(".\n");
-                names(text, "Читают", allowed.stream().filter(info -> !info.modifies()).toList());
-                names(text, "Меняют проект (в режиме «только вопросы» не передаются)",
-                        allowed.stream().filter(McpToolInfo::modifies).toList());
-            } catch (McpException e) {
-                text.append("Не подключён: ").append(e.getMessage()).append('\n');
-            }
+        for (ServerStatus status : status(servers, trust)) {
+            String summary = status.summary();
+            text.append(status.server().name()).append(" — ").append(status.server().target()).append('\n').append(summary)
+                    .append(summary.endsWith(".") ? "\n" : ".\n");
+            List<McpToolInfo> allowed = status.allowed();
+            names(text, "Читают", allowed.stream().filter(info -> !info.modifies()).toList());
+            names(text, "Меняют проект (в режиме «только вопросы» не передаются)",
+                    allowed.stream().filter(McpToolInfo::modifies).toList());
             text.append('\n');
         }
         return text.toString().strip();

@@ -113,6 +113,25 @@ class ChatSessionTest {
     }
 
     @Test
+    void filesFromToolsGoToAnswer() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        Attachment file = new Attachment("отчёт.md", "text/markdown", "# Отчёт");
+
+        CompletableFuture<ChatMessage> reply = session.send("сделай отчёт файлом");
+        provider.onTool.accept(new ToolUse("1", "attach_file", "Готовит файл отчёт.md", "", ToolUse.Status.RUNNING));
+        provider.onTool.accept(new ToolUse("1", "attach_file", "Готовит файл отчёт.md", "7 байт", ToolUse.Status.DONE).withFile(file));
+        assertEquals(List.of(file), session.messages().get(1).attachments(), "файл виден, пока ответ идёт");
+        provider.complete("Готово.");
+        ChatMessage answer = reply.get(TIMEOUT, TimeUnit.SECONDS);
+
+        assertEquals(List.of(file), answer.attachments());
+        assertNull(answer.tools().get(0).file(), "в вызове файл не хранится");
+        assertEquals(List.of(), answer.images());
+        assertFalse(answer.modelText().contains("# Отчёт"), "содержимое файла модели не уходит");
+    }
+
+    @Test
     void cancelKeepsReceivedPart() throws Exception {
         ManualProvider provider = new ManualProvider();
         ChatSession session = new ChatSession(provider);

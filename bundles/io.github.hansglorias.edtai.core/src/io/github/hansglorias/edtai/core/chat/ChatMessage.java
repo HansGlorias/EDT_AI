@@ -97,9 +97,9 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         return new ChatMessage(role, text, time, status, context, tools, newAttachments);
     }
 
-    /** Картинки сообщения: модель получает их отдельными блоками перед текстом. */
+    /** Картинки вопроса: модель получает их отдельными блоками перед текстом. Файлы ответа модели не уходят. */
     public List<Attachment> images() {
-        return attachments.stream().filter(Attachment::isImage).toList();
+        return role == ChatRole.ASSISTANT ? List.of() : attachments.stream().filter(Attachment::isImage).toList();
     }
 
     /**
