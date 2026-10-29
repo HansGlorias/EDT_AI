@@ -128,7 +128,9 @@ class ChatCommandsTest extends AbstractChatTest {
 
             tree.setSelection(server.getItem(0));
             tree.notifyListeners(SWT.Selection, new Event());
-            assertEquals("get_problems\nОшибки проекта.\nПодробнее: по всем проектам.", dialog.details().getText());
+            // Многострочное поле на Windows отдаёт текст с \r\n.
+            assertEquals("get_problems\nОшибки проекта.\nПодробнее: по всем проектам.",
+                    dialog.details().getText().replace("\r\n", "\n"));
             Screenshots.capture(dialog.getShell(), "mcp-status");
         } finally {
             dialog.close();
