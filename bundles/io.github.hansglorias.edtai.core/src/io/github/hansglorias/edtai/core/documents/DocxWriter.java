@@ -1,15 +1,9 @@
 package io.github.hansglorias.edtai.core.documents;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
+import java.util.Map;
 
 import io.github.hansglorias.edtai.core.markdown.Kind;
 import io.github.hansglorias.edtai.core.markdown.Markdown;
@@ -26,12 +20,6 @@ public final class DocxWriter {
 
     public static final String MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-    private static final Pattern FENCE = Pattern.compile("^ {0,3}(`{3,}|~{3,}).*$");
-    private static final Pattern HEADING = Pattern.compile("^ {0,3}(#{1,6})\\s+(.*?)(?:\\s+#+)?\\s*$");
-    private static final Pattern RULE = Pattern.compile("^ {0,3}([-*_])(?:\\s*\\1){2,}\\s*$");
-    private static final Pattern QUOTE = Pattern.compile("^ {0,3}>\\s?(.*)$");
-    private static final Pattern ITEM = Pattern.compile("^(\\s*)([-*+]|\\d{1,9}[.)])\\s+(.*)$");
-    private static final Pattern TABLE_SEPARATOR = Pattern.compile("^\\s*\\|?\\s*:?-+:?\\s*(?:\\|\\s*:?-+:?\\s*)*\\|?\\s*$");
     /** Ширина текста на A4 с полями 2 см, в двадцатых долях пункта. */
     private static final int TEXT_WIDTH = 9638;
     private static final int BULLETS = 1;
@@ -49,72 +37,31 @@ public final class DocxWriter {
     /** Документ из Markdown. */
     public static byte[] fromMarkdown(String markdown) {
         DocxWriter writer = new DocxWriter();
-        writer.blocks((markdown == null ? "" : markdown).replace("\r\n", "\n").replace('\r', '\n').split("\n", -1));
+        writer.blocks(MarkdownBlocks.parse(markdown));
         return writer.pack();
     }
 
     // ---- блоки ----
 
-    private void blocks(String[] lines) {
-        int i = 0;
-        while (i < lines.length) {
-            String line = lines[i];
-            if (line.isBlank()) {
-                i++;
-                continue;
-            }
-            Matcher item = ITEM.matcher(line);
-            if (!item.matches()) {
+    private void blocks(List<MarkdownBlocks.Block> blocks) {
+        for (MarkdownBlocks.Block block : blocks) {
+            if (block.type() != MarkdownBlocks.Type.ITEM) {
                 currentNumbered = 0;
             }
-            Matcher matcher = FENCE.matcher(line);
-            if (matcher.matches()) {
-                i = code(lines, i, matcher.group(1));
-            } else if (i + 1 < lines.length && line.contains("|") && TABLE_SEPARATOR.matcher(lines[i + 1]).matches()) {
-                i = table(lines, i);
-            } else if ((matcher = HEADING.matcher(line)).matches()) {
-                int level = Math.min(4, matcher.group(1).length());
-                paragraph("<w:pStyle w:val=\"Heading" + level + "\"/>", matcher.group(2), false);
-                i++;
-            } else if (RULE.matcher(line).matches()) {
-                body.append("<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\" w:sz=\"6\" w:space=\"1\" w:color=\"A6A6A6\"/>"
-                        + "</w:pBdr></w:pPr></w:p>");
-                i++;
-            } else if (QUOTE.matcher(line).matches()) {
-                StringBuilder text = new StringBuilder();
-                while (i < lines.length && (matcher = QUOTE.matcher(lines[i])).matches()) {
-                    text.append(text.isEmpty() ? "" : "\n").append(matcher.group(1));
-                    i++;
-                }
-                paragraph("<w:pStyle w:val=\"Quote\"/>", text.toString(), false);
-            } else if (item.matches()) {
-                i = listItem(lines, i, item);
-            } else {
-                StringBuilder text = new StringBuilder(line.strip());
-                i++;
-                while (i < lines.length && !lines[i].isBlank() && !startsBlock(lines, i)) {
-                    text.append('\n').append(lines[i].strip());
-                    i++;
-                }
-                paragraph("", text.toString(), false);
+            switch (block.type()) {
+                case CODE -> code(block.lines());
+                case TABLE -> table(block);
+                case HEADING -> paragraph("<w:pStyle w:val=\"Heading" + Math.min(4, block.level()) + "\"/>", block.text(), false);
+                case RULE -> body.append("<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\" w:sz=\"6\" w:space=\"1\""
+                        + " w:color=\"A6A6A6\"/></w:pBdr></w:pPr></w:p>");
+                case QUOTE -> paragraph("<w:pStyle w:val=\"Quote\"/>", block.text(), false);
+                case ITEM -> listItem(block);
+                case PARAGRAPH -> paragraph("", block.text(), false);
             }
         }
     }
 
-    private static boolean startsBlock(String[] lines, int i) {
-        String line = lines[i];
-        return FENCE.matcher(line).matches() || HEADING.matcher(line).matches() || RULE.matcher(line).matches()
-                || QUOTE.matcher(line).matches() || ITEM.matcher(line).matches()
-                || i + 1 < lines.length && line.contains("|") && TABLE_SEPARATOR.matcher(lines[i + 1]).matches();
-    }
-
-    private int code(String[] lines, int start, String fence) {
-        int i = start + 1;
-        List<String> code = new ArrayList<>();
-        while (i < lines.length && !(lines[i].strip().startsWith(fence) && lines[i].strip().replace(fence.substring(0, 1), "").isEmpty())) {
-            code.add(lines[i]);
-            i++;
-        }
+    private void code(List<String> code) {
         for (int line = 0; line < code.size(); line++) {
             String spacing = line == 0 ? "<w:spacing w:before=\"60\"/>" : line == code.size() - 1 ? "<w:spacing w:after=\"160\"/>" : "";
             body.append("<w:p><w:pPr><w:pStyle w:val=\"Code\"/>").append(spacing).append("</w:pPr>");
@@ -123,46 +70,23 @@ public final class DocxWriter {
             }
             body.append("</w:p>");
         }
-        return Math.min(lines.length, i + 1);
     }
 
-    /** Пункт списка с продолжением на следующих строках с отступом. */
-    private int listItem(String[] lines, int start, Matcher item) {
-        int indent = item.group(1).replace("\t", "    ").length();
-        int level = Math.min(2, indent / 2);
-        boolean numbered = Character.isDigit(item.group(2).charAt(0));
-        StringBuilder text = new StringBuilder(item.group(3).strip());
-        int i = start + 1;
-        while (i < lines.length && !lines[i].isBlank() && !startsBlock(lines, i)) {
-            text.append('\n').append(lines[i].strip());
-            i++;
-        }
+    /** Пункт списка: у каждого нумерованного списка своя нумерация. */
+    private void listItem(MarkdownBlocks.Block item) {
         int numbering = BULLETS;
-        if (numbered) {
+        if (item.numbered()) {
             if (currentNumbered == 0) {
                 currentNumbered = BULLETS + ++numberedLists;
             }
             numbering = currentNumbered;
         }
-        paragraph("<w:pStyle w:val=\"ListParagraph\"/><w:numPr><w:ilvl w:val=\"" + level + "\"/><w:numId w:val=\"" + numbering
-                + "\"/></w:numPr>", text.toString(), false);
-        return i;
+        paragraph("<w:pStyle w:val=\"ListParagraph\"/><w:numPr><w:ilvl w:val=\"" + item.level() + "\"/><w:numId w:val=\""
+                + numbering + "\"/></w:numPr>", item.text(), false);
     }
 
-    private int table(String[] lines, int start) {
-        List<List<String>> rows = new ArrayList<>();
-        rows.add(cells(lines[start]));
-        List<String> align = new ArrayList<>();
-        for (String cell : cells(lines[start + 1])) {
-            String stripped = cell.strip();
-            align.add(stripped.startsWith(":") && stripped.endsWith(":") ? "center" : stripped.endsWith(":") ? "right" : "");
-        }
-        int i = start + 2;
-        while (i < lines.length && lines[i].contains("|") && !lines[i].isBlank()) {
-            rows.add(cells(lines[i]));
-            i++;
-        }
-        int columns = rows.stream().mapToInt(List::size).max().orElse(1);
+    private void table(MarkdownBlocks.Block table) {
+        int columns = table.columns();
         int width = TEXT_WIDTH / columns;
         body.append("<w:tbl><w:tblPr><w:tblW w:w=\"").append(width * columns).append("\" w:type=\"dxa\"/><w:tblBorders>");
         for (String side : List.of("top", "left", "bottom", "right", "insideH", "insideV")) {
@@ -175,43 +99,20 @@ public final class DocxWriter {
             body.append("<w:gridCol w:w=\"").append(width).append("\"/>");
         }
         body.append("</w:tblGrid>");
-        for (int row = 0; row < rows.size(); row++) {
+        for (int row = 0; row < table.rows().size(); row++) {
             boolean header = row == 0;
             body.append("<w:tr>").append(header ? "<w:trPr><w:tblHeader/></w:trPr>" : "");
             for (int column = 0; column < columns; column++) {
-                String cell = column < rows.get(row).size() ? rows.get(row).get(column) : "";
                 body.append("<w:tc><w:tcPr><w:tcW w:w=\"").append(width).append("\" w:type=\"dxa\"/>")
                         .append(header ? "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"DEE6F2\"/>" : "").append("</w:tcPr>");
-                String jc = column < align.size() && !align.get(column).isEmpty() ? "<w:jc w:val=\"" + align.get(column) + "\"/>" : "";
-                paragraph("<w:spacing w:after=\"0\"/>" + jc, cell, header);
+                String align = column < table.align().size() ? table.align().get(column) : "left";
+                String jc = align.equals("left") ? "" : "<w:jc w:val=\"" + align + "\"/>";
+                paragraph("<w:spacing w:after=\"0\"/>" + jc, table.cell(row, column), header);
                 body.append("</w:tc>");
             }
             body.append("</w:tr>");
         }
         body.append("</w:tbl><w:p/>");
-        return i;
-    }
-
-    private static List<String> cells(String line) {
-        String row = line.strip();
-        if (row.startsWith("|")) {
-            row = row.substring(1);
-        }
-        if (row.endsWith("|") && !row.endsWith("\\|")) {
-            row = row.substring(0, row.length() - 1);
-        }
-        List<String> cells = new ArrayList<>();
-        int start = 0;
-        boolean code = false;
-        for (int i = 0; i <= row.length(); i++) {
-            if (i == row.length() || row.charAt(i) == '|' && !code && (i == 0 || row.charAt(i - 1) != '\\')) {
-                cells.add(row.substring(start, i).strip().replace("\\|", "|"));
-                start = i + 1;
-            } else if (row.charAt(i) == '`') {
-                code = !code;
-            }
-        }
-        return cells;
     }
 
     // ---- внутри абзаца ----
@@ -295,59 +196,29 @@ public final class DocxWriter {
         }
     }
 
-    /** Экранирование для XML; символы, недопустимые в XML 1.0, выбрасываются. */
     static String escape(String text) {
-        StringBuilder out = new StringBuilder(text.length());
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            switch (c) {
-                case '&' -> out.append("&amp;");
-                case '<' -> out.append("&lt;");
-                case '>' -> out.append("&gt;");
-                case '"' -> out.append("&quot;");
-                default -> {
-                    boolean surrogatePair = Character.isHighSurrogate(c) && i + 1 < text.length()
-                            && Character.isLowSurrogate(text.charAt(i + 1));
-                    if (surrogatePair) {
-                        out.append(c).append(text.charAt(++i));
-                    } else if (c == '\t' || c == '\n' || c == '\r' || c >= 0x20 && c < 0xD800 || c >= 0xE000 && c <= 0xFFFD) {
-                        out.append(c);
-                    }
-                }
-            }
-        }
-        return out.toString();
+        return Ooxml.escape(text);
     }
 
     // ---- пакет ----
 
     private byte[] pack() {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        try (ZipOutputStream zip = new ZipOutputStream(bytes, StandardCharsets.UTF_8)) {
-            entry(zip, "[Content_Types].xml", CONTENT_TYPES);
-            entry(zip, "_rels/.rels", ROOT_RELS);
-            entry(zip, "word/document.xml", document());
-            entry(zip, "word/styles.xml", STYLES);
-            entry(zip, "word/numbering.xml", numbering());
-            entry(zip, "word/_rels/document.xml.rels", documentRels());
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-        return bytes.toByteArray();
+        Map<String, String> parts = new LinkedHashMap<>();
+        parts.put("[Content_Types].xml", CONTENT_TYPES);
+        parts.put("_rels/.rels", Ooxml.rootRels(R + "/officeDocument", "word/document.xml"));
+        parts.put("word/document.xml", document());
+        parts.put("word/styles.xml", STYLES);
+        parts.put("word/numbering.xml", numbering());
+        parts.put("word/_rels/document.xml.rels", documentRels());
+        return Ooxml.zip(parts);
     }
 
-    private static void entry(ZipOutputStream zip, String name, String content) throws IOException {
-        zip.putNextEntry(new ZipEntry(name));
-        zip.write(content.getBytes(StandardCharsets.UTF_8));
-        zip.closeEntry();
-    }
-
-    private static final String XML = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
+    private static final String XML = Ooxml.XML;
     private static final String W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-    private static final String R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    private static final String R = Ooxml.R;
 
     private static final String CONTENT_TYPES = XML
-            + "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+            + "<Types xmlns=\"" + Ooxml.CONTENT_TYPES + "\">"
             + "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
             + "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
             + "<Override PartName=\"/word/document.xml\""
@@ -358,11 +229,6 @@ public final class DocxWriter {
             + " ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/>"
             + "</Types>";
 
-    private static final String ROOT_RELS = XML
-            + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
-            + "<Relationship Id=\"rId1\" Type=\"" + R + "/officeDocument\" Target=\"word/document.xml\"/>"
-            + "</Relationships>";
-
     private String document() {
         return XML + "<w:document xmlns:w=\"" + W + "\" xmlns:r=\"" + R + "\"><w:body>" + body
                 + "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/>"
@@ -372,7 +238,7 @@ public final class DocxWriter {
 
     private String documentRels() {
         StringBuilder rels = new StringBuilder(XML)
-                .append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">")
+                .append("<Relationships xmlns=\"" + Ooxml.RELATIONSHIPS + "\">")
                 .append("<Relationship Id=\"rIdStyles\" Type=\"").append(R).append("/styles\" Target=\"styles.xml\"/>")
                 .append("<Relationship Id=\"rIdNumbering\" Type=\"").append(R).append("/numbering\" Target=\"numbering.xml\"/>");
         for (int i = 0; i < links.size(); i++) {

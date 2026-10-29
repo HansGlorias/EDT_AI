@@ -44,6 +44,8 @@ public final class McpHub implements AutoCloseable {
     private static final int MAX_NAME = 64;
 
     private final Map<String, Connection> connections = new ConcurrentHashMap<>();
+    /** Чем кончилось последнее подключение к серверу: для индикатора у поля ввода. */
+    private final Map<String, ServerStatus> lastStatus = new ConcurrentHashMap<>();
     private final Duration callTimeout;
     /** Пауза перед повтором вызова, пока EDT собирает проект; в тестах — короче. */
     volatile Duration buildRetryDelay = Duration.ofSeconds(3);
@@ -75,6 +77,7 @@ public final class McpHub implements AutoCloseable {
                 continue;
             }
             if (server.transport() == McpTransport.STDIO) {
+                remember(new ServerStatus(server, State.UNSUPPORTED, "", "", List.of()));
                 problems.accept(problem(server, "stdio пока не поддерживается, нужен адрес http://…/mcp"));
                 continue;
             }
@@ -82,9 +85,11 @@ public final class McpHub implements AutoCloseable {
             try {
                 connection = connect(server, trust);
             } catch (McpException e) {
+                remember(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of()));
                 problems.accept(problem(server, e.getMessage()));
                 continue;
             }
+            remember(new ServerStatus(server, State.CONNECTED, "", connection.client().serverName(), connection.tools()));
             int allowed = 0;
             for (McpToolInfo info : connection.tools()) {
                 if (server.allowsTool(info.name())) {
@@ -136,7 +141,9 @@ public final class McpHub implements AutoCloseable {
 
     /** Состояние сервера для окна {@code /mcp}. */
     public enum State {
-        CONNECTED, FAILED, DISABLED, UNSUPPORTED
+        CONNECTED, FAILED, DISABLED, UNSUPPORTED,
+        /** Ещё не подключались: после запуска или изменения настроек. */
+        UNKNOWN
     }
 
     /**
@@ -165,6 +172,7 @@ public final class McpHub implements AutoCloseable {
                 case DISABLED -> "Выключен";
                 case UNSUPPORTED -> "stdio пока не поддерживается, нужен адрес http://…/mcp";
                 case FAILED -> "Не подключён: " + message;
+                case UNKNOWN -> "Ещё не проверялся";
                 case CONNECTED -> "Подключено" + (serverName.isEmpty() ? "" : ": " + serverName) + ". Инструментов: " + tools.size()
                         + ", модели доступно: " + allowed().size();
             };
@@ -178,6 +186,15 @@ public final class McpHub implements AutoCloseable {
      */
     public List<ServerStatus> status(List<McpServer> servers, TrustSettings trust) {
         List<ServerStatus> result = new ArrayList<>();
+        try {
+            check(servers, trust, result);
+        } finally {
+            result.forEach(this::remember);
+        }
+        return result;
+    }
+
+    private void check(List<McpServer> servers, TrustSettings trust, List<ServerStatus> result) {
         for (McpServer server : servers) {
             if (!server.enabled()) {
                 result.add(new ServerStatus(server, State.DISABLED, "", "", List.of()));
@@ -192,7 +209,63 @@ public final class McpHub implements AutoCloseable {
                 }
             }
         }
+    }
+
+    private void remember(ServerStatus status) {
+        lastStatus.put(status.server().name(), status);
+    }
+
+    /**
+     * Последнее известное состояние серверов, без подключения: что было при
+     * последнем ответе или {@code /mcp}. Сервер с изменёнными настройками —
+     * {@link State#UNKNOWN}.
+     */
+    public List<ServerStatus> lastStatus(List<McpServer> servers) {
+        List<ServerStatus> result = new ArrayList<>();
+        for (McpServer server : servers) {
+            ServerStatus last = lastStatus.get(server.name());
+            if (!server.enabled()) {
+                result.add(new ServerStatus(server, State.DISABLED, "", "", List.of()));
+            } else if (last != null && last.server().equals(server)) {
+                result.add(last);
+            } else {
+                result.add(new ServerStatus(server, State.UNKNOWN, "", "", List.of()));
+            }
+        }
         return result;
+    }
+
+    /**
+     * Итог для индикатора: {@code state} — общий цвет, {@code text} —
+     * подсказка по серверам.
+     */
+    public record Health(State state, String text) {
+    }
+
+    /**
+     * Общее состояние: хоть один не подключился — ошибка; все включённые
+     * подключены — норма; включённых нет — выключено; иначе не проверялись.
+     */
+    public static Health health(List<ServerStatus> servers) {
+        if (servers.isEmpty()) {
+            return new Health(State.DISABLED, "MCP-серверы не настроены");
+        }
+        List<ServerStatus> enabled = servers.stream().filter(server -> server.state() != State.DISABLED).toList();
+        State state;
+        if (enabled.isEmpty()) {
+            state = State.DISABLED;
+        } else if (enabled.stream().anyMatch(server -> server.state() == State.FAILED || server.state() == State.UNSUPPORTED)) {
+            state = State.FAILED;
+        } else if (enabled.stream().allMatch(server -> server.state() == State.CONNECTED)) {
+            state = State.CONNECTED;
+        } else {
+            state = State.UNKNOWN;
+        }
+        StringBuilder text = new StringBuilder();
+        for (ServerStatus server : servers) {
+            text.append(text.isEmpty() ? "" : "\n").append(server.server().name()).append(": ").append(server.summary());
+        }
+        return new Health(state, text.toString());
     }
 
     /** Нет серверов — что показать вместо списка. */
@@ -245,6 +318,7 @@ public final class McpHub implements AutoCloseable {
         for (String name : List.copyOf(connections.keySet())) {
             forget(name);
         }
+        lastStatus.clear();
     }
 
     @Override

@@ -126,6 +126,7 @@ import io.github.hansglorias.edtai.core.llm.ModelChatProvider;
 import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
+import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.skills.Skill;
 import io.github.hansglorias.edtai.core.skills.SkillLibrary;
@@ -271,7 +272,8 @@ public class ChatView extends ViewPart {
     private Button sendButton;
     private Label status;
     private Cursor handCursor;
-    private Action autoAction;
+    private Button autoButton;
+    private Button mcpButton;
     private Button readOnlyButton;
     private InputAssist inputAssist;
     /** Вкладка вида помечена как занятая (идёт ответ). */
@@ -390,15 +392,19 @@ public class ChatView extends ViewPart {
         if (!previous.mcpServers().equals(settings.mcpServers())
                 || !TrustSettings.from(previous).equals(TrustSettings.from(settings))) {
             // Закрытие сессий — запросы по сети, а вызов инструмента может идти минуты: не в UI-потоке.
-            background("EDT AI: переподключение MCP", mcp::reset);
+            background("EDT AI: переподключение MCP", () -> {
+                mcp.reset();
+                inUi(this::checkMcpInBackground);
+            });
         }
         contextBar.setLimit(settings.contextLimit());
-        if (autoAction != null) {
-            autoAction.setChecked(isAutoApprove());
+        if (autoButton != null && !autoButton.isDisposed()) {
+            autoButton.setSelection(isAutoApprove());
         }
         if (readOnlyButton != null && !readOnlyButton.isDisposed()) {
             readOnlyButton.setSelection(isReadOnly());
         }
+        updateMcpButton();
         estimated = null;
         window = session.provider().window();
         updateStatus();
@@ -467,9 +473,12 @@ public class ChatView extends ViewPart {
 
         Composite statusRow = new Composite(parent, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(statusRow);
-        GridLayoutFactory.fillDefaults().numColumns(2).extendedMargins(4, 4, 0, 0).applyTo(statusRow);
+        GridLayoutFactory.fillDefaults().numColumns(3).extendedMargins(4, 4, 0, 0).applyTo(statusRow);
         status = new Label(statusRow, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).align(SWT.FILL, SWT.CENTER).applyTo(status);
+        mcpButton = new Button(statusRow, SWT.PUSH | SWT.FLAT);
+        mcpButton.setText("MCP");
+        mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
         readOnlyButton = new Button(statusRow, SWT.CHECK);
         readOnlyButton.setText(READ_ONLY_MODE);
         readOnlyButton.setToolTipText("Модель только отвечает: инструменты правки (edit_module, git_restore, меняющие"
@@ -491,6 +500,8 @@ public class ChatView extends ViewPart {
         updateSendButton();
         refresh();
         refreshHistoryPanel();
+        updateMcpButton();
+        checkMcpInBackground();
     }
 
     private void createHistory(Composite parent) {
@@ -653,7 +664,7 @@ public class ChatView extends ViewPart {
     private void createInput(Composite parent) {
         Composite bottom = new Composite(parent, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(bottom);
-        GridLayoutFactory.fillDefaults().numColumns(3).applyTo(bottom);
+        GridLayoutFactory.fillDefaults().numColumns(4).applyTo(bottom);
 
         input = new Text(bottom, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.BORDER);
         input.setMessage("Сообщение (Enter — отправить, Shift+Enter — новая строка)");
@@ -681,6 +692,13 @@ public class ChatView extends ViewPart {
         attachButton.setToolTipText("Приложить файлы или скриншоты (картинку можно вставить в поле Ctrl+V или перетащить файл)");
         GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).applyTo(attachButton);
         attachButton.addListener(SWT.Selection, event -> chooseFiles());
+        autoButton = new Button(bottom, SWT.TOGGLE);
+        autoButton.setImage(Icons.image(Icons.AUTO));
+        autoButton.setToolTipText(AUTO_MODE + ": модель вызывает инструменты MCP без вопроса (правка модулей и git — всегда без"
+                + " вопроса). Команда /auto");
+        autoButton.setSelection(isAutoApprove());
+        GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).applyTo(autoButton);
+        autoButton.addListener(SWT.Selection, event -> setAutoApprove(autoButton.getSelection()));
         DropTarget drop = new DropTarget(input, DND.DROP_COPY | DND.DROP_DEFAULT);
         drop.setTransfer(FileTransfer.getInstance());
         drop.addDropListener(new DropTargetAdapter() {
@@ -753,17 +771,6 @@ public class ChatView extends ViewPart {
         };
         preferencesAction.setImageDescriptor(Icons.descriptor(Icons.SETTINGS));
 
-        autoAction = new Action(AUTO_MODE, IAction.AS_CHECK_BOX) {
-            @Override
-            public void run() {
-                setAutoApprove(isChecked());
-            }
-        };
-        autoAction.setToolTipText("Авторежим: модель вызывает инструменты MCP без вопроса (правка модулей и git — всегда без"
-                + " вопроса). Команда /auto");
-        autoAction.setImageDescriptor(Icons.descriptor(Icons.AUTO));
-        autoAction.setChecked(isAutoApprove());
-        toolBar.add(autoAction);
         toolBar.add(preferencesAction);
 
         getViewSite().getActionBars().setGlobalActionHandler(ActionFactory.PASTE.getId(), new Action() {
@@ -1442,8 +1449,8 @@ public class ChatView extends ViewPart {
 
     void setAutoApprove(boolean on) {
         preferences().putBoolean(AUTO_APPROVE, on);
-        if (autoAction != null) {
-            autoAction.setChecked(on);
+        if (autoButton != null && !autoButton.isDisposed()) {
+            autoButton.setSelection(on);
         }
         showNotice(on ? "Авторежим включён: инструменты MCP вызываются без вопроса"
                 : "Авторежим выключен: перед вызовом инструмента MCP — вопрос");
@@ -1666,8 +1673,37 @@ public class ChatView extends ViewPart {
             List<McpHub.ServerStatus> servers = mcp.status(current.mcpServers(), TrustSettings.from(current));
             inUi(() -> {
                 updateStatus();
+                updateMcpButton();
                 mcpStatus.accept(servers);
             });
+        });
+    }
+
+    /** Значок и подсказка кнопки MCP по последнему известному состоянию серверов, без подключения. */
+    void updateMcpButton() {
+        if (mcpButton == null || mcpButton.isDisposed()) {
+            return;
+        }
+        McpHub.Health health = McpHub.health(mcp.lastStatus(SettingsStore.workspace().load().mcpServers()));
+        mcpButton.setImage(Icons.image(switch (health.state()) {
+            case CONNECTED -> Icons.STATUS_OK;
+            case FAILED, UNSUPPORTED -> Icons.STATUS_ERROR;
+            case DISABLED, UNKNOWN -> Icons.STATUS_OFF;
+        }));
+        mcpButton.setToolTipText(health.text() + "\nЩелчок — проверить и показать инструменты (/mcp)");
+        mcpButton.setData(health.state());
+        mcpButton.getParent().layout();
+    }
+
+    /** При открытии вида — проверка включённых серверов в фоне: индикатор сразу показывает, подключены ли. */
+    private void checkMcpInBackground() {
+        AiSettings current = SettingsStore.workspace().load();
+        if (current.mcpServers().stream().noneMatch(McpServer::enabled)) {
+            return;
+        }
+        background("EDT AI: проверка MCP", () -> {
+            mcp.status(current.mcpServers(), TrustSettings.from(current));
+            inUi(this::updateMcpButton);
         });
     }
 
@@ -2188,7 +2224,9 @@ public class ChatView extends ViewPart {
             // В этой сборке EDT нет JGit (EGit): без инструментов git.
         }
         Set<String> builtIn = tools.stream().map(Tool::name).collect(Collectors.toSet());
-        tools.addAll(mcp.tools(current.mcpServers(), TrustSettings.from(current), builtIn, current::contextLimit, problems));
+        // Сервер не подключился — это видно на кнопке MCP, а не строкой в каждом ответе.
+        tools.addAll(mcp.tools(current.mcpServers(), TrustSettings.from(current), builtIn, current::contextLimit, problem -> { }));
+        inUi(this::updateMcpButton);
         if (isReadOnly()) {
             tools.removeIf(Tool::modifies);
         }
@@ -2296,6 +2334,14 @@ public class ChatView extends ViewPart {
 
     Button sendButton() {
         return sendButton;
+    }
+
+    Button autoButton() {
+        return autoButton;
+    }
+
+    Button mcpButton() {
+        return mcpButton;
     }
 
     boolean isEmptyStateShown() {

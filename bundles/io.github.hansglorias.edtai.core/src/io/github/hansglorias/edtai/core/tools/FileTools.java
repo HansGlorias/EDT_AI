@@ -11,17 +11,20 @@ import java.util.Set;
 
 import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.documents.DocxWriter;
+import io.github.hansglorias.edtai.core.documents.PptxWriter;
+import io.github.hansglorias.edtai.core.documents.XlsxWriter;
 
 /**
- * Файлы, которые модель отдаёт пользователю в ответе: документ Word из
- * Markdown, CSV для Excel, текст, XML, код. Файл встаёт под ответом,
+ * Файлы, которые модель отдаёт пользователю в ответе: документ Word и
+ * презентация PowerPoint из Markdown, книга Excel из таблиц Markdown или
+ * CSV, CSV, текст, XML, код. Файл встаёт под ответом,
  * пользователь сохраняет или открывает его. Проект не меняется, поэтому
  * инструмент есть и в режиме «только вопросы».
  */
 public final class FileTools {
 
     /** Форматы, которые из текста модели не сделать. */
-    static final Set<String> UNSUPPORTED = Set.of("pdf", "doc", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "png", "jpg",
+    static final Set<String> UNSUPPORTED = Set.of("pdf", "doc", "xls", "ppt", "odt", "ods", "odp", "png", "jpg",
             "jpeg", "gif", "webp", "bmp", "ico", "zip", "rar", "7z", "gz", "exe", "dll", "epf", "erf", "cf", "cfe", "dt", "mxl");
     private static final Map<String, String> TEXT_TYPES = Map.of("csv", "text/csv", "md", "text/markdown", "html",
             "text/html", "htm", "text/html", "xml", "text/xml");
@@ -43,16 +46,21 @@ public final class FileTools {
 
         @Override
         public String description() {
-            return "Прикладывает к ответу файл, который пользователь сохранит или откроет: документ Word (.docx — содержимое"
-                    + " пиши в Markdown: заголовки, списки, таблицы, жирный), таблицу для Excel (.csv, разделитель «;»), текст"
-                    + " (.txt, .md), .xml, .json, .html, код (.bsl). Вызывай, когда пользователь просит документ или файл, а не"
+            return "Прикладывает к ответу файл, который пользователь сохранит или откроет. Форматы и что писать в content:"
+                    + " .docx (Word) — Markdown: заголовки, списки, таблицы, жирный; .xlsx (Excel) — таблицы Markdown, каждая —"
+                    + " лист с именем из заголовка ## над ней, или CSV с «;»; числа пиши без пробелов-разделителей или с ними,"
+                    + " даты — ДД.ММ.ГГГГ, формулы — с «=» по-английски (=SUM(B2:B10)); .pptx (PowerPoint) — Markdown:"
+                    + " каждый заголовок # или ## — новый слайд, под ним пункты списка (5–7 на слайд), можно таблицу и код;"
+                    + " первый слайд — только заголовок и строка подзаголовка; .csv, .txt, .md, .xml, .json, .html, .bsl —"
+                    + " текст как есть. Вызывай, когда пользователь просит документ, таблицу, презентацию или файл, а не"
                     + " ответ в чате. Проект не меняет: модули правят другие инструменты. Содержимое файла в ответе не повторяй.";
         }
 
         @Override
         public Map<String, Object> inputSchema() {
             return schema(Map.of("name", string("Имя файла с расширением, например «Инструкция по обмену.docx», «остатки.csv»"),
-                    "content", string("Содержимое: для .docx — Markdown, для остальных — текст файла как есть")),
+                    "content", string("Содержимое: для .docx и .pptx — Markdown, для .xlsx — таблицы Markdown или CSV,"
+                            + " для остальных — текст файла как есть")),
                     List.of("name", "content"));
         }
 
@@ -83,15 +91,27 @@ public final class FileTools {
         }
         String extension = name.substring(dot + 1).toLowerCase(Locale.ROOT);
         if (UNSUPPORTED.contains(extension)) {
-            throw new ToolException("Формат ." + extension + " сделать не могу. Можно: .docx (из Markdown), .csv (откроется в"
-                    + " Excel), .txt, .md, .html, .xml, .json, .bsl и другие текстовые");
+            throw new ToolException("Формат ." + extension + " сделать не могу. Можно: .docx, .xlsx, .pptx, .csv, .txt, .md,"
+                    + " .html, .xml, .json, .bsl и другие текстовые" + (extension.equals("pdf")
+                            ? ". Для PDF сделайте .docx — пользователь сохранит его как PDF из Word" : ""));
         }
         if (content.length() > Attachment.MAX_TEXT_CHARS) {
             throw new ToolException("Содержимое длиннее " + Attachment.MAX_TEXT_CHARS / 1000 + " тыс. символов: сократите");
         }
         try {
-            if (extension.equals("docx")) {
-                return Attachment.binary(name, DocxWriter.MEDIA_TYPE, DocxWriter.fromMarkdown(content));
+            switch (extension) {
+                case "docx" -> {
+                    return Attachment.binary(name, DocxWriter.MEDIA_TYPE, DocxWriter.fromMarkdown(content));
+                }
+                case "xlsx" -> {
+                    return Attachment.binary(name, XlsxWriter.MEDIA_TYPE, XlsxWriter.fromText(content));
+                }
+                case "pptx" -> {
+                    return Attachment.binary(name, PptxWriter.MEDIA_TYPE, PptxWriter.fromMarkdown(content));
+                }
+                default -> {
+                    // текстовый файл — ниже
+                }
             }
             String text = content.replace("\r\n", "\n");
             // Excel узнаёт UTF-8 в CSV только по BOM, иначе кириллица — кракозябры.

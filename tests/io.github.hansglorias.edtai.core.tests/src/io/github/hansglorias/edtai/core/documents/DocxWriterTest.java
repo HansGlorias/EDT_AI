@@ -127,7 +127,7 @@ class DocxWriterTest {
         return text.toString();
     }
 
-    private static Document parse(String xml) throws Exception {
+    static Document parse(String xml) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(true);
         return factory.newDocumentBuilder().parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));

@@ -91,6 +91,8 @@ class ChatCommandsTest extends AbstractChatTest {
         view.send();
         waitUntil(() -> !shown.isEmpty(), () -> view.status().getText());
         assertEquals(List.of(List.of()), shown, "серверов нет");
+        assertEquals(McpHub.State.DISABLED, view.mcpButton().getData());
+        assertTrue(view.mcpButton().getToolTipText().startsWith("MCP-серверы не настроены"), view.mcpButton().getToolTipText());
         assertEquals(0, server.requests().size(), "модели ничего не уходит");
     }
 
@@ -227,10 +229,17 @@ class ChatCommandsTest extends AbstractChatTest {
         view.input().setText("/auto");
         view.send();
         assertTrue(autoApprove());
+        assertTrue(view.autoButton().getSelection(), "кнопка у поля ввода нажата");
         assertTrue(view.status().getText().startsWith("Авторежим включён"), view.status().getText());
         view.input().setText("/AUTO");
         view.send();
         assertFalse(autoApprove());
+        assertFalse(view.autoButton().getSelection());
+
+        view.autoButton().setSelection(true);
+        view.autoButton().notifyListeners(SWT.Selection, new Event());
+        assertTrue(autoApprove(), "кнопка включает авторежим");
+        view.setAutoApprove(false);
     }
 
     @Test
