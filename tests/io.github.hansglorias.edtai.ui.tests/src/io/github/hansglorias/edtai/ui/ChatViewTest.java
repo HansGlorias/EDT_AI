@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -15,8 +16,11 @@ import org.eclipse.jface.preference.PreferenceDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
-import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.ToolBar;
+import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.junit.jupiter.api.Test;
 
@@ -35,6 +39,41 @@ class ChatViewTest extends AbstractChatTest {
             "На сервере используйте ", "`ТекущаяДатаСеанса()`", " — она учитывает часовой пояс сеанса.\n\n",
             "```bsl\n", "Дата = ТекущаяДатаСеанса();\n", "```\n\n",
             "`ТекущаяДата()` возвращает время компьютера сервера, ", "её лучше не использовать.");
+
+    @Test
+    void statusBarButtonOpensChat() throws Exception {
+        assertNull(page.findView(ChatView.ID));
+        ToolItem button = findItem(page.getWorkbenchWindow().getShell(), "EDT AI");
+        assertNotNull(button, "в строке состояния внизу окна — «EDT AI»");
+        assertNotNull(button.getImage(), "с фирменным значком");
+        Screenshots.capture(button.getParent().getParent(), "status-bar");
+
+        button.notifyListeners(SWT.Selection, new Event());
+        settle();
+
+        ChatView view = assertInstanceOf(ChatView.class, page.findView(ChatView.ID));
+        assertEquals("EDT AI", view.getPartName());
+    }
+
+    /** Кнопка панели инструментов с подписью {@code text} где угодно в окне. */
+    private static ToolItem findItem(Control control, String text) {
+        if (control instanceof ToolBar bar) {
+            for (ToolItem item : bar.getItems()) {
+                if (text.equals(item.getText())) {
+                    return item;
+                }
+            }
+        }
+        if (control instanceof Composite composite) {
+            for (Control child : composite.getChildren()) {
+                ToolItem found = findItem(child, text);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
 
     @Test
     void notConfiguredShowsHint() throws Exception {
@@ -74,7 +113,8 @@ class ChatViewTest extends AbstractChatTest {
         waitUntil(() -> view.history().getText().contains("часовой пояс") && ChatView.STOP.equals(view.sendButton().getText()));
         assertFalse(view.isEmptyStateShown());
         assertTrue(view.history().getText().contains("пишет…"), view.history().getText());
-        assertNotNull(view.sendButton().getImage(), "у «Стоп» значок");
+        assertTrue(view.sendButton().isBusy(), "на кнопке квадрат «Стоп»");
+        assertTrue(view.sendButton().isEnabled());
         assertTrue(view.status().getText().matches("test-model · пишет ответ… \\d+ с"), view.status().getText());
         Screenshots.capture(view.control(), "chat-streaming");
 

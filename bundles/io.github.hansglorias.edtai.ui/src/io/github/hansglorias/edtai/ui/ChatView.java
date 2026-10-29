@@ -151,7 +151,7 @@ import io.github.hansglorias.edtai.core.tools.ToolApprover.Decision;
 import io.github.hansglorias.edtai.core.tools.ToolSource;
 
 /**
- * Вид «AI Chat»: лента диалога, панель прикреплённых фрагментов кода и
+ * Вид «EDT AI»: лента диалога, панель прикреплённых фрагментов кода и
  * поле ввода. Enter — отправить, Shift+Enter — новая строка. Ответ модели
  * появляется по мере генерации, его можно остановить кнопкой «Стоп» или Esc.
  * Диалог сохраняется в рабочей области и восстанавливается при следующем
@@ -280,7 +280,7 @@ public class ChatView extends ViewPart {
     private ApprovalBar approvalBar;
     private ContextBar contextBar;
     private Text input;
-    private Button sendButton;
+    private SendButton sendButton;
     private Label status;
     private Cursor handCursor;
     private ToolItem autoButton;
@@ -735,16 +735,8 @@ public class ChatView extends ViewPart {
         mcpButton.setText("MCP");
         mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
 
-        sendButton = new Button(actions, SWT.PUSH);
-        int width = 0;
-        for (String text : new String[] { SEND, STOP }) {
-            sendButton.setText(text);
-            sendButton.setImage(STOP.equals(text) ? stopImage() : Icons.image(Icons.SEND));
-            width = Math.max(width, sendButton.computeSize(SWT.DEFAULT, SWT.DEFAULT).x);
-        }
-        // Значок есть всегда: на Windows кнопка, у которой убрали картинку, оставляет под неё место и текст съезжает.
-        sendButton.setImage(Icons.image(Icons.SEND));
-        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).hint(width, SWT.DEFAULT).applyTo(sendButton);
+        sendButton = new SendButton(actions);
+        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(sendButton);
         sendButton.addListener(SWT.Selection, event -> sendOrStop());
         updateInputHeight();
     }
@@ -2183,12 +2175,7 @@ public class ChatView extends ViewPart {
             return;
         }
         boolean busy = session.isBusy();
-        String text = busy ? STOP : SEND;
-        if (!Objects.equals(sendButton.getText(), text)) {
-            sendButton.setText(text);
-            // «Стоп» с красным значком: видно, что идёт ответ и его можно остановить.
-            sendButton.setImage(busy ? stopImage() : Icons.image(Icons.SEND));
-        }
+        sendButton.setBusy(busy);
         sendButton.setEnabled(busy || !input.getText().isBlank());
     }
 
@@ -2197,10 +2184,6 @@ public class ChatView extends ViewPart {
      * сколько секунд; потом — сколько окна занято и токены ответа (в чате
      * без ответов в этом сеансе — оценка по истории).
      */
-    private static Image stopImage() {
-        return PlatformUI.getWorkbench().getSharedImages().getImage(ISharedImages.IMG_ELCL_STOP);
-    }
-
     private void updateStatus() {
         String text;
         if (notice != null) {
@@ -2428,7 +2411,7 @@ public class ChatView extends ViewPart {
         return history;
     }
 
-    Button sendButton() {
+    SendButton sendButton() {
         return sendButton;
     }
 

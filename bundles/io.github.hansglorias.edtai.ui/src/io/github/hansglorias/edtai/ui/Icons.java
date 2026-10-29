@@ -18,7 +18,6 @@ final class Icons {
     static final String HISTORY = "history";
     static final String AUTO = "auto";
     static final String NEW_CHAT = "new_chat";
-    static final String SEND = "send";
     static final String SETTINGS = "settings";
     static final String STATUS_OK = "status_ok";
     static final String STATUS_ERROR = "status_error";

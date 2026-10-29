@@ -4,14 +4,14 @@
    <extension point="org.eclipse.ui.views">
       <category
             id="io.github.hansglorias.edtai.ui.category"
-            name="AI">
+            name="EDT AI">
       </category>
       <view
             id="io.github.hansglorias.edtai.ui.chatView"
-            name="AI Chat"
+            name="EDT AI"
             category="io.github.hansglorias.edtai.ui.category"
             class="io.github.hansglorias.edtai.ui.ChatView"
-            icon="icons/chat.png"
+            icon="icons/edtai.png"
             allowMultiple="false"
             restorable="true">
       </view>
@@ -29,6 +29,12 @@
             name="EDT AI">
       </category>
       <command
+            id="io.github.hansglorias.edtai.ui.openChat"
+            categoryId="io.github.hansglorias.edtai.ui.commands"
+            name="EDT AI"
+            description="Открыть чат EDT AI">
+      </command>
+      <command
             id="io.github.hansglorias.edtai.ui.askAboutSelection"
             categoryId="io.github.hansglorias.edtai.ui.commands"
             name="Спросить AI о выделенном"
@@ -36,6 +42,10 @@
       </command>
    </extension>
    <extension point="org.eclipse.ui.handlers">
+      <handler
+            commandId="io.github.hansglorias.edtai.ui.openChat"
+            class="io.github.hansglorias.edtai.ui.OpenChatHandler">
+      </handler>
       <handler
             commandId="io.github.hansglorias.edtai.ui.askAboutSelection"
             class="io.github.hansglorias.edtai.ui.AskAboutSelectionHandler">
@@ -57,9 +67,23 @@
       <menuContribution locationURI="popup:#TextEditorContext?after=additions">
          <command
                commandId="io.github.hansglorias.edtai.ui.askAboutSelection"
-               icon="icons/chat.png"
+               icon="icons/edtai.png"
                style="push">
          </command>
+      </menuContribution>
+      <!-- Строка состояния внизу окна, где и виджеты других плагинов: значок и
+           подпись «EDT AI», щелчок открывает чат. -->
+      <menuContribution locationURI="toolbar:org.eclipse.ui.trim.status">
+         <toolbar id="io.github.hansglorias.edtai.ui.statusToolbar">
+            <command
+                  commandId="io.github.hansglorias.edtai.ui.openChat"
+                  icon="icons/edtai.png"
+                  label="EDT AI"
+                  mode="FORCE_TEXT"
+                  style="push"
+                  tooltip="Открыть чат EDT AI">
+            </command>
+         </toolbar>
       </menuContribution>
    </extension>
 </plugin>
