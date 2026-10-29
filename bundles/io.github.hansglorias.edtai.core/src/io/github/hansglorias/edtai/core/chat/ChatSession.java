@@ -382,6 +382,10 @@ public final class ChatSession {
                     existing = i;
                 }
             }
+            if (use.file() != null) {
+                request.files.add(use.file());
+                use = use.withFile(null);
+            }
             if (existing >= 0) {
                 use = use.withAt(request.tools.get(existing).at());
                 request.tools.set(existing, use);
@@ -439,12 +443,14 @@ public final class ChatSession {
     /** Добавляет или обновляет ответ ассистента этого запроса. Под {@link #lock}. */
     private ChatMessage put(Request request, String text, Status status) {
         if (request.index < 0 || request.index >= messages.size()) {
-            ChatMessage message = new ChatMessage(ChatRole.ASSISTANT, text, Instant.now(), status, List.of(), request.tools);
+            ChatMessage message = new ChatMessage(ChatRole.ASSISTANT, text, Instant.now(), status, List.of(), request.tools,
+                    request.files);
             request.index = messages.size();
             add(message);
             return message;
         }
-        ChatMessage message = messages.get(request.index).with(text, status).withTools(request.tools);
+        ChatMessage message = messages.get(request.index).with(text, status).withTools(request.tools)
+                .withAttachments(request.files);
         messages.set(request.index, message);
         int index = request.index;
         listeners.forEach(listener -> listener.messageUpdated(index, message));
@@ -479,6 +485,8 @@ public final class ChatSession {
     private static final class Request {
         final StringBuilder text = new StringBuilder();
         final List<ToolUse> tools = new ArrayList<>();
+        /** Файлы, которые модель приложила к ответу. */
+        final List<Attachment> files = new ArrayList<>();
         /** Номер ответа ассистента в истории, -1 — ещё не добавлен. */
         int index = -1;
         boolean finished;

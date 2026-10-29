@@ -2,6 +2,8 @@ package io.github.hansglorias.edtai.core.tools;
 
 import java.util.Map;
 
+import io.github.hansglorias.edtai.core.chat.Attachment;
+
 /**
  * Инструмент, который модель может вызвать: описание и схема аргументов
  * уходят модели, вызов выполняется у нас.
@@ -48,7 +50,12 @@ public interface Tool {
     /**
      * @param text    результат для модели
      * @param outcome итог коротко для ленты: «строки 1–120 из 120»
+     * @param file    файл, который инструмент приложил к ответу, или {@code null}
      */
-    record Result(String text, String outcome) {
+    record Result(String text, String outcome, Attachment file) {
+
+        public Result(String text, String outcome) {
+            this(text, outcome, null);
+        }
     }
 }

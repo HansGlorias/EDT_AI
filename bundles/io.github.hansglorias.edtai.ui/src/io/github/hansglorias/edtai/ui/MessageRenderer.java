@@ -6,6 +6,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -27,6 +28,7 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.RGB;
+import org.eclipse.swt.program.Program;
 
 import io.github.hansglorias.edtai.core.chat.AnswerParts;
 import io.github.hansglorias.edtai.core.chat.Attachment;
@@ -55,6 +57,8 @@ final class MessageRenderer {
     static final String INSERT = "Вставить в редактор";
     static final String CONTEXT = "Контекст: ";
     static final String FILES = "Вложения: ";
+    static final String SAVE_FILE = "Сохранить…";
+    static final String OPEN_FILE = "Открыть";
     static final String TOOL = "→ ";
     static final String CHANGED = "Изменено: ";
     static final String SHOW_CALLS = "показать";
@@ -110,8 +114,11 @@ final class MessageRenderer {
         /** «показать» / «свернуть» у группы вызовов. */
         void toggle(ChatMessage answer, int group);
 
-        /** Открыть приложенную картинку целиком. */
-        void openImage(Attachment image);
+        /** Открыть вложение программой системы: картинку целиком, файл из ответа. */
+        void openAttachment(Attachment file);
+
+        /** Сохранить файл из ответа модели. */
+        void saveAttachment(Attachment file);
     }
 
     /** Миниатюра картинки в ленте: место под неё — символ с {@link GlyphMetrics}, рисует её вид. */
@@ -121,6 +128,18 @@ final class MessageRenderer {
             open.run();
         }
     }
+
+    /** Значок файла из ответа: щелчок — открыть. */
+    record FileIcon(Image image, Runnable open) implements Runnable {
+        @Override
+        public void run() {
+            open.run();
+        }
+    }
+
+    private static final int ICON = 16;
+    /** Значки по расширению, созданные из значков программ системы: их освобождаем сами. */
+    private final Map<String, Image> fileIcons = new HashMap<>();
 
     /** Предел миниатюры: крупнее — уменьшается с сохранением пропорций. */
     static final int THUMB_WIDTH = 240;
@@ -155,7 +174,9 @@ final class MessageRenderer {
         }
         header(message, index, actions, offset, text, styles);
         context(message, offset, text, styles);
-        attachments(message, offset, text, styles);
+        if (message.role() != ChatRole.ASSISTANT) {
+            attachments(message, offset, text, styles);
+        }
         String body = message.text();
         if (message.role() == ChatRole.ASSISTANT) {
             // Текст и вызовы по порядку, как шёл ответ: видно, что модель делает между абзацами.
@@ -189,6 +210,7 @@ final class MessageRenderer {
                 text.append(placeholder);
             }
             changedFiles(message, offset, text, styles);
+            files(message, offset, text, styles, codeRanges);
         } else {
             if (message.role() == ChatRole.ERROR) {
                 styles.add(style(offset + text.length(), body.length(), errorColor(), SWT.NORMAL));
@@ -310,6 +332,68 @@ final class MessageRenderer {
             styles.add(link);
             text.append(label);
         }
+    }
+
+    /**
+     * Файлы, которые модель приложила к ответу: по строке-карточке на файл —
+     * значок, имя, размер, «Сохранить…», «Открыть». Строка с фоном, как у кода.
+     */
+    private void files(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles, List<int[]> codeRanges) {
+        if (message.attachments().isEmpty()) {
+            return;
+        }
+        text.append('\n');
+        for (Attachment file : message.attachments()) {
+            text.append('\n');
+            int start = offset + text.length();
+            Runnable open = () -> callbacks.openAttachment(file);
+            StyleRange place = new StyleRange();
+            place.start = start;
+            place.length = 1;
+            place.metrics = new GlyphMetrics(ICON - 3, 3, ICON + 6);
+            place.data = new FileIcon(fileIcon(file.name()), open);
+            styles.add(place);
+            text.append(OBJECT);
+            StyleRange name = new StyleRange(offset + text.length(), file.name().length(), linkColor(), null, SWT.BOLD);
+            name.data = open;
+            styles.add(name);
+            text.append(file.name());
+            String size = "  " + Attachment.size(file.bytes().length) + "   ";
+            styles.add(style(offset + text.length(), size.length(), metaColor(), SWT.NORMAL));
+            text.append(size);
+            link(text, styles, offset, SAVE_FILE, () -> callbacks.saveAttachment(file));
+            text.append("   ");
+            link(text, styles, offset, OPEN_FILE, open);
+            codeRanges.add(new int[] { start, offset + text.length() });
+        }
+    }
+
+    private void link(StringBuilder text, List<StyleRange> styles, int offset, String label, Runnable run) {
+        StyleRange link = new StyleRange(offset + text.length(), label.length(), linkColor(), null);
+        link.data = run;
+        styles.add(link);
+        text.append(label);
+    }
+
+    /** Значок файла: значок программы системы для его расширения, иначе свой. */
+    private Image fileIcon(String name) {
+        int dot = name.lastIndexOf('.');
+        String extension = dot < 0 ? "" : name.substring(dot).toLowerCase(Locale.ROOT);
+        Image cached = fileIcons.get(extension);
+        if (cached != null && !cached.isDisposed()) {
+            return cached;
+        }
+        Program program = extension.isEmpty() ? null : Program.findProgram(extension);
+        ImageData data = program == null ? null : program.getImageData();
+        if (data == null) {
+            return Icons.image(Icons.FILE);
+        }
+        if (data.width != ICON || data.height != ICON) {
+            data = data.scaledTo(ICON, ICON);
+        }
+        Image image = new Image(history.getDisplay(), data);
+        fileIcons.put(extension, image);
+        return image;
     }
 
     /** Имя файла с каталогом над ним: «ФормаСписка/Form.form». */
@@ -440,7 +524,7 @@ final class MessageRenderer {
                 gc.dispose();
                 full.dispose();
             }
-            Thumbnail thumbnail = new Thumbnail(small, width, height, () -> callbacks.openImage(image));
+            Thumbnail thumbnail = new Thumbnail(small, width, height, () -> callbacks.openAttachment(image));
             thumbnails.put(image, thumbnail);
             return thumbnail;
         } catch (SWTException | IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
@@ -455,6 +539,8 @@ final class MessageRenderer {
             event.gc.drawImage(thumbnail.image(), event.x + 1, event.y + 1);
             event.gc.setForeground(metaColor());
             event.gc.drawRectangle(event.x, event.y, thumbnail.width() + 1, thumbnail.height() + 1);
+        } else if (event.style.data instanceof FileIcon icon && !icon.image().isDisposed()) {
+            event.gc.drawImage(icon.image(), event.x + 2, event.y);
         }
     }
 
@@ -462,6 +548,8 @@ final class MessageRenderer {
     void dispose() {
         thumbnails.values().forEach(thumbnail -> thumbnail.image().dispose());
         thumbnails.clear();
+        fileIcons.values().forEach(Image::dispose);
+        fileIcons.clear();
     }
 
     private static final String NAME_FONT = "io.github.hansglorias.edtai.ui.nameFont";

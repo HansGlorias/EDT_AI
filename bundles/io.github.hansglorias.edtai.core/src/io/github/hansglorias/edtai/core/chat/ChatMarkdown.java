@@ -32,7 +32,12 @@ public final class ChatMarkdown {
                         code(out, item.language(), item.text());
                     }
                 }
-                case ASSISTANT -> answer(out, message);
+                case ASSISTANT -> {
+                    answer(out, message);
+                    for (Attachment file : message.attachments()) {
+                        out.append("Файл: `").append(file.name()).append("`\n\n");
+                    }
+                }
                 default -> paragraph(out, message.text());
             }
         }

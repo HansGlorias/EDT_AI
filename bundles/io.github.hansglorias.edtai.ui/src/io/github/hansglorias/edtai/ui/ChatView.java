@@ -14,7 +14,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -132,6 +131,7 @@ import io.github.hansglorias.edtai.core.skills.Skill;
 import io.github.hansglorias.edtai.core.skills.SkillLibrary;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
 import io.github.hansglorias.edtai.core.tools.EditTools;
+import io.github.hansglorias.edtai.core.tools.FileTools;
 import io.github.hansglorias.edtai.core.tools.TextChange;
 import io.github.hansglorias.edtai.core.tools.ToolException;
 import io.github.hansglorias.edtai.core.tools.GitTools;
@@ -557,8 +557,13 @@ public class ChatView extends ViewPart {
             }
 
             @Override
-            public void openImage(Attachment image) {
-                ChatView.this.openImage(image);
+            public void openAttachment(Attachment file) {
+                ChatView.this.openAttachment(file);
+            }
+
+            @Override
+            public void saveAttachment(Attachment file) {
+                ChatView.this.saveAttachment(file);
             }
 
             @Override
@@ -1493,19 +1498,52 @@ public class ChatView extends ViewPart {
         return menu;
     }
 
-    /** Открывает приложенную картинку в программе системы: файл во временном каталоге. */
-    private void openImage(Attachment image) {
+    /** Открывает вложение (картинку, файл из ответа) в программе системы: файл во временном каталоге. */
+    private void openAttachment(Attachment attachment) {
         try {
-            String name = image.name().replaceAll("[\\\\/:*?\"<>|]", "_");
-            Path file = Files.createTempDirectory("edtai-").resolve(name.isBlank() ? "image.png" : name);
-            Files.write(file, Base64.getDecoder().decode(image.data()));
+            String name = attachment.name().replaceAll("[\\\\/:*?\"<>|]", "_");
+            Path file = Files.createTempDirectory("edtai-").resolve(name.isBlank() ? "file" : name);
+            Files.write(file, attachment.bytes());
             file.toFile().deleteOnExit();
             file.getParent().toFile().deleteOnExit();
             openFile.accept(file);
         } catch (IOException | IllegalArgumentException e) {
-            showNotice("Не удалось открыть картинку: " + e.getMessage());
+            showNotice("Не удалось открыть " + attachment.name() + ": " + e.getMessage());
         }
     }
+
+    /** Сохраняет файл из ответа модели, куда выберет пользователь. */
+    private void saveAttachment(Attachment attachment) {
+        Path target = chooseSaveFile.apply(attachment.name());
+        if (target == null) {
+            return;
+        }
+        try {
+            Files.write(target, attachment.bytes());
+            lastSaveDirectory = target.getParent();
+            showNotice("Сохранено: " + target);
+        } catch (IOException | IllegalArgumentException e) {
+            showNotice("Не удалось сохранить " + attachment.name() + ": " + e.getMessage());
+        }
+    }
+
+    /** Каталог, куда сохраняли файл из ответа в последний раз. */
+    private Path lastSaveDirectory;
+
+    /** Куда сохранить файл из ответа, null — отмена; тесты подменяют. */
+    Function<String, Path> chooseSaveFile = name -> {
+        FileDialog dialog = new FileDialog(getSite().getShell(), SWT.SAVE);
+        dialog.setText("Сохранить файл");
+        int dot = name.lastIndexOf('.');
+        dialog.setFilterExtensions(dot > 0 ? new String[] { "*" + name.substring(dot), "*.*" } : new String[] { "*.*" });
+        dialog.setFileName(name);
+        if (lastSaveDirectory != null) {
+            dialog.setFilterPath(lastSaveDirectory.toString());
+        }
+        dialog.setOverwrite(true);
+        String path = dialog.open();
+        return path == null ? null : Path.of(path);
+    };
 
     /** Открыть файл программой системы; тесты подменяют. */
     Consumer<Path> openFile = file -> {
@@ -1625,16 +1663,17 @@ public class ChatView extends ViewPart {
         AiSettings current = SettingsStore.workspace().load();
         showNotice("Проверяю MCP-серверы…");
         background("EDT AI: состояние MCP", () -> {
-            String text = mcp.describe(current.mcpServers(), TrustSettings.from(current));
+            List<McpHub.ServerStatus> servers = mcp.status(current.mcpServers(), TrustSettings.from(current));
             inUi(() -> {
                 updateStatus();
-                mcpStatus.accept(text);
+                mcpStatus.accept(servers);
             });
         });
     }
 
     /** Показ итога {@code /mcp}; тесты подменяют. */
-    Consumer<String> mcpStatus = text -> MessageDialog.openInformation(getSite().getShell(), "MCP-серверы", text);
+    Consumer<List<McpHub.ServerStatus>> mcpStatus = servers -> new McpStatusDialog(getSite().getShell(), servers,
+            this::openPreferences).open();
 
     /**
      * После ответа: если у чата ещё нет названия, просит модель придумать его
@@ -2142,6 +2181,7 @@ public class ChatView extends ViewPart {
         List<Tool> tools = new ArrayList<>(ProjectTools.create(files, current::contextLimit));
         tools.addAll(EditTools.create(files, pendingChanges::add));
         tools.addAll(SkillTools.create(skills));
+        tools.addAll(FileTools.create());
         try {
             tools.addAll(GitTools.create(files, current::contextLimit));
         } catch (LinkageError e) {

@@ -14,10 +14,12 @@ import java.util.Objects;
  * Файл, приложенный к вопросу: картинка (скриншот формы, ошибки) уходит
  * модели изображением, текстовый файл (лог, XML, выгрузка) — текстом.
  * Хранится в сообщении: повтор запроса и перезапуск EDT отправляют то же.
+ * У ответа ассистента — файлы, которые сделала модель (документ Word,
+ * CSV): их пользователь сохраняет или открывает.
  *
  * @param name      имя файла для подписи
- * @param mediaType {@code image/png}… у картинок, {@code text/plain} у текста
- * @param data      картинка — в base64, текст — как есть
+ * @param mediaType {@code image/png}… у картинок, {@code text/…} у текста, иначе — двоичный файл
+ * @param data      текст — как есть, остальное — в base64
  */
 public record Attachment(String name, String mediaType, String data) {
 
@@ -25,6 +27,8 @@ public record Attachment(String name, String mediaType, String data) {
     public static final int MAX_IMAGE_BYTES = 3_750_000;
     /** Текстовый файл больше — скорее всего, не то, что хотели приложить. */
     public static final int MAX_TEXT_CHARS = 200_000;
+    /** Предел файла, который делает модель: больше в историю чата не кладём. */
+    public static final int MAX_FILE_BYTES = 5_000_000;
 
     private static final Map<String, String> IMAGES = Map.of("png", "image/png", "jpg", "image/jpeg", "jpeg", "image/jpeg",
             "gif", "image/gif", "webp", "image/webp");
@@ -45,6 +49,24 @@ public record Attachment(String name, String mediaType, String data) {
 
     public boolean isImage() {
         return mediaType.startsWith("image/");
+    }
+
+    /** Текст (в том числе скилл): данные — сам текст, а не base64. */
+    public boolean isText() {
+        return mediaType.startsWith("text/");
+    }
+
+    /** Двоичный файл, например документ Word. */
+    public static Attachment binary(String name, String mediaType, byte[] bytes) {
+        if (bytes.length > MAX_FILE_BYTES) {
+            throw new IllegalArgumentException("Файл «" + name + "» больше " + MAX_FILE_BYTES / 1_000_000 + " МБ");
+        }
+        return new Attachment(name, mediaType, Base64.getEncoder().encodeToString(bytes));
+    }
+
+    /** Содержимое файла: текст — в UTF-8. */
+    public byte[] bytes() {
+        return isText() ? data.getBytes(StandardCharsets.UTF_8) : Base64.getDecoder().decode(data);
     }
 
     /** Картинка PNG: скриншот из буфера обмена. */
@@ -112,15 +134,32 @@ public record Attachment(String name, String mediaType, String data) {
         if (isImage()) {
             return name + ", " + Math.max(1, imageBytes() / 1024) + " КБ";
         }
+        if (!isText()) {
+            return name + ", " + size(data.length() / 4 * 3);
+        }
         long lines = data.isEmpty() ? 0 : data.lines().count();
         return name + ", " + lines + " " + (lines % 10 == 1 && lines % 100 != 11 ? "строка"
                 : lines % 10 >= 2 && lines % 10 <= 4 && (lines % 100 < 12 || lines % 100 > 14) ? "строки" : "строк");
+    }
+
+    /** Размер для подписи: «850 байт», «12 КБ», «1,4 МБ». */
+    public static String size(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " байт";
+        }
+        if (bytes < 1024 * 1024) {
+            return bytes / 1024 + " КБ";
+        }
+        return String.format(Locale.ROOT, "%.1f", bytes / (1024.0 * 1024)).replace('.', ',') + " МБ";
     }
 
     /** Как модель видит вложение в тексте вопроса: текст файла целиком, у картинки — упоминание (сама она идёт отдельно). */
     public String promptText() {
         if (isImage()) {
             return "[Приложено изображение: " + name + "]";
+        }
+        if (!isText()) {
+            return "[Приложен файл: " + name + "]";
         }
         String fence = "```";
         while (data.contains(fence)) {

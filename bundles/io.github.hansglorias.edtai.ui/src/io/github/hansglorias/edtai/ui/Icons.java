@@ -19,6 +19,10 @@ final class Icons {
     static final String NEW_CHAT = "new_chat";
     static final String SEND = "send";
     static final String SETTINGS = "settings";
+    static final String STATUS_OK = "status_ok";
+    static final String STATUS_ERROR = "status_error";
+    static final String STATUS_OFF = "status_off";
+    static final String FILE = "file";
 
     private static final String PREFIX = "io.github.hansglorias.edtai.ui.icons/";
 

@@ -109,6 +109,16 @@ class McpHubTest {
         assertTrue(status.contains("Выключенный — http://localhost:1/mcp\nВыключен."), status);
         assertTrue(status.contains("Недоступный — http://localhost:1/mcp\nНе подключён: "), status);
         assertEquals("MCP-серверы не настроены. Добавить: Настройки → EDT AI → MCP-серверы.", hub.describe(List.of(), TRUST));
+
+        List<McpHub.ServerStatus> servers = hub.status(List.of(edt, off, dead), TRUST);
+        assertEquals(List.of(McpHub.State.CONNECTED, McpHub.State.DISABLED, McpHub.State.FAILED),
+                servers.stream().map(McpHub.ServerStatus::state).toList());
+        assertEquals(4, servers.get(0).tools().size());
+        assertEquals("Выключен", servers.get(1).summary());
+        assertFalse(servers.get(2).message().isEmpty());
+        McpServer filtered = new McpServer("EDT", McpTransport.HTTP, server.url(), true, "get_*");
+        assertEquals(List.of("get_edt_version"), hub.status(List.of(filtered), TRUST).get(0).allowed().stream()
+                .map(McpToolInfo::name).toList(), "модели — только инструменты по фильтру");
     }
 
     @Test

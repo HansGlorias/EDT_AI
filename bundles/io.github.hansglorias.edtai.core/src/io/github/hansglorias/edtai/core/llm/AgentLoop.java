@@ -284,7 +284,7 @@ final class AgentLoop {
         seen.put(key, steps.size());
         try {
             Tool.Result output = tool.call(input);
-            onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE));
+            onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));
             return new ProtocolAdapter.ToolResult(call, output.text(), false);
         } catch (ToolException | RuntimeException e) {
             String error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();

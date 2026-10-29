@@ -25,6 +25,7 @@ Import-Package: javax.net.ssl,
  org.xml.sax
 Export-Package: io.github.hansglorias.edtai.core.chat,
  io.github.hansglorias.edtai.core.context,
+ io.github.hansglorias.edtai.core.documents,
  io.github.hansglorias.edtai.core.json,
  io.github.hansglorias.edtai.core.llm,
  io.github.hansglorias.edtai.core.markdown,

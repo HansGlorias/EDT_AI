@@ -1,5 +1,6 @@
 package io.github.hansglorias.edtai.core.chat;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -53,5 +54,20 @@ class AttachmentTest {
         assertEquals(List.of("shot.png"), question.images().stream().map(Attachment::name).toList());
         assertTrue(question.modelText().startsWith("[Приложено изображение: shot.png]\n\nФайл readme.md:"), question.modelText());
         assertTrue(question.modelText().endsWith("````\n\nЧто не так?"), question.modelText());
+    }
+
+    @Test
+    void binaryFilesFromModel() {
+        byte[] bytes = new byte[3000];
+        bytes[0] = 'P';
+        Attachment file = Attachment.binary("Отчёт.docx", "application/octet-stream", bytes);
+        assertFalse(file.isText() || file.isImage());
+        assertArrayEquals(bytes, file.bytes());
+        assertEquals("Отчёт.docx, 2 КБ", file.label());
+        assertEquals("[Приложен файл: Отчёт.docx]", file.promptText());
+        assertEquals("850 байт", Attachment.size(850));
+        assertEquals("1,5 МБ", Attachment.size(1_572_864));
+        assertThrows(IllegalArgumentException.class, () -> Attachment.binary("big", "application/zip", new byte[Attachment.MAX_FILE_BYTES + 1]));
+        assertArrayEquals("Привет".getBytes(StandardCharsets.UTF_8), new Attachment("a.txt", "text/plain", "Привет").bytes());
     }
 }
