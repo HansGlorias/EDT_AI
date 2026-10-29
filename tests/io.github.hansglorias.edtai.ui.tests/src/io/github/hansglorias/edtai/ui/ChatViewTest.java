@@ -86,6 +86,17 @@ class ChatViewTest extends AbstractChatTest {
     }
 
     @Test
+    void sendButtonIsLevelWithModeButtons() throws Exception {
+        ChatView view = showView();
+        ToolBar tools = view.autoButton().getParent();
+        Rectangle row = tools.getBounds();
+        Rectangle send = view.sendButton().getBounds();
+
+        assertTrue(send.height <= row.height, "кнопка не выше ряда: " + send + " " + row);
+        assertTrue(Math.abs((send.y + send.height / 2.0) - (row.y + row.height / 2.0)) <= 1, "по центру ряда: " + send + " " + row);
+    }
+
+    @Test
     void streamsAnswerFromModel() throws Exception {
         CountDownLatch release = new CountDownLatch(1);
         server = FakeModelServer.http().handler((request, response) -> {

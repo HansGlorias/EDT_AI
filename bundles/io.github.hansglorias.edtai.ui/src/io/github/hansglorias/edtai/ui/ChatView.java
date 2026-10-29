@@ -147,6 +147,7 @@ import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
 import io.github.hansglorias.edtai.core.tools.SkillTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
+import io.github.hansglorias.edtai.core.tools.ToolActivity;
 import io.github.hansglorias.edtai.core.tools.ToolApprover.Decision;
 import io.github.hansglorias.edtai.core.tools.ToolSource;
 
@@ -244,12 +245,15 @@ public class ChatView extends ViewPart {
     /** Правки модели по ответам (до перезапуска EDT): ключ — {@link #changeKey}. */
     private final Map<String, List<EditTools.Change>> changes = new HashMap<>();
     /**
-     * Файлы {@code src/}, изменённые на диске за идущий ответ: так видно правки
-     * инструментов MCP (EDT-MCP пишет метаданные и модули мимо плагина).
+     * Файлы {@code src/}, изменённые на диске во время вызовов инструментов
+     * MCP в идущем ответе: EDT-MCP пишет метаданные и модули мимо плагина.
+     * Изменения в остальное время ответа — пользователя или другого чата.
      */
     private final Set<IFile> touched = ConcurrentHashMap.newKeySet();
     /** Такие файлы по ответам: ключ — {@link #changeKey}. */
     private final Map<String, Set<IFile>> touchedByAnswer = new ConcurrentHashMap<>();
+    /** Идёт ли вызов инструмента MCP: только тогда изменения файлов — в {@link #touched}. */
+    private final ToolActivity toolActivity = new ToolActivity();
     /** EDT может дописать файлы чуть позже конца ответа: их — к этому ответу до {@link #lateUntil}. */
     private volatile String lateKey;
     private volatile long lateUntil;
@@ -339,6 +343,7 @@ public class ChatView extends ViewPart {
             if (busy) {
                 touched.clear();
                 lateKey = null;
+                toolActivity.reset();
             }
             scheduleRefresh();
             inUi(() -> markBusy(busy));
@@ -379,7 +384,9 @@ public class ChatView extends ViewPart {
             return;
         }
         if (busy) {
-            touched.addAll(files);
+            if (toolActivity.active()) {
+                touched.addAll(files);
+            }
         } else {
             touchedByAnswer.computeIfAbsent(late, key -> ConcurrentHashMap.newKeySet()).addAll(files);
             scheduleRefresh();
@@ -1119,8 +1126,10 @@ public class ChatView extends ViewPart {
                 if (!touched.isEmpty()) {
                     touchedByAnswer.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).addAll(touched);
                 }
-                lateKey = key;
-                lateUntil = System.currentTimeMillis() + LATE_CHANGES_MS;
+                if (toolActivity.used()) {
+                    lateKey = key;
+                    lateUntil = System.currentTimeMillis() + LATE_CHANGES_MS;
+                }
                 break;
             }
         }
@@ -2309,7 +2318,8 @@ public class ChatView extends ViewPart {
         if (isReadOnly()) {
             tools.removeIf(Tool::modifies);
         }
-        return tools;
+        // Встроенные читающие инструменты файлов не меняют: изменения во время их вызова — не модели.
+        return toolActivity.track(tools, tool -> !builtIn.contains(tool.name()) || tool.modifies());
     }
 
     /** Вопрос пользователю перед вызовом инструмента MCP-сервера: панель над полем ввода. */
