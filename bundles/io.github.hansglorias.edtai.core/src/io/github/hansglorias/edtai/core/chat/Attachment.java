@@ -10,9 +10,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
+import io.github.hansglorias.edtai.core.documents.DocumentText;
+
 /**
  * Файл, приложенный к вопросу: картинка (скриншот формы, ошибки) уходит
- * модели изображением, текстовый файл (лог, XML, выгрузка) — текстом.
+ * модели изображением, текстовый файл (лог, XML, выгрузка) — текстом,
+ * документ (Word, Excel, PowerPoint, LibreOffice, PDF) — своим текстом.
  * Хранится в сообщении: повтор запроса и перезапуск EDT отправляют то же.
  * У ответа ассистента — файлы, которые сделала модель (документ Word,
  * CSV): их пользователь сохраняет или открывает.
@@ -41,6 +44,8 @@ public record Attachment(String name, String mediaType, String data) {
 
     /** Тип вложения-скилла: инструкция, которую модель выполняет. */
     public static final String SKILL = "text/x-skill";
+    /** Текст, взятый из документа: сам файл модели не уходит. */
+    public static final String DOCUMENT = "text/x-document";
 
     /** Инструкция скилла к вопросу: команда {@code /имя}. */
     public static Attachment skill(String name, String instructions) {
@@ -83,10 +88,10 @@ public record Attachment(String name, String mediaType, String data) {
     }
 
     /**
-     * Файл с диска: картинка по расширению, иначе текст в UTF-8 (или
-     * Windows-1251, как у старых выгрузок 1С).
+     * Файл с диска: картинка по расширению, документ — его текст, иначе
+     * текст в UTF-8 (или Windows-1251, как у старых выгрузок 1С).
      *
-     * @throws IllegalArgumentException если файл не картинка и не текст или слишком большой
+     * @throws IllegalArgumentException если файл не картинка, не документ и не текст или слишком большой
      */
     public static Attachment file(String name, byte[] bytes) {
         int dot = name.lastIndexOf('.');
@@ -94,9 +99,13 @@ public record Attachment(String name, String mediaType, String data) {
         if (type != null) {
             return image(name, type, bytes);
         }
+        if (DocumentText.isDocument(name)) {
+            return new Attachment(name, DOCUMENT, DocumentText.extract(name, bytes));
+        }
         String text = decode(bytes);
         if (text == null || text.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException("«" + name + "» — не текст и не картинка (PNG, JPEG, GIF, WebP)");
+            throw new IllegalArgumentException("«" + name + "» — не текст: приложить можно картинки, текстовые файлы, документы "
+                    + "Word, Excel, PowerPoint, LibreOffice и PDF");
         }
         if (text.length() > MAX_TEXT_CHARS) {
             throw new IllegalArgumentException("«" + name + "» длиннее " + MAX_TEXT_CHARS / 1000
@@ -169,6 +178,7 @@ public record Attachment(String name, String mediaType, String data) {
             return "Выполни задачу по скиллу «" + name + "» — инструкция:\n" + fence + "markdown\n" + data.stripTrailing() + "\n"
                     + fence;
         }
-        return "Файл " + name + ":\n" + fence + "\n" + data.stripTrailing() + "\n" + fence;
+        String what = DOCUMENT.equals(mediaType) ? " (текст документа)" : "";
+        return "Файл " + name + what + ":\n" + fence + "\n" + data.stripTrailing() + "\n" + fence;
     }
 }

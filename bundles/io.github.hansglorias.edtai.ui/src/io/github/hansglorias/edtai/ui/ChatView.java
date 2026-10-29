@@ -187,8 +187,8 @@ public class ChatView extends ViewPart {
             + " проекте тесты и на чём: YAxUnit (общие модули с ИсполняемыеСценарии), Vanessa Automation (feature-файлы) —"
             + " пиши в том же стиле и скажи, куда положить. Тестов нет — на YAxUnit. Покрой обычный сценарий, граничные"
             + " случаи и ошибки. Модули тестов не создавай и не меняй — покажи код в ответе.";
-    /** Файлы больше не читаем: картинка всё равно не пройдёт, текст — тоже. */
-    private static final long MAX_FILE_BYTES = 10_000_000;
+    /** Файлы больше не читаем: документ такого размера — уже не то, что приложили к вопросу. */
+    private static final long MAX_FILE_BYTES = 30_000_000;
     private static final DateTimeFormatter SCREENSHOT_TIME = DateTimeFormatter.ofPattern("HHmmss");
     static final String SKILL_PROMPT = "Создай скилл по описанию ниже. Следуй приложенному скиллу create-skill; если описание"
             + " неясно — сначала задай вопросы; сохрани инструментом save_skill.";
@@ -723,7 +723,8 @@ public class ChatView extends ViewPart {
 
         ToolItem attachButton = new ToolItem(tools, SWT.PUSH);
         attachButton.setImage(Icons.image(Icons.ATTACH));
-        attachButton.setToolTipText("Приложить файлы или скриншоты (картинку можно вставить в поле Ctrl+V или перетащить файл)");
+        attachButton.setToolTipText("Приложить файлы: текст, документы Word, Excel, PowerPoint, PDF, картинки"
+                + " (скриншот — Ctrl+V, файл можно перетащить)");
         attachButton.addListener(SWT.Selection, event -> chooseFiles());
 
         autoButton = new ToolItem(tools, SWT.CHECK);
@@ -1658,12 +1659,13 @@ public class ChatView extends ViewPart {
         }
     };
 
-    /** Диалог выбора файлов: картинки и текстовые файлы. */
+    /** Диалог выбора файлов: картинки, документы, текстовые файлы. */
     private void chooseFiles() {
         FileDialog dialog = new FileDialog(getSite().getShell(), SWT.OPEN | SWT.MULTI);
         dialog.setText("Приложить файлы");
-        dialog.setFilterExtensions(new String[] { "*.*", "*.png;*.jpg;*.jpeg;*.gif;*.webp" });
-        dialog.setFilterNames(new String[] { "Все файлы", "Картинки" });
+        dialog.setFilterExtensions(new String[] { "*.*", "*.docx;*.xlsx;*.xlsm;*.pptx;*.odt;*.ods;*.odp;*.pdf",
+                "*.png;*.jpg;*.jpeg;*.gif;*.webp" });
+        dialog.setFilterNames(new String[] { "Все файлы", "Документы (Word, Excel, PowerPoint, LibreOffice, PDF)", "Картинки" });
         if (dialog.open() != null) {
             List<String> paths = new ArrayList<>();
             for (String name : dialog.getFileNames()) {

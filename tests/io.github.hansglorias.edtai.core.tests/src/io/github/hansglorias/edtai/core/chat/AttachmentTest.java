@@ -13,6 +13,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import io.github.hansglorias.edtai.core.documents.DocxWriter;
+
 class AttachmentTest {
 
     @Test
@@ -35,10 +37,24 @@ class AttachmentTest {
                 "старые файлы 1С — в Windows-1251");
         IllegalArgumentException binary = assertThrows(IllegalArgumentException.class,
                 () -> Attachment.file("base.1cd", new byte[] { 1, 0, 2, 0 }));
-        assertEquals("«base.1cd» — не текст и не картинка (PNG, JPEG, GIF, WebP)", binary.getMessage());
+        assertEquals("«base.1cd» — не текст: приложить можно картинки, текстовые файлы, документы Word, Excel, PowerPoint, "
+                + "LibreOffice и PDF", binary.getMessage());
         assertThrows(IllegalArgumentException.class, () -> Attachment.png("big.png", new byte[Attachment.MAX_IMAGE_BYTES + 1]));
         assertThrows(IllegalArgumentException.class, () -> Attachment.file("big.txt", "а".repeat(Attachment.MAX_TEXT_CHARS + 1)
                 .getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void documentsGoAsTheirText() {
+        Attachment document = Attachment.file("Отчёт.docx", DocxWriter.fromMarkdown("# Итоги\n\nВсё хорошо."));
+
+        assertEquals(Attachment.DOCUMENT, document.mediaType());
+        assertTrue(document.isText());
+        assertEquals("# Итоги\n\nВсё хорошо.", document.data());
+        assertEquals("Отчёт.docx, 3 строки", document.label());
+        assertEquals("Файл Отчёт.docx (текст документа):\n```\n# Итоги\n\nВсё хорошо.\n```", document.promptText());
+        IllegalArgumentException old = assertThrows(IllegalArgumentException.class, () -> Attachment.file("Остатки.xls", new byte[] { 1 }));
+        assertEquals("«Остатки.xls» — старый формат Office: сохраните как .xlsx и приложите снова", old.getMessage());
     }
 
     @Test
