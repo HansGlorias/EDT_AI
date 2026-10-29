@@ -81,4 +81,10 @@ public record AiSettings(
     public boolean isConfigured() {
         return !baseUrl.isEmpty() && !model.isEmpty();
     }
+
+    /** Те же настройки с другой моделью: выбор в поле ввода. */
+    public AiSettings withModel(String name) {
+        return new AiSettings(protocol, baseUrl, name, maxTokens, systemPrompt, contextLimit, toolsEnabled, useSystemTrustStore,
+                caCertificateFile, mcpServers, modelWindow);
+    }
 }

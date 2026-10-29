@@ -59,6 +59,7 @@ abstract class AbstractChatTest {
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.RECENT_MODELS);
         // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, false);
         deleteChats();
@@ -78,6 +79,7 @@ abstract class AbstractChatTest {
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.RECENT_MODELS);
         // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, false);
         deleteChats();

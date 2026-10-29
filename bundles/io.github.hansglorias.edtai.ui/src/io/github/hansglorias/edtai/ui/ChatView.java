@@ -19,6 +19,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutionException;
+import java.util.Optional;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -83,6 +86,7 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.program.Program;
@@ -112,6 +116,7 @@ import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.progress.IWorkbenchSiteProgressService;
 import org.eclipse.ui.texteditor.ITextEditor;
 import org.eclipse.ui.texteditor.ITextEditorExtension2;
+import org.osgi.service.prefs.BackingStoreException;
 import org.osgi.framework.FrameworkUtil;
 
 import io.github.hansglorias.edtai.core.chat.Attachment;
@@ -135,6 +140,7 @@ import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
+import io.github.hansglorias.edtai.core.settings.ModelChoices;
 import io.github.hansglorias.edtai.core.skills.Skill;
 import io.github.hansglorias.edtai.core.skills.SkillLibrary;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
@@ -289,6 +295,18 @@ public class ChatView extends ViewPart {
     private Cursor handCursor;
     private ToolItem autoButton;
     private ToolItem mcpButton;
+    /** Выбор модели справа в поле ввода, рядом с «Отправить». */
+    private ToolItem modelButton;
+    /** Модели с сервера ({@code /models}); пока не загружены — пусто. */
+    private List<String> serverModels = List.of();
+    /** Почему список не загрузился; {@code null} — загрузился или не загружали. */
+    private String modelsError;
+    private boolean modelsLoading;
+    /** Для какого сервера загружен список: сменился адрес — загрузить заново. */
+    private String modelsFor = "";
+    /** Что сделать, когда список загрузится: {@code /model имя}. */
+    private final List<Runnable> afterModels = new ArrayList<>();
+    static final String RECENT_MODELS = "recentModels";
     private ToolItem readOnlyButton;
     private InputAssist inputAssist;
     /** Вкладка вида помечена как занятая (идёт ответ). */
@@ -418,6 +436,13 @@ public class ChatView extends ViewPart {
         contextBar.setLimit(settings.contextLimit());
         updateModeButtons();
         updateMcpButton();
+        updateModelButton();
+        if (!modelsFor.equals(modelsKey())) {
+            // Другой сервер — старый список не годится; загрузится, когда понадобится.
+            serverModels = List.of();
+            modelsError = null;
+            modelsFor = "";
+        }
         estimated = null;
         window = session.provider().window();
         updateStatus();
@@ -498,6 +523,7 @@ public class ChatView extends ViewPart {
         ResourcesPlugin.getWorkspace().addResourceChangeListener(resourceListener, IResourceChangeEvent.POST_CHANGE);
         settings = SettingsStore.workspace().load();
         contextBar.setLimit(settings.contextLimit());
+        updateModelButton();
         window = session.provider().window();
         restoreHistory();
         updateStatus();
@@ -717,7 +743,7 @@ public class ChatView extends ViewPart {
 
         Composite actions = new Composite(composer, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(actions);
-        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(actions);
+        GridLayoutFactory.fillDefaults().numColumns(3).applyTo(actions);
         ToolBar tools = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
         GridDataFactory.fillDefaults().grab(true, false).align(SWT.BEGINNING, SWT.CENTER).applyTo(tools);
 
@@ -742,6 +768,14 @@ public class ChatView extends ViewPart {
         mcpButton = new ToolItem(tools, SWT.PUSH);
         mcpButton.setText("MCP");
         mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
+
+        ToolBar modelBar = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
+        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(modelBar);
+        modelButton = new ToolItem(modelBar, SWT.DROP_DOWN);
+        modelButton.addListener(SWT.Selection, event -> showModelMenu());
+        // Список — заранее, пока указатель над кнопкой: к щелчку он обычно уже есть.
+        modelBar.addListener(SWT.MouseEnter, event -> loadModels(false));
+        updateModelButton();
 
         sendButton = new SendButton(actions);
         GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(sendButton);
@@ -1455,7 +1489,11 @@ public class ChatView extends ViewPart {
         Skill skill = command == null ? invokedSkill(text) : null;
         if (command != null && prompt == null) {
             input.setText("");
-            run(command.command());
+            if (command.command() == SlashCommand.MODEL) {
+                modelCommand(command.argument());
+            } else {
+                run(command.command());
+            }
             return;
         }
         if (session.isBusy()) {
@@ -1778,6 +1816,181 @@ public class ChatView extends ViewPart {
                 mcpStatus.accept(servers);
             });
         });
+    }
+
+    // ---- выбор модели ----
+
+    /** Подпись кнопки модели: короткое имя; полное и сервер — в подсказке. */
+    private void updateModelButton() {
+        if (modelButton == null || modelButton.isDisposed()) {
+            return;
+        }
+        String text = settings.model().isEmpty() ? "Модель" : ModelChoices.label(settings.model(), 28);
+        if (!text.equals(modelButton.getText())) {
+            modelButton.setText(text);
+            composer.layout(true, true);
+        }
+        modelButton.setToolTipText(settings.model().isEmpty() ? "Модель не выбрана: щелчок — выбрать"
+                : "Модель: " + settings.model() + " · " + host(settings.baseUrl()) + "\nЩелчок — сменить (/model)");
+    }
+
+    /** Модели для меню: текущая, недавние, с сервера. */
+    List<String> modelChoices() {
+        return ModelChoices.merge(settings.model(), ModelChoices.parse(preferences().get(RECENT_MODELS, "")), serverModels);
+    }
+
+    private String modelsKey() {
+        return settings.protocol() + " " + settings.baseUrl();
+    }
+
+    /**
+     * Список моделей сервера — в фоне, когда понадобится (указатель над
+     * кнопкой, меню, {@code /model}) и один раз на сервер; {@code force} —
+     * «Обновить список».
+     */
+    void loadModels(boolean force) {
+        loadModels(force, null);
+    }
+
+    /** То же; {@code then} — в UI-потоке, когда список есть (или сразу, если загружать не нужно). */
+    private void loadModels(boolean force, Runnable then) {
+        if (then != null) {
+            afterModels.add(then);
+        }
+        String key = modelsKey();
+        if (modelsLoading) {
+            return;
+        }
+        if (!settings.isConfigured() || !force && key.equals(modelsFor)) {
+            runAfterModels();
+            return;
+        }
+        modelsFor = key;
+        modelsLoading = true;
+        modelsError = null;
+        background("EDT AI: список моделей", () -> {
+            List<String> models = List.of();
+            String error = null;
+            try {
+                models = new ModelClient().models(ModelChatProvider.connection(SettingsStore.workspace())).get(60, TimeUnit.SECONDS);
+            } catch (ExecutionException e) {
+                error = e.getCause() == null ? e.getMessage() : e.getCause().getMessage();
+            } catch (Exception e) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                error = e.getMessage();
+            }
+            List<String> loaded = models;
+            String problem = error;
+            inUi(() -> {
+                modelsLoading = false;
+                serverModels = loaded;
+                modelsError = problem;
+                runAfterModels();
+            });
+        });
+    }
+
+    private void runAfterModels() {
+        List<Runnable> pending = List.copyOf(afterModels);
+        afterModels.clear();
+        pending.forEach(Runnable::run);
+    }
+
+    /** Меню выбора модели под кнопкой. */
+    private void showModelMenu() {
+        loadModels(false);
+        Menu menu = modelMenu();
+        Rectangle bounds = modelButton.getBounds();
+        menu.setLocation(modelButton.getParent().toDisplay(bounds.x, bounds.y + bounds.height));
+        menu.setVisible(true);
+    }
+
+    /** Меню моделей: выбранная отмечена; внизу — обновить список и настройки. */
+    Menu modelMenu() {
+        Menu menu = new Menu(modelButton.getParent());
+        for (String name : modelChoices()) {
+            MenuItem item = new MenuItem(menu, SWT.RADIO);
+            item.setText(name);
+            item.setSelection(name.equals(settings.model()));
+            item.addListener(SWT.Selection, event -> {
+                if (item.getSelection()) {
+                    chooseModel(name);
+                }
+            });
+        }
+        String state = modelsLoading ? "Загружаю список с сервера…"
+                : modelsError != null ? "Список не получен: " + shorten(modelsError, 80)
+                : serverModels.isEmpty() && settings.isConfigured() ? "Сервер не отдал список моделей" : null;
+        if (state != null) {
+            MenuItem note = new MenuItem(menu, SWT.PUSH);
+            note.setText(state);
+            note.setEnabled(false);
+        }
+        new MenuItem(menu, SWT.SEPARATOR);
+        MenuItem refresh = new MenuItem(menu, SWT.PUSH);
+        refresh.setText("Обновить список");
+        refresh.setEnabled(settings.isConfigured() && !modelsLoading);
+        refresh.addListener(SWT.Selection, event -> {
+            loadModels(true);
+            showNotice("Загружаю список моделей…");
+        });
+        MenuItem configure = new MenuItem(menu, SWT.PUSH);
+        configure.setText("Настройки модели…");
+        configure.addListener(SWT.Selection, event -> openPreferences());
+        return menu;
+    }
+
+    private static String shorten(String text, int max) {
+        String line = text.strip().replaceAll("\\s+", " ");
+        return line.length() <= max ? line : line.substring(0, max - 1) + "…";
+    }
+
+    /** Выбор модели: в настройки (со следующего запроса), в недавние. */
+    void chooseModel(String name) {
+        String model = name.strip();
+        if (model.isEmpty() || model.equals(settings.model())) {
+            return;
+        }
+        try {
+            SettingsStore.workspace().save(settings.withModel(model));
+        } catch (BackingStoreException e) {
+            showNotice("Модель не сохранить: " + e.getMessage());
+            return;
+        }
+        // Прежняя — тоже в недавние: к ней обычно возвращаются.
+        List<String> recent = ModelChoices.remember(ModelChoices.parse(preferences().get(RECENT_MODELS, "")), settings.model());
+        preferences().put(RECENT_MODELS, ModelChoices.format(ModelChoices.remember(recent, model)));
+        settings = SettingsStore.workspace().load();
+        updateModelButton();
+        showNotice("Модель: " + model + (session.isBusy() ? " — со следующего вопроса" : ""));
+    }
+
+    /** {@code /model}: без имени — меню, с именем — выбрать (точно или единственную подходящую). */
+    private void modelCommand(String argument) {
+        if (argument.isBlank()) {
+            showModelMenu();
+            return;
+        }
+        loadModels(false, () -> chooseTyped(argument));
+    }
+
+    private void chooseTyped(String argument) {
+        List<String> choices = modelChoices();
+        Optional<String> found = ModelChoices.find(argument, choices);
+        if (found.isPresent()) {
+            chooseModel(found.get());
+            return;
+        }
+        String lower = argument.strip().toLowerCase(Locale.ROOT);
+        List<String> similar = choices.stream().filter(name -> name.toLowerCase(Locale.ROOT).contains(lower)).toList();
+        if (similar.size() > 1) {
+            showNotice("Под «" + argument.strip() + "» подходят: " + String.join(", ", similar) + " — уточните");
+        } else {
+            // Сервер может не отдавать список: имя — как набрано.
+            chooseModel(argument.strip());
+        }
     }
 
     /** Значок и подсказка кнопки MCP по последнему известному состоянию серверов, без подключения. */
@@ -2433,6 +2646,10 @@ public class ChatView extends ViewPart {
 
     ToolItem mcpButton() {
         return mcpButton;
+    }
+
+    ToolItem modelButton() {
+        return modelButton;
     }
 
     boolean isEmptyStateShown() {
