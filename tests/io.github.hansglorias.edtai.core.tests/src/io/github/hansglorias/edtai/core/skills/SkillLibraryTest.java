@@ -43,6 +43,22 @@ class SkillLibraryTest {
     }
 
     @Test
+    void disabledSkillsAreHidden() {
+        Set<String> off = SkillLibrary.parseDisabled(" HTML-field\n\nposting\n");
+        assertEquals(Set.of("html-field", "posting"), off);
+        assertEquals("html-field\nposting", SkillLibrary.formatDisabled(off));
+        SkillLibrary library = new SkillLibrary(temp.resolve("user"), List::of, Set.of(), () -> off);
+
+        assertEquals(SkillLibrary.BUILT_IN.size(), library.everything().size());
+        assertEquals(SkillLibrary.BUILT_IN.size() - 2, library.all().size());
+        assertTrue(library.find("posting").isEmpty(), "выключенный не вызвать");
+        assertFalse(library.prompt().contains("- posting"), "и модель его не видит");
+        assertTrue(library.prompt().contains("- bsl-style — Стиль кода 1С"), library.prompt());
+        assertTrue(library.describe().contains("/posting — "), "в списке есть");
+        assertTrue(library.describe().contains("(выключен)"));
+    }
+
+    @Test
     void userAndProjectSkillsOverrideBuiltIn() throws Exception {
         Path project = Files.createDirectories(temp.resolve("Демо/.edtai/skills"));
         Files.writeString(project.resolve("posting.md"), "---\nname: posting\ndescription: \"Проведение по-нашему\"\n---\nНаша схема.\n",
@@ -63,10 +79,10 @@ class SkillLibraryTest {
         assertEquals(Skill.Source.PROJECT, posting.source(), "скилл проекта заменяет встроенный");
         assertEquals("Проведение по-нашему", posting.description());
         assertEquals(SkillLibrary.BUILT_IN.size() + 1, library.all().size(), "битые и с плохим именем пропущены");
-        assertEquals(List.of("posting", "print-form"), library.matching("p").stream().map(Skill::name).toList());
+        assertEquals(List.of("platform-gotchas", "posting", "print-form"), library.matching("p").stream().map(Skill::name).toList());
 
         String described = library.describe();
-        assertTrue(described.startsWith("Встроенные:\n  /client-server — "), described);
+        assertTrue(described.startsWith("Встроенные:\n  /access-rights — "), described);
         assertTrue(described.contains("Свои (" + temp.resolve("user") + "):\n  /print-form — Печатные формы\n  /query-optimize — Свой"),
                 described);
         assertTrue(described.contains("Проекта:\n  /posting — Проведение по-нашему (" + project.resolve("posting.md") + ")"), described);
@@ -87,7 +103,7 @@ class SkillLibraryTest {
         assertTrue(read.text().startsWith("# Комментарии к методам"), read.text());
         assertEquals("встроенный", read.outcome());
         ToolException missing = assertThrows(ToolException.class, () -> tools.get("skill").call(Map.of("name", "нет")));
-        assertTrue(missing.getMessage().contains("Есть: client-server, code-standards"), missing.getMessage());
+        assertTrue(missing.getMessage().contains("Есть: access-rights, bsl-style, client-server"), missing.getMessage());
 
         Tool.Result saved = tools.get("save_skill").call(Map.of("name", "print-form", "description", "Печатные формы",
                 "instructions", "# Печать\nШаги."));

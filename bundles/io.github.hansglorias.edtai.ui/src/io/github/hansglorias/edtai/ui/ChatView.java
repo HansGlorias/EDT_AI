@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -184,8 +185,7 @@ public class ChatView extends ViewPart {
             + " необходимости прочитай модули целиком. Найди ошибки, пропущенные случаи и нарушения стандартов 1С; по каждой"
             + " находке — Модуль:строка и как исправить. Если всё хорошо — так и скажи.";
     static final String COMMIT_PROMPT = "Напиши сообщение коммита для моих незакоммиченных изменений (посмотри git_status и"
-            + " git_diff): первая строка — суть до 72 символов, по-русски, затем пустая строка и короткий список изменений."
-            + " Только текст сообщения в блоке кода, без пояснений.";
+            + " git_diff) по скиллу commit-message. Только текст сообщения в блоке кода, без пояснений.";
     static final String EXPLAIN_PROMPT = "Объясни этот код: зачем он, что получает и что возвращает, основные шаги, побочные"
             + " эффекты (запись в базу, блокировки, вызовы сервера, транзакции) и неочевидные места. Если код вызывает другие"
             + " методы проекта и без них не понять — прочитай их. Ссылайся на строки: Модуль:строка.";
@@ -240,7 +240,8 @@ public class ChatView extends ViewPart {
     private final Path stateLocation = Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath();
     /** Скиллы: встроенные, свои (в рабочей области) и открытых проектов. */
     private final SkillLibrary skills = new SkillLibrary(stateLocation.resolve("skills"), ChatView::projectSkillDirectories,
-            Arrays.stream(SlashCommand.values()).map(command -> command.text().substring(1)).collect(Collectors.toSet()));
+            Arrays.stream(SlashCommand.values()).map(command -> command.text().substring(1)).collect(Collectors.toSet()),
+            () -> SkillLibrary.parseDisabled(preferences().get(DISABLED_SKILLS, "")));
     /** Все диалоги; {@link #chatId} — открытый. */
     private final ChatStore chats = new ChatStore(stateLocation.resolve(CHATS_DIRECTORY));
     private String chatId;
@@ -309,6 +310,8 @@ public class ChatView extends ViewPart {
     /** Что сделать, когда список загрузится: {@code /model имя}. */
     private final List<Runnable> afterModels = new ArrayList<>();
     static final String RECENT_MODELS = "recentModels";
+    /** Выключенные скиллы: имена через перевод строки. */
+    static final String DISABLED_SKILLS = "disabledSkills";
     private ToolItem readOnlyButton;
     private InputAssist inputAssist;
     /** Вкладка вида помечена как занятая (идёт ответ). */
@@ -1611,19 +1614,26 @@ public class ChatView extends ViewPart {
 
     /** {@code /skills}: список в окне, из него — открыть папку своих скиллов. */
     private void showSkills() {
-        if (skillsDialog.test(skills.describe())) {
-            try {
-                Files.createDirectories(skills.userDirectory());
-                openFile.accept(skills.userDirectory());
-            } catch (IOException e) {
-                showNotice("Не удалось открыть папку скиллов: " + e.getMessage());
-            }
+        Set<String> off = SkillLibrary.parseDisabled(preferences().get(DISABLED_SKILLS, ""));
+        Set<String> chosen = skillsDialog.apply(skills.everything(), off);
+        if (chosen != null && !chosen.equals(off)) {
+            preferences().put(DISABLED_SKILLS, SkillLibrary.formatDisabled(chosen));
+            showNotice("Скиллы: включено " + skills.all().size() + " из " + skills.everything().size());
         }
     }
 
-    /** Показ списка скиллов; {@code true} — открыть папку своих. Тесты подменяют. */
-    Predicate<String> skillsDialog = text -> new MessageDialog(getSite().getShell(), "Скиллы", null, text, MessageDialog.INFORMATION,
-            0, "Закрыть", "Открыть папку своих скиллов").open() == 1;
+    void openSkillsFolder() {
+        try {
+            Files.createDirectories(skills.userDirectory());
+            openFile.accept(skills.userDirectory());
+        } catch (IOException e) {
+            showNotice("Не удалось открыть папку скиллов: " + e.getMessage());
+        }
+    }
+
+    /** Окно {@code /skills}: все скиллы и выключенные → выключенные после «Готово» или {@code null}. Тесты подменяют. */
+    BiFunction<List<Skill>, Set<String>, Set<String>> skillsDialog = (all, off) -> new SkillsDialog(getSite().getShell(), all, off,
+            this::openSkillsFolder).choose();
 
     /** Каталоги скиллов открытых проектов: {@code <проект>/.edtai/skills}. */
     private static List<Path> projectSkillDirectories() {
