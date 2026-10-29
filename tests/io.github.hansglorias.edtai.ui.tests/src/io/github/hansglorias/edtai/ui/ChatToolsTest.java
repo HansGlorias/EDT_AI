@@ -226,6 +226,33 @@ class ChatToolsTest extends AbstractChatTest {
     }
 
     @Test
+    void fileChangedByUserDuringAnswerIsNotModelEdit() throws Exception {
+        IFile file = project.getFile("src/CommonModules/Тест/Module.bsl");
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\","
+                        + "\"function\":{\"name\":\"read_module\",\"arguments\":" + Json.write("{\"module\":\"ОбщийМодуль.Тест\"}")
+                        + "}}]}}]}\n\n", "data: [DONE]\n\n"), 5);
+            } else {
+                // Пока модель пишет ревью, файл правит пользователь (или другой чат).
+                file.setContents(new ByteArrayInputStream("// правка пользователя\n".getBytes(StandardCharsets.UTF_8)), true, false, null);
+                response.sse(List.of(openAiPart("Замечаний нет."), "data: [DONE]\n\n"), 5);
+            }
+        });
+        configure(server);
+        ChatView view = showView();
+
+        ask(view, "Сделай ревью");
+        settle();
+        view.refresh();
+
+        String transcript = view.history().getText();
+        assertTrue(transcript.contains("Замечаний нет."), transcript);
+        assertFalse(transcript.contains(MessageRenderer.CHANGED), transcript);
+        assertNull(view.linkAction(MessageRenderer.REVERT), "откатывать правку пользователя нельзя");
+    }
+
+    @Test
     void reviewMenuSendsPrompt() throws Exception {
         answering(List.of("Изменений нет."));
         SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, "", 0, true, false, "",

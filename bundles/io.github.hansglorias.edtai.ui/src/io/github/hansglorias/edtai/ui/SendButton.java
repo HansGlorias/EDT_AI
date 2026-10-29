@@ -16,8 +16,8 @@ import org.eclipse.swt.widgets.Event;
  */
 final class SendButton extends Canvas {
 
-    /** Диаметр, в точках экрана. */
-    static final int SIZE = 28;
+    /** Диаметр, в точках экрана: вровень с кнопками режимов в ряду под полем ввода. */
+    static final int SIZE = 22;
     private static final RGB ACCENT = new RGB(52, 104, 214);
     private static final RGB ACCENT_HOVER = new RGB(38, 84, 186);
 
@@ -102,16 +102,16 @@ final class SendButton extends Canvas {
         Color white = getDisplay().getSystemColor(SWT.COLOR_WHITE);
         gc.setBackground(white);
         gc.setForeground(white);
-        int c = SIZE / 2;
+        int c = (SIZE - 1) / 2;
         if (busy) {
-            gc.fillRoundRectangle(c - 5, c - 5, 10, 10, 3, 3);
+            gc.fillRoundRectangle(c - 4, c - 4, 8, 8, 2, 2);
         } else {
             // Стрелка вверх: стержень и наконечник.
             gc.setLineWidth(2);
             gc.setLineCap(SWT.CAP_ROUND);
             gc.setLineJoin(SWT.JOIN_ROUND);
-            gc.drawLine(c, c + 6, c, c - 5);
-            gc.drawPolyline(new int[] { c - 5, c, c, c - 6, c + 5, c });
+            gc.drawLine(c, c + 4, c, c - 4);
+            gc.drawPolyline(new int[] { c - 4, c, c, c - 4, c + 4, c });
         }
     }
 
