@@ -75,7 +75,8 @@ class ChatQueueTest extends AbstractChatTest {
         waitUntil(() -> !view.session().isBusy() && view.queueBar().isEmpty());
         settle();
 
-        assertEquals("набираю\n\nвторой вопрос\n\nтретий", view.input().getText());
+        // На Windows поле отдаёт переводы строк как \r\n.
+        assertEquals("набираю\n\nвторой вопрос\n\nтретий", view.input().getText().replace("\r\n", "\n"));
         assertEquals(2, view.session().messages().size(), "после остановки ничего не отправлено");
         release.countDown();
     }

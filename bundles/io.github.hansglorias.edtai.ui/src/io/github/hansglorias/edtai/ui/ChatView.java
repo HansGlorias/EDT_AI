@@ -1592,7 +1592,7 @@ public class ChatView extends ViewPart {
     /** Сообщение из очереди — обратно в поле ввода (к набранному) и прикреплённое — на панель. */
     private void returnToInput(QueueBar.Queued message) {
         String current = input.getText();
-        input.setText(current.isBlank() ? message.text() : current.stripTrailing() + "\n\n" + message.text());
+        input.setText(current.isBlank() ? message.text() : current.stripTrailing() + Text.DELIMITER + Text.DELIMITER + message.text());
         input.setSelection(input.getText().length());
         message.context().forEach(contextBar::add);
         message.files().forEach(contextBar::add);
