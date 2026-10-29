@@ -145,6 +145,12 @@ class ChatToolsTest extends AbstractChatTest {
         view.readOnlyButton().setSelection(true);
         view.readOnlyButton().notifyListeners(SWT.Selection, new Event());
         assertTrue(view.status().getText().startsWith("Только вопросы: модель не меняет проект"), view.status().getText());
+        assertEquals(ChatView.READ_ONLY_MODE, view.readOnlyButton().getText(), "включённый режим подписан");
+        view.setAutoApprove(true);
+        assertEquals("Авто", view.autoButton().getText());
+        Screenshots.capture(view.control(), "composer-modes");
+        view.setAutoApprove(false);
+        assertEquals("", view.autoButton().getText(), "выключенный — только серый значок");
         ask(view, "Исправь модуль Тест");
 
         Map<String, Object> request = Json.parseObject(server.requests().get(0).body());
