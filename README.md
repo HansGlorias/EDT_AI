@@ -209,9 +209,9 @@ Windows и Linux (в том числе Astra Linux).
    каждым вызовом над полем ввода — вопрос: **Разрешить**, **Разрешать в
    этом чате**, **Авторежим** (больше не спрашивать, во всех чатах) или
    **Отклонить**. Авторежим включается и выключается кнопкой с молнией
-   рядом с полем ввода или командой `/auto`. Что вызывалось, видно в ленте
+   под полем ввода или командой `/auto`. Что вызывалось, видно в ленте
    строками «→ MCP «EDT»: get_project_errors — …».
-6. Кнопка **MCP** под полем ввода — индикатор: зелёная точка — все
+6. Кнопка **MCP** в рамке ввода — индикатор: зелёная точка — все
    включённые серверы подключены, красная — какой-то не подключился,
    серая — серверов нет или ещё не проверялись (подсказка — по каждому
    серверу). Щелчок — окно `/mcp`. В ленте ошибки подключения не
@@ -238,13 +238,19 @@ Network Connections**).
 
 ## Установка в EDT
 
-1. Скачайте update-site:
-   - из GitHub Actions: откройте последний успешный запуск **build** и
-     скачайте артефакт `edtai-update-site` (это zip);
+1. В EDT: **Help → Install New Software…** → **Add…**, в поле **Location**
+   — `https://hansglorias.github.io/EDT_AI/` (update site публикуется
+   на GitHub Pages после каждого слияния в `main`). Обновления потом —
+   **Help → Check for Updates**.
+
+   Без доступа к GitHub — zip:
+   - из GitHub Actions: последний успешный запуск **build**, артефакт
+     `edtai-update-site`;
    - или соберите сами (см. ниже) и возьмите
      `releng/io.github.hansglorias.edtai.repository/target/io.github.hansglorias.edtai.repository-<версия>.zip`.
-2. В EDT: **Help → Install New Software…** → **Add…** → **Archive…**, выберите
-   zip, нажмите **Add**.
+
+   В **Add…** тогда **Archive…** и выберите zip.
+2. Нажмите **Add**.
 3. Отметьте **EDT AI**. Если список пуст, снимите флажок **Group items by
    category**.
 4. Снимите флажок **Contact all update sites during install to find required

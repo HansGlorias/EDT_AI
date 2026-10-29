@@ -55,6 +55,7 @@ import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
+import org.eclipse.jface.preference.JFacePreferences;
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
@@ -75,11 +76,14 @@ import org.eclipse.swt.dnd.FileTransfer;
 import org.eclipse.swt.dnd.ImageTransfer;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
+import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Cursor;
+import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Button;
@@ -92,7 +96,10 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
+import org.eclipse.swt.widgets.ScrollBar;
 import org.eclipse.swt.widgets.Text;
+import org.eclipse.swt.widgets.ToolBar;
+import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IMemento;
 import org.eclipse.ui.IViewSite;
@@ -189,7 +196,7 @@ public class ChatView extends ViewPart {
 
     /** Как часто перерисовывать ленту во время стриминга. */
     private static final int REFRESH_DELAY_MS = 40;
-    private static final int MIN_INPUT_LINES = 2;
+    private static final int MIN_INPUT_LINES = 1;
     private static final int MAX_INPUT_LINES = 10;
     private static final int NOTICE_MS = 4000;
     /** Как часто обновлять секунды в строке состояния, пока идёт ответ. */
@@ -259,6 +266,10 @@ public class ChatView extends ViewPart {
     private ChatHistoryPanel historyPanel;
     private ThinScrollBar scrollBar;
     private Composite top;
+    /** Правая часть: лента, панели над вводом, ввод, строка состояния. Список чатов — слева на всю высоту. */
+    private Composite column;
+    /** Рамка ввода: поле и строка кнопок под ним. */
+    private Composite composer;
     private StackLayout topLayout;
     private StyledText history;
     private MessageRenderer renderer;
@@ -272,9 +283,9 @@ public class ChatView extends ViewPart {
     private Button sendButton;
     private Label status;
     private Cursor handCursor;
-    private Button autoButton;
-    private Button mcpButton;
-    private Button readOnlyButton;
+    private ToolItem autoButton;
+    private ToolItem mcpButton;
+    private ToolItem readOnlyButton;
     private InputAssist inputAssist;
     /** Вкладка вида помечена как занятая (идёт ответ). */
     private boolean busyShown;
@@ -398,12 +409,7 @@ public class ChatView extends ViewPart {
             });
         }
         contextBar.setLimit(settings.contextLimit());
-        if (autoButton != null && !autoButton.isDisposed()) {
-            autoButton.setSelection(isAutoApprove());
-        }
-        if (readOnlyButton != null && !readOnlyButton.isDisposed()) {
-            readOnlyButton.setSelection(isReadOnly());
-        }
+        updateModeButtons();
         updateMcpButton();
         estimated = null;
         window = session.provider().window();
@@ -460,31 +466,23 @@ public class ChatView extends ViewPart {
                 }
             }
         });
-        top = new Composite(sash, SWT.NONE);
+        column = new Composite(sash, SWT.NONE);
+        GridLayoutFactory.fillDefaults().spacing(0, 6).extendedMargins(0, 0, 0, 2).applyTo(column);
         sash.setWeights(historyWeights);
-        sash.setMaximizedControl(historyShown ? null : top);
+        sash.setMaximizedControl(historyShown ? null : column);
+        top = new Composite(column, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, true).applyTo(top);
         topLayout = new StackLayout();
         top.setLayout(topLayout);
         createHistory(top);
         createEmptyState(top);
-        approvalBar = new ApprovalBar(parent, this::approvalChanged);
-        createContextBar(parent);
-        createInput(parent);
+        approvalBar = new ApprovalBar(column, this::approvalChanged);
+        createContextBar(column);
+        createInput(column);
 
-        Composite statusRow = new Composite(parent, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, false).applyTo(statusRow);
-        GridLayoutFactory.fillDefaults().numColumns(3).extendedMargins(4, 4, 0, 0).applyTo(statusRow);
-        status = new Label(statusRow, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, false).align(SWT.FILL, SWT.CENTER).applyTo(status);
-        mcpButton = new Button(statusRow, SWT.PUSH | SWT.FLAT);
-        mcpButton.setText("MCP");
-        mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
-        readOnlyButton = new Button(statusRow, SWT.CHECK);
-        readOnlyButton.setText(READ_ONLY_MODE);
-        readOnlyButton.setToolTipText("Модель только отвечает: инструменты правки (edit_module, git_restore, меняющие"
-                + " инструменты MCP) ей не передаются. Команда /readonly");
-        readOnlyButton.setSelection(isReadOnly());
-        readOnlyButton.addListener(SWT.Selection, event -> setReadOnly(readOnlyButton.getSelection()));
+        status = new Label(column, SWT.NONE);
+        status.setForeground(metaColor());
+        GridDataFactory.fillDefaults().grab(true, false).indent(4, 0).applyTo(status);
 
         createActions();
 
@@ -506,7 +504,7 @@ public class ChatView extends ViewPart {
 
     private void createHistory(Composite parent) {
         // Без системной полосы прокрутки: своя, узкая (ThinScrollBar).
-        history = new StyledText(parent, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY | SWT.BORDER);
+        history = new StyledText(parent, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY);
         history.setMargins(12, 10, 12, 10);
         history.setLineSpacing(2);
         scrollBar = new ThinScrollBar(history);
@@ -661,12 +659,18 @@ public class ChatView extends ViewPart {
         });
     }
 
+    /**
+     * Ввод в одной рамке, как в чатах: поле без своей рамки, под ним
+     * плоские кнопки (вложения, авторежим, MCP, «Только вопросы») и справа
+     * «Отправить». Рамка подсвечивается, пока поле в фокусе.
+     */
     private void createInput(Composite parent) {
-        Composite bottom = new Composite(parent, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, false).applyTo(bottom);
-        GridLayoutFactory.fillDefaults().numColumns(4).applyTo(bottom);
+        composer = new Composite(parent, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(composer);
+        GridLayoutFactory.fillDefaults().margins(COMPOSER_MARGIN, COMPOSER_MARGIN - 2).spacing(0, 2).applyTo(composer);
+        composer.addListener(SWT.Paint, this::paintComposer);
 
-        input = new Text(bottom, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.BORDER);
+        input = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         input.setMessage("Сообщение (Enter — отправить, Shift+Enter — новая строка)");
         GridDataFactory.fillDefaults().grab(true, false).applyTo(input);
         input.addListener(SWT.KeyDown, this::onInputKey);
@@ -685,20 +689,9 @@ public class ChatView extends ViewPart {
             if (!contextBar.isEmpty()) {
                 contextBar.refresh();
             }
+            composer.redraw();
         });
-
-        Button attachButton = new Button(bottom, SWT.PUSH);
-        attachButton.setImage(Icons.image(Icons.ATTACH));
-        attachButton.setToolTipText("Приложить файлы или скриншоты (картинку можно вставить в поле Ctrl+V или перетащить файл)");
-        GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).applyTo(attachButton);
-        attachButton.addListener(SWT.Selection, event -> chooseFiles());
-        autoButton = new Button(bottom, SWT.TOGGLE);
-        autoButton.setImage(Icons.image(Icons.AUTO));
-        autoButton.setToolTipText(AUTO_MODE + ": модель вызывает инструменты MCP без вопроса (правка модулей и git — всегда без"
-                + " вопроса). Команда /auto");
-        autoButton.setSelection(isAutoApprove());
-        GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).applyTo(autoButton);
-        autoButton.addListener(SWT.Selection, event -> setAutoApprove(autoButton.getSelection()));
+        input.addListener(SWT.FocusOut, event -> composer.redraw());
         DropTarget drop = new DropTarget(input, DND.DROP_COPY | DND.DROP_DEFAULT);
         drop.setTransfer(FileTransfer.getInstance());
         drop.addDropListener(new DropTargetAdapter() {
@@ -715,7 +708,34 @@ public class ChatView extends ViewPart {
             }
         });
 
-        sendButton = new Button(bottom, SWT.PUSH);
+        Composite actions = new Composite(composer, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(actions);
+        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(actions);
+        ToolBar tools = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
+        GridDataFactory.fillDefaults().grab(true, false).align(SWT.BEGINNING, SWT.CENTER).applyTo(tools);
+
+        ToolItem attachButton = new ToolItem(tools, SWT.PUSH);
+        attachButton.setImage(Icons.image(Icons.ATTACH));
+        attachButton.setToolTipText("Приложить файлы или скриншоты (картинку можно вставить в поле Ctrl+V или перетащить файл)");
+        attachButton.addListener(SWT.Selection, event -> chooseFiles());
+
+        autoButton = new ToolItem(tools, SWT.CHECK);
+        autoButton.setToolTipText(AUTO_MODE + ": модель вызывает инструменты MCP без вопроса (правка модулей и git — всегда без"
+                + " вопроса). Команда /auto");
+        autoButton.addListener(SWT.Selection, event -> setAutoApprove(autoButton.getSelection()));
+
+        readOnlyButton = new ToolItem(tools, SWT.CHECK);
+        readOnlyButton.setToolTipText(READ_ONLY_MODE + ": модель только отвечает, инструменты правки (edit_module, git_restore,"
+                + " меняющие инструменты MCP) ей не передаются. Команда /readonly");
+        readOnlyButton.addListener(SWT.Selection, event -> setReadOnly(readOnlyButton.getSelection()));
+        updateModeButtons();
+
+        new ToolItem(tools, SWT.SEPARATOR);
+        mcpButton = new ToolItem(tools, SWT.PUSH);
+        mcpButton.setText("MCP");
+        mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
+
+        sendButton = new Button(actions, SWT.PUSH);
         int width = 0;
         for (String text : new String[] { SEND, STOP }) {
             sendButton.setText(text);
@@ -724,9 +744,83 @@ public class ChatView extends ViewPart {
         }
         // Значок есть всегда: на Windows кнопка, у которой убрали картинку, оставляет под неё место и текст съезжает.
         sendButton.setImage(Icons.image(Icons.SEND));
-        GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).hint(width, SWT.DEFAULT).applyTo(sendButton);
+        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).hint(width, SWT.DEFAULT).applyTo(sendButton);
         sendButton.addListener(SWT.Selection, event -> sendOrStop());
         updateInputHeight();
+    }
+
+    /**
+     * Кнопки режимов: включённый — цветной значок с подписью («Авто»,
+     * «Только вопросы»), выключенный — серый значок без подписи.
+     */
+    private void updateModeButtons() {
+        if (autoButton == null || autoButton.isDisposed()) {
+            return;
+        }
+        boolean auto = isAutoApprove();
+        autoButton.setSelection(auto);
+        autoButton.setImage(auto ? Icons.image(Icons.AUTO) : Icons.gray(Icons.AUTO));
+        autoButton.setText(auto ? "Авто" : "");
+        boolean readOnly = isReadOnly();
+        readOnlyButton.setSelection(readOnly);
+        readOnlyButton.setImage(readOnly ? Icons.image(Icons.READ_ONLY) : Icons.gray(Icons.READ_ONLY));
+        readOnlyButton.setText(readOnly ? READ_ONLY_MODE : "");
+        composer.layout(true, true);
+    }
+
+    /** Отступ содержимого от рамки ввода. */
+    private static final int COMPOSER_MARGIN = 8;
+
+    /**
+     * Рамка ввода: скруглённый прямоугольник цвета поля, обводка — цвет
+     * выделения в фокусе, иначе смесь текста и фона. Фон кнопок — как у
+     * поля, чтобы всё читалось одним блоком и в тёмной теме.
+     */
+    private void paintComposer(Event event) {
+        Color fill = input.getBackground();
+        for (Control child : composer.getChildren()) {
+            if (child != input && !fill.equals(child.getBackground())) {
+                child.setBackground(fill);
+                if (child instanceof Composite group) {
+                    for (Control inner : group.getChildren()) {
+                        if (!(inner instanceof Button)) {
+                            inner.setBackground(fill);
+                        }
+                    }
+                }
+            }
+        }
+        Point size = composer.getSize();
+        GC gc = event.gc;
+        gc.setAntialias(SWT.ON);
+        gc.setBackground(composer.getParent().getBackground());
+        gc.fillRectangle(0, 0, size.x, size.y);
+        gc.setBackground(fill);
+        gc.fillRoundRectangle(0, 0, size.x - 1, size.y - 1, 10, 10);
+        boolean focused = input.isFocusControl();
+        gc.setForeground(focused ? input.getDisplay().getSystemColor(SWT.COLOR_LIST_SELECTION) : borderColor());
+        gc.setLineWidth(focused ? 2 : 1);
+        gc.drawRoundRectangle(focused ? 1 : 0, focused ? 1 : 0, size.x - (focused ? 3 : 1), size.y - (focused ? 3 : 1), 10, 10);
+    }
+
+    private Color borderColor;
+    private RGB borderFrom;
+
+    /** Обводка ввода: текст, подмешанный к фону на четверть, — видна в светлой и тёмной теме. */
+    private Color borderColor() {
+        RGB background = input.getBackground().getRGB();
+        RGB foreground = input.getForeground().getRGB();
+        if (borderColor == null || !background.equals(borderFrom)) {
+            borderColor = new Color((background.red * 3 + foreground.red) / 4, (background.green * 3 + foreground.green) / 4,
+                    (background.blue * 3 + foreground.blue) / 4);
+            borderFrom = background;
+        }
+        return borderColor;
+    }
+
+    private Color metaColor() {
+        Color color = JFaceResources.getColorRegistry().get(JFacePreferences.QUALIFIER_COLOR);
+        return color != null ? color : root.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
     }
 
     private void createActions() {
@@ -974,7 +1068,7 @@ public class ChatView extends ViewPart {
         if (historyAction != null) {
             historyAction.setChecked(shown);
         }
-        sash.setMaximizedControl(shown ? null : top);
+        sash.setMaximizedControl(shown ? null : column);
         refreshHistoryPanel();
     }
 
@@ -1318,8 +1412,14 @@ public class ChatView extends ViewPart {
         int lineHeight = input.getLineHeight();
         int trim = input.computeTrim(0, 0, 0, 0).height;
         int content = input.computeSize(width, SWT.DEFAULT).y - trim;
-        int lines = Math.max(MIN_INPUT_LINES, Math.min(MAX_INPUT_LINES, (content + lineHeight - 1) / lineHeight));
+        int needed = (content + lineHeight - 1) / lineHeight;
+        int lines = Math.max(MIN_INPUT_LINES, Math.min(MAX_INPUT_LINES, needed));
         int height = lines * lineHeight + trim;
+        // Полоса прокрутки — только когда текст не помещается: пустая полоса в поле выглядит как рамка.
+        ScrollBar bar = input.getVerticalBar();
+        if (bar != null && bar.getVisible() != needed > MAX_INPUT_LINES) {
+            bar.setVisible(needed > MAX_INPUT_LINES);
+        }
         GridData data = (GridData) input.getLayoutData();
         if (data.heightHint != height) {
             data.heightHint = height;
@@ -1449,9 +1549,7 @@ public class ChatView extends ViewPart {
 
     void setAutoApprove(boolean on) {
         preferences().putBoolean(AUTO_APPROVE, on);
-        if (autoButton != null && !autoButton.isDisposed()) {
-            autoButton.setSelection(on);
-        }
+        updateModeButtons();
         showNotice(on ? "Авторежим включён: инструменты MCP вызываются без вопроса"
                 : "Авторежим выключен: перед вызовом инструмента MCP — вопрос");
     }
@@ -1692,7 +1790,7 @@ public class ChatView extends ViewPart {
         }));
         mcpButton.setToolTipText(health.text() + "\nЩелчок — проверить и показать инструменты (/mcp)");
         mcpButton.setData(health.state());
-        mcpButton.getParent().layout();
+        composer.layout(true, true);
     }
 
     /** При открытии вида — проверка включённых серверов в фоне: индикатор сразу показывает, подключены ли. */
@@ -1743,9 +1841,7 @@ public class ChatView extends ViewPart {
 
     void setReadOnly(boolean on) {
         preferences().putBoolean(READ_ONLY, on);
-        if (readOnlyButton != null && !readOnlyButton.isDisposed()) {
-            readOnlyButton.setSelection(on);
-        }
+        updateModeButtons();
         showNotice(on ? "Только вопросы: модель не меняет проект, правки предлагает кодом в ответе"
                 : "Только вопросы выключено: модель может править модули");
     }
@@ -2336,11 +2432,11 @@ public class ChatView extends ViewPart {
         return sendButton;
     }
 
-    Button autoButton() {
+    ToolItem autoButton() {
         return autoButton;
     }
 
-    Button mcpButton() {
+    ToolItem mcpButton() {
         return mcpButton;
     }
 
@@ -2348,7 +2444,7 @@ public class ChatView extends ViewPart {
         return topLayout.topControl == emptyState;
     }
 
-    Button readOnlyButton() {
+    ToolItem readOnlyButton() {
         return readOnlyButton;
     }
 

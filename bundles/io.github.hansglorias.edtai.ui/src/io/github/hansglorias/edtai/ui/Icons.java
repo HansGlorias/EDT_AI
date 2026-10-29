@@ -4,6 +4,7 @@ import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.jface.resource.ImageRegistry;
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.resource.ResourceLocator;
+import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
 
 /**
@@ -23,6 +24,7 @@ final class Icons {
     static final String STATUS_ERROR = "status_error";
     static final String STATUS_OFF = "status_off";
     static final String FILE = "file";
+    static final String READ_ONLY = "read_only";
 
     private static final String PREFIX = "io.github.hansglorias.edtai.ui.icons/";
 
@@ -32,6 +34,18 @@ final class Icons {
     static ImageDescriptor descriptor(String name) {
         return ResourceLocator.imageDescriptorFromBundle(Icons.class, "icons/" + name + ".png")
                 .orElse(ImageDescriptor.getMissingImageDescriptor());
+    }
+
+    /** Серый вариант значка: выключенный режим. */
+    static Image gray(String name) {
+        ImageRegistry registry = JFaceResources.getImageRegistry();
+        String key = PREFIX + name + "#gray";
+        Image image = registry.get(key);
+        if (image == null) {
+            registry.put(key, ImageDescriptor.createWithFlags(descriptor(name), SWT.IMAGE_GRAY));
+            image = registry.get(key);
+        }
+        return image;
     }
 
     static Image image(String name) {
