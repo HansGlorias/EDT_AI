@@ -238,13 +238,19 @@ Network Connections**).
 
 ## Установка в EDT
 
-1. Скачайте update-site:
-   - из GitHub Actions: откройте последний успешный запуск **build** и
-     скачайте артефакт `edtai-update-site` (это zip);
+1. В EDT: **Help → Install New Software…** → **Add…**, в поле **Location**
+   — `https://hansglorias.github.io/EDT_AI/` (update site публикуется
+   на GitHub Pages после каждого слияния в `main`). Обновления потом —
+   **Help → Check for Updates**.
+
+   Без доступа к GitHub — zip:
+   - из GitHub Actions: последний успешный запуск **build**, артефакт
+     `edtai-update-site`;
    - или соберите сами (см. ниже) и возьмите
      `releng/io.github.hansglorias.edtai.repository/target/io.github.hansglorias.edtai.repository-<версия>.zip`.
-2. В EDT: **Help → Install New Software…** → **Add…** → **Archive…**, выберите
-   zip, нажмите **Add**.
+
+   В **Add…** тогда **Archive…** и выберите zip.
+2. Нажмите **Add**.
 3. Отметьте **EDT AI**. Если список пуст, снимите флажок **Group items by
    category**.
 4. Снимите флажок **Contact all update sites during install to find required
