@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.documents.DocxWriter;
+import io.github.hansglorias.edtai.core.documents.PptxWriter;
+import io.github.hansglorias.edtai.core.documents.XlsxWriter;
 
 class FileToolsTest {
 
@@ -47,6 +49,16 @@ class FileToolsTest {
     }
 
     @Test
+    void excelAndPowerPoint() throws Exception {
+        Attachment book = tool.call(Map.of("name", "остатки.xlsx", "content", "| Товар | Кол-во |\n|---|---|\n| Стол | 3 |")).file();
+        assertEquals(XlsxWriter.MEDIA_TYPE, book.mediaType());
+        assertEquals("PK", new String(book.bytes(), 0, 2, StandardCharsets.US_ASCII));
+        Attachment deck = tool.call(Map.of("name", "обмен.pptx", "content", "# Обмен\n\n## Шаги\n\n- раз\n- два")).file();
+        assertEquals(PptxWriter.MEDIA_TYPE, deck.mediaType());
+        assertTrue(tool.description().contains(".xlsx") && tool.description().contains(".pptx"));
+    }
+
+    @Test
     void badNamesAndFormats() {
         assertEquals("отчёт.txt", FileTools.fileName("C:\\Users\\x\\..\\отчёт.txt"));
         assertEquals("a_b.md", FileTools.fileName("../a?b.md"));
@@ -56,6 +68,7 @@ class FileToolsTest {
 
         ToolException pdf = assertThrows(ToolException.class, () -> tool.call(Map.of("name", "отчёт.pdf", "content", "x")));
         assertTrue(pdf.getMessage().startsWith("Формат .pdf сделать не могу"), pdf.getMessage());
+        assertTrue(pdf.getMessage().endsWith("сохранит его как PDF из Word"), pdf.getMessage());
         assertThrows(ToolException.class, () -> tool.call(Map.of("name", "отчёт", "content", "x")));
         assertThrows(ToolException.class, () -> tool.call(Map.of("name", "big.txt", "content", "x".repeat(Attachment.MAX_TEXT_CHARS + 1))));
     }

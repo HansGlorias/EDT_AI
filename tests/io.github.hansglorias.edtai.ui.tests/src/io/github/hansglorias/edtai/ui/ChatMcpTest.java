@@ -30,6 +30,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.json.Json;
+import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.McpTransport;
@@ -203,8 +204,13 @@ class ChatMcpTest extends AbstractChatTest {
         ask(view, "Привет");
 
         String transcript = view.history().getText();
-        assertTrue(transcript.contains(MessageRenderer.TOOL + "MCP «EDT» — ошибка: не подключился: Не удалось подключиться"), transcript);
+        assertFalse(transcript.contains("MCP «EDT»"), "в ленте строки о сервере нет: " + transcript);
         assertTrue(transcript.contains("Отвечаю без MCP."), transcript);
+        // Сервер не подключился — красный значок на кнопке MCP, подробности в подсказке.
+        waitUntil(() -> view.mcpButton().getData() == McpHub.State.FAILED, () -> String.valueOf(view.mcpButton().getData()));
+        assertTrue(view.mcpButton().getToolTipText().startsWith("EDT: Не подключён: Не удалось подключиться"),
+                view.mcpButton().getToolTipText());
+        Screenshots.capture(view.control(), "mcp-indicator");
     }
 
     @Test

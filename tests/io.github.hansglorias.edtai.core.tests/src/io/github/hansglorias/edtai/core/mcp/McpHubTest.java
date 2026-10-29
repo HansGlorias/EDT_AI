@@ -239,6 +239,23 @@ class McpHubTest {
         assertTrue(problems.get(0).label().startsWith("MCP «Нет» — ошибка: не подключился: Не удалось подключиться к MCP-серверу"),
                 problems.get(0).label());
         assertTrue(problems.get(1).outcome().contains("stdio пока не поддерживается"));
+
+        // Последнее состояние — для индикатора у поля ввода, без нового подключения.
+        McpServer dead = new McpServer("Нет", McpTransport.HTTP, "http://localhost:" + port + "/mcp", true);
+        McpServer later = new McpServer("Новый", McpTransport.HTTP, "http://localhost:" + port + "/mcp", true);
+        List<McpHub.ServerStatus> last = hub.lastStatus(List.of(edt("get_*"), dead, later,
+                new McpServer("Выкл", McpTransport.HTTP, "http://localhost:" + port + "/mcp", false)));
+        assertEquals(List.of(McpHub.State.CONNECTED, McpHub.State.FAILED, McpHub.State.UNKNOWN, McpHub.State.DISABLED),
+                last.stream().map(McpHub.ServerStatus::state).toList());
+        McpHub.Health health = McpHub.health(last);
+        assertEquals(McpHub.State.FAILED, health.state());
+        assertTrue(health.text().contains("Нет: Не подключён: Не удалось подключиться"), health.text());
+        assertEquals(McpHub.State.CONNECTED, McpHub.health(hub.lastStatus(List.of(edt("get_*")))).state());
+        assertEquals(McpHub.State.UNKNOWN, McpHub.health(hub.lastStatus(List.of(later))).state(), "ещё не проверялся");
+        assertEquals(McpHub.State.DISABLED, McpHub.health(List.of()).state());
+        assertEquals(McpHub.State.UNKNOWN, hub.lastStatus(List.of(edt("other_*"))).get(0).state(), "настройки изменились");
+        hub.reset();
+        assertEquals(McpHub.State.UNKNOWN, hub.lastStatus(List.of(edt("get_*"))).get(0).state());
     }
 
     @Test

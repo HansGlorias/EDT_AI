@@ -107,7 +107,7 @@ class McpStatusDialog extends TitleAreaDialog {
             item.setImage(Icons.image(switch (server.state()) {
                 case CONNECTED -> Icons.STATUS_OK;
                 case FAILED, UNSUPPORTED -> Icons.STATUS_ERROR;
-                case DISABLED -> Icons.STATUS_OFF;
+                case DISABLED, UNKNOWN -> Icons.STATUS_OFF;
             }));
             item.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DIALOG_FONT));
             item.setData(server.server().name() + " — " + server.server().target() + "\n" + server.summary());
@@ -137,6 +137,7 @@ class McpStatusDialog extends TitleAreaDialog {
             case FAILED -> "ошибка";
             case UNSUPPORTED -> "не поддерживается";
             case DISABLED -> "выключен";
+            case UNKNOWN -> "не проверялся";
         };
     }
 
