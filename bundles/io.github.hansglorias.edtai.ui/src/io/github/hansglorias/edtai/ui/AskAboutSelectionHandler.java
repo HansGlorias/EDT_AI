@@ -31,7 +31,7 @@ public class AskAboutSelectionHandler extends AbstractHandler {
         try {
             view = (ChatView) page.showView(ChatView.ID);
         } catch (PartInitException e) {
-            throw new ExecutionException("Не удалось открыть вид AI Chat", e);
+            throw new ExecutionException("Не удалось открыть EDT AI", e);
         }
         if (editor == null) {
             view.showNotice("Откройте модуль в редакторе и выделите код, о котором спросить");

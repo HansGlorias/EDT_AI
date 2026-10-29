@@ -20,7 +20,8 @@ Windows и Linux (в том числе Astra Linux).
 
 ## Что есть
 
-- **Window → Show View → Other… → AI → AI Chat.**
+- **Window → Show View → Other… → EDT AI → EDT AI** или значок **EDT AI** в
+  строке состояния внизу окна EDT (рядом с виджетами других плагинов).
   - Enter — отправить, Shift+Enter — новая строка. Поле ввода растёт до 10
     строк, ↑ / ↓ в пустом поле — ранее отправленные сообщения.
   - Ответ показывается с оформлением: заголовки, жирный и курсив, списки,
@@ -329,7 +330,7 @@ xvfb-run -a ./mvnw -B verify
 |---|---|
 | `releng/edtai.target` | target platform: Eclipse 2023-12 (4.30) |
 | `bundles/…core` | настройки, Secure Storage, TLS, JSON, клиент модели, диалог; без UI |
-| `bundles/…ui` | вид «AI Chat», страница настроек |
+| `bundles/…ui` | вид «EDT AI», страница настроек |
 | `tests/…core.tests` | тесты ядра (JUnit 5, OSGi без UI) против фейкового сервера модели |
 | `tests/…ui.tests` | тесты вида и настроек в живом workbench, скриншоты |
 | `features/…feature` | фича для установки |
