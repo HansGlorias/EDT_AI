@@ -48,8 +48,6 @@ final class ChatHistoryPanel {
     interface Callbacks {
         void open(String id);
 
-        void openInNew(String id);
-
         void rename(String id);
 
         void export(String id);
@@ -58,6 +56,12 @@ final class ChatHistoryPanel {
 
         /** Запрос поиска изменился — показать найденное. */
         void searchChanged();
+
+        /** Состояние живого чата: точка или пусто. */
+        String state(String id);
+
+        /** Подсказка к точке состояния. */
+        String stateTooltip(String id);
 
         void newChat();
     }
@@ -138,6 +142,12 @@ final class ChatHistoryPanel {
             }
         });
 
+        table.addListener(SWT.MouseHover, event -> {
+            TableItem item = table.getItem(new org.eclipse.swt.graphics.Point(event.x, event.y));
+            int index = item == null ? -1 : table.indexOf(item);
+            table.setToolTipText(index >= 0 && index < ids.size() ? callbacks.stateTooltip(ids.get(index)) : null);
+        });
+
         table.addListener(SWT.KeyDown, event -> {
             if (event.keyCode == SWT.F2 && selected() != null) {
                 callbacks.rename(selected());
@@ -151,7 +161,6 @@ final class ChatHistoryPanel {
         create.addListener(SWT.Selection, event -> callbacks.newChat());
         new MenuItem(menu, SWT.SEPARATOR);
         List<MenuItem> items = List.of(item(menu, "Открыть", callbacks::open),
-                item(menu, "Открыть в новой вкладке", callbacks::openInNew),
                 item(menu, "Переименовать…\tF2", callbacks::rename),
                 item(menu, "Экспорт в Markdown…", callbacks::export), item(menu, "Удалить", callbacks::delete));
         menu.addListener(SWT.Show, event -> items.forEach(item -> item.setEnabled(selected() != null)));
@@ -184,7 +193,10 @@ final class ChatHistoryPanel {
             for (ChatStore.Entry entry : entries) {
                 LocalDateTime updated = LocalDateTime.ofInstant(entry.updated(), ZoneId.systemDefault());
                 TableItem item = new TableItem(table, SWT.NONE);
-                item.setText(new String[] { entry.title(), (updated.toLocalDate().equals(today) ? TODAY : EARLIER).format(updated) });
+                String state = callbacks.state(entry.id());
+                String name = state.isEmpty() ? entry.title() : state + " " + entry.title();
+                item.setText(new String[] { name,
+                        (updated.toLocalDate().equals(today) ? TODAY : EARLIER).format(updated) });
                 ids.add(entry.id());
                 if (entry.id().equals(current)) {
                     table.setSelection(item);
