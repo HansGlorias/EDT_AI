@@ -48,8 +48,6 @@ final class ChatHistoryPanel {
     interface Callbacks {
         void open(String id);
 
-        void openInNew(String id);
-
         void rename(String id);
 
         void export(String id);
@@ -59,8 +57,11 @@ final class ChatHistoryPanel {
         /** Запрос поиска изменился — показать найденное. */
         void searchChanged();
 
-        /** Состояние живого чата: пусто, «отвечает…» или «готово». */
+        /** Состояние живого чата: точка или пусто. */
         String state(String id);
+
+        /** Подсказка к точке состояния. */
+        String stateTooltip(String id);
 
         void newChat();
     }
@@ -71,7 +72,6 @@ final class ChatHistoryPanel {
     private final Label nothing;
     private final Table table;
     private final TableColumn title;
-    private final TableColumn state;
     private final TableColumn time;
     private final Callbacks callbacks;
     private final List<String> ids = new ArrayList<>();
@@ -125,14 +125,12 @@ final class ChatHistoryPanel {
         holder.setLayout(columns);
         table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL | SWT.BORDER);
         title = new TableColumn(table, SWT.NONE);
-        state = new TableColumn(table, SWT.NONE);
         time = new TableColumn(table, SWT.RIGHT);
         columns.setColumnData(title, new ColumnWeightData(100, 60));
         GC gc = new GC(table);
         try {
             // Отступы ячейки на Windows больше, чем кажется: с запасом, иначе время обрезается до «19:…».
             int text = Math.max(gc.textExtent("00:00").x, gc.textExtent("00.00").x);
-            columns.setColumnData(state, new ColumnPixelData(gc.textExtent("отвечает…").x + 16));
             columns.setColumnData(time, new ColumnPixelData(text + 3 * gc.textExtent("0").x + 12));
         } finally {
             gc.dispose();
@@ -142,6 +140,12 @@ final class ChatHistoryPanel {
             if (!filling && id != null) {
                 callbacks.open(id);
             }
+        });
+
+        table.addListener(SWT.MouseHover, event -> {
+            TableItem item = table.getItem(new org.eclipse.swt.graphics.Point(event.x, event.y));
+            int index = item == null ? -1 : table.indexOf(item);
+            table.setToolTipText(index >= 0 && index < ids.size() ? callbacks.stateTooltip(ids.get(index)) : null);
         });
 
         table.addListener(SWT.KeyDown, event -> {
@@ -157,7 +161,6 @@ final class ChatHistoryPanel {
         create.addListener(SWT.Selection, event -> callbacks.newChat());
         new MenuItem(menu, SWT.SEPARATOR);
         List<MenuItem> items = List.of(item(menu, "Открыть", callbacks::open),
-                item(menu, "Открыть в новой вкладке", callbacks::openInNew),
                 item(menu, "Переименовать…\tF2", callbacks::rename),
                 item(menu, "Экспорт в Markdown…", callbacks::export), item(menu, "Удалить", callbacks::delete));
         menu.addListener(SWT.Show, event -> items.forEach(item -> item.setEnabled(selected() != null)));
@@ -190,7 +193,9 @@ final class ChatHistoryPanel {
             for (ChatStore.Entry entry : entries) {
                 LocalDateTime updated = LocalDateTime.ofInstant(entry.updated(), ZoneId.systemDefault());
                 TableItem item = new TableItem(table, SWT.NONE);
-                item.setText(new String[] { entry.title(), callbacks.state(entry.id()),
+                String state = callbacks.state(entry.id());
+                String name = state.isEmpty() ? entry.title() : state + " " + entry.title();
+                item.setText(new String[] { name,
                         (updated.toLocalDate().equals(today) ? TODAY : EARLIER).format(updated) });
                 ids.add(entry.id());
                 if (entry.id().equals(current)) {
