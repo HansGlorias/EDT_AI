@@ -1162,7 +1162,8 @@ public class ChatView extends ViewPart {
         session.addListener(chatListener);
         openViews.put(id, this);
         allowedInChat.computeIfAbsent(id, key -> ConcurrentHashMap.newKeySet());
-        saved = List.of();
+        // Если сессия уже была с историей — не сохраняем её в новый файл: saved = текущим сообщениям.
+        saved = session.messages();
         expandedCalls.clear();
         recall = -1;
         rendered.clear();
@@ -2939,7 +2940,8 @@ public class ChatView extends ViewPart {
         } catch (RuntimeException e) {
             title = "Чат";
         }
-        setContentDescription(title);
+        String version = FrameworkUtil.getBundle(getClass()).getVersion().toString();
+        setContentDescription(title + " · " + version);
     }
 
     @Override
