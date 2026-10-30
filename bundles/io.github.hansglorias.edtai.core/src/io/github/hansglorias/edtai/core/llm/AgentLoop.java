@@ -79,6 +79,8 @@ final class AgentLoop {
     private final Map<String, Integer> seen = new HashMap<>();
     /** Сколько раз сервер ответил «не помещается»: бюджет делится на 2 в этой степени. */
     private int shrink;
+    /** Токены последнего шага модели, в котором выполняются инструменты. */
+    private TokenUsage stepUsage;
     /** Сервер отклонил запрос с инструментами: больше их не передаём. */
     private boolean toolsRejected;
     /** Токены ответа за прошедшие шаги. */
@@ -206,6 +208,7 @@ final class AgentLoop {
                 TokenUsage step = reply.usage() != null ? reply.usage()
                         : estimate(RequestBudget.size(connection(), request.history(), request.extra(), tools), reply);
                 usage = usage == null ? step : usage.plus(step);
+                stepUsage = step;
                 onUsage.accept(usage);
                 return reply;
             } catch (ModelException e) {
@@ -253,7 +256,7 @@ final class AgentLoop {
         Tool tool = tools.stream().filter(candidate -> candidate.name().equals(call.name())).findFirst().orElse(null);
         if (tool == null) {
             String error = "Инструмента «" + call.name() + "» нет";
-            onTool.accept(new ToolUse(call.id(), call.name(), call.name(), error, ToolUse.Status.FAILED));
+            onTool.accept(new ToolUse(call.id(), call.name(), call.name(), error, ToolUse.Status.FAILED).withUsage(stepUsage));
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
         Map<String, Object> input;
@@ -261,34 +264,34 @@ final class AgentLoop {
             input = call.input();
         } catch (JsonException e) {
             String error = "Аргументы вызова — не JSON-объект: " + e.getMessage();
-            onTool.accept(new ToolUse(call.id(), call.name(), tool.name(), error, ToolUse.Status.FAILED));
+            onTool.accept(new ToolUse(call.id(), call.name(), tool.name(), error, ToolUse.Status.FAILED).withUsage(stepUsage));
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
         String summary = tool.summary(input);
         String key = call.name() + " " + Json.write(input);
         if (seen.containsKey(key)) {
-            onTool.accept(new ToolUse(call.id(), call.name(), summary, "повтор того же вызова, не выполнен", ToolUse.Status.FAILED));
+            onTool.accept(new ToolUse(call.id(), call.name(), summary, "повтор того же вызова, не выполнен", ToolUse.Status.FAILED).withUsage(stepUsage));
             return new ProtocolAdapter.ToolResult(call, REPEATED, true);
         }
         if (tool.needsApproval()) {
-            ToolUse waiting = new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.AWAITING);
+            ToolUse waiting = new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.AWAITING).withUsage(stepUsage);
             onTool.accept(waiting);
             ToolApprover.Decision decision = decide(waiting, call.arguments());
             if (decision == ToolApprover.Decision.DENY) {
-                onTool.accept(new ToolUse(call.id(), call.name(), summary, "отклонено", ToolUse.Status.FAILED));
+                onTool.accept(new ToolUse(call.id(), call.name(), summary, "отклонено", ToolUse.Status.FAILED).withUsage(stepUsage));
                 return new ProtocolAdapter.ToolResult(call, "Пользователь отклонил вызов этого инструмента. Не вызывай его"
                         + " повторно с теми же аргументами; объясни, что хотел сделать, или ответь без него.", true);
             }
         }
-        onTool.accept(new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.RUNNING));
+        onTool.accept(new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.RUNNING).withUsage(stepUsage));
         seen.put(key, steps.size());
         try {
             Tool.Result output = tool.call(input);
-            onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));
+            onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()).withUsage(stepUsage));
             return new ProtocolAdapter.ToolResult(call, output.text(), false);
         } catch (ToolException | RuntimeException e) {
             String error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            onTool.accept(new ToolUse(call.id(), call.name(), summary, error, ToolUse.Status.FAILED));
+            onTool.accept(new ToolUse(call.id(), call.name(), summary, error, ToolUse.Status.FAILED).withUsage(stepUsage));
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
     }

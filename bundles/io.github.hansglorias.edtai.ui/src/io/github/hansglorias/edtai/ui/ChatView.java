@@ -303,6 +303,9 @@ public class ChatView extends ViewPart {
     private int commitAnswer;
     private Text input;
     private SendButton sendButton;
+    private ToolItem modeButton;
+    private String dialogueMode = "Диалог";
+    private String dialoguePrompt = "";
     private Label status;
     private Cursor handCursor;
     private ToolItem autoButton;
@@ -379,7 +382,10 @@ public class ChatView extends ViewPart {
                 toolActivity.reset();
             }
             scheduleRefresh();
-            inUi(() -> markBusy(busy));
+            inUi(() -> {
+                markBusy(busy);
+                refreshHistoryPanel();
+            });
             if (!busy) {
                 inUi(() -> {
                     attachChanges();
@@ -545,6 +551,12 @@ public class ChatView extends ViewPart {
             @Override
             public void searchChanged() {
                 refreshHistoryPanel();
+            }
+
+            @Override
+            public String state(String id) {
+                ChatSession chat = sessions.get(id);
+                return chat != null && chat.isBusy() ? "отвечает…" : "готово";
             }
 
             @Override
@@ -843,6 +855,11 @@ public class ChatView extends ViewPart {
         readOnlyButton.addListener(SWT.Selection, event -> setReadOnly(readOnlyButton.getSelection()));
         updateModeButtons();
 
+        modeButton = new ToolItem(tools, SWT.DROP_DOWN);
+        modeButton.setText(dialogueMode);
+        modeButton.setToolTipText("Формат следующего вопроса: ответ, варианты, рекомендация или план");
+        modeButton.addListener(SWT.Selection, event -> showDialogueMenu());
+
         new ToolItem(tools, SWT.SEPARATOR);
         mcpButton = new ToolItem(tools, SWT.PUSH);
         mcpButton.setText("MCP");
@@ -866,6 +883,24 @@ public class ChatView extends ViewPart {
      * Кнопки режимов: включённый — цветной значок с подписью («Авто»,
      * «Только вопросы»), выключенный — серый значок без подписи.
      */
+    private void showDialogueMenu() {
+        Menu menu = new Menu(modeButton.getParent());
+        for (SlashCommand command : List.of(SlashCommand.ANSWER, SlashCommand.OPTIONS, SlashCommand.RECOMMEND, SlashCommand.PLAN)) {
+            MenuItem item = new MenuItem(menu, SWT.PUSH);
+            item.setText(command.description());
+            item.addListener(SWT.Selection, event -> {
+                dialogueMode = command.text();
+                dialoguePrompt = command.dialoguePrompt();
+                modeButton.setText(command.description().split(":", 2)[0]);
+                composer.layout(true, true);
+            });
+        }
+        menu.addListener(SWT.Hide, event -> menu.getDisplay().asyncExec(menu::dispose));
+        menu.setLocation(modeButton.getParent().toDisplay(modeButton.getBounds().x,
+                modeButton.getBounds().y + modeButton.getBounds().height));
+        menu.setVisible(true);
+    }
+
     private void updateModeButtons() {
         if (autoButton == null || autoButton.isDisposed()) {
             return;
@@ -1721,6 +1756,7 @@ public class ChatView extends ViewPart {
             case EXPLAIN -> EXPLAIN_PROMPT;
             case TESTS -> TESTS_PROMPT;
             case SKILL -> SKILL_PROMPT;
+            case ANSWER, OPTIONS, RECOMMEND, PLAN -> command.dialoguePrompt();
             default -> null;
         };
     }
@@ -1743,8 +1779,15 @@ public class ChatView extends ViewPart {
             }
             String prompt = promptOf(command.command());
             text = command.argument().isEmpty() ? prompt : prompt + "\n\n" + command.argument();
+        } else if (!dialoguePrompt.isBlank()) {
+            text = dialoguePrompt + "\n\n" + text;
         }
+        dialogueMode = "Диалог";
+        dialoguePrompt = "";
+        modeButton.setText(dialogueMode);
         session.send(text, context, attachments);
+        saveChat(chatId, session.messages());
+        refreshHistoryPanel();
     }
 
     /**
