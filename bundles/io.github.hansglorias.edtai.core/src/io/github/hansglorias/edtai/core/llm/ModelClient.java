@@ -49,6 +49,9 @@ public final class ModelClient {
     static final String TRUNCATED = "_Ответ оборван: модель дошла до лимита длины ответа. Нажмите «Повторить» или увеличьте"
             + " «Макс. токенов ответа» в настройках._";
 
+    /** Лимит служебных запросов (проверка, название): хватает и на рассуждения модели. */
+    static final int SERVICE_TOKENS = 1024;
+
     private static final int MAX_ERROR_BODY = 64 * 1024;
     private static final String USER_AGENT = "EDT-AI";
 
@@ -123,16 +126,22 @@ public final class ModelClient {
     public CompletableFuture<String> check(ModelConnection connection) {
         long start = System.nanoTime();
         List<ChatMessage> ping = List.of(ChatMessage.of(ChatRole.USER, "Ответь одним словом: готов"));
-        return stream(connection.withMaxTokens(16), ping, part -> { })
+        // Запас на рассуждения: у reasoning-моделей (DeepSeek, o-серия) они тоже идут в max_tokens.
+        return stream(connection.withMaxTokens(SERVICE_TOKENS), ping, part -> { })
                 .thenApply(answer -> {
                     long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-                    String shown = answer.strip().replaceAll("\\s+", " ");
+                    String shown = withoutNotice(answer).strip().replaceAll("\\s+", " ");
                     if (shown.length() > 60) {
                         shown = shown.substring(0, 60) + "…";
                     }
                     return "Подключение работает: модель " + connection.model() + " ответила за " + millis + " мс"
                             + (shown.isEmpty() ? "." : ": «" + shown + "».");
                 });
+    }
+
+    /** Ответ без пометки об обрыве: служебным запросам она не нужна. */
+    static String withoutNotice(String answer) {
+        return answer == null ? "" : answer.replace(TRUNCATED, "");
     }
 
     /**

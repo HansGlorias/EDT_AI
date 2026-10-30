@@ -232,13 +232,13 @@ public final class ModelChatProvider implements ChatProvider {
 
     static final String TITLE_PROMPT = "Придумай короткое название (2–6 слов, по-русски) для этого чата разработчика 1С:"
             + " о чём вопрос. Только название: без кавычек, без точки в конце, без пояснений.";
-    private static final int TITLE_TOKENS = 64;
+    private static final int TITLE_TOKENS = ModelClient.SERVICE_TOKENS;
     private static final int TITLE_TRANSCRIPT = 3000;
     private static final int MAX_TITLE = 80;
 
     /** Ответ модели — в название: первая непустая строка без кавычек, Markdown и точки; пустая — не вышло. */
     static String cleanTitle(String answer) {
-        String line = ChatMessage.stripTrace(answer == null ? "" : answer).lines().map(String::strip)
+        String line = ChatMessage.stripTrace(ModelClient.withoutNotice(answer)).lines().map(String::strip)
                 .filter(text -> !text.isEmpty()).findFirst().orElse("");
         line = line.replaceFirst("^(?iu)(название|title)\\s*:\\s*", "").replaceAll("^[#*_`\"'«»“”„\\s]+|[*_`\"'«»“”„\\s.]+$", "");
         return line.length() > MAX_TITLE ? line.substring(0, MAX_TITLE).strip() : line;

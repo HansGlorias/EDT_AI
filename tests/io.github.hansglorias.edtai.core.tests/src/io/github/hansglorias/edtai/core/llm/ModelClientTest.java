@@ -414,7 +414,7 @@ class ModelClientTest {
 
         assertTrue(result.startsWith("Подключение работает: модель test-model ответила за"), result);
         assertTrue(result.endsWith("«Готов»."), result);
-        assertEquals(16L, Json.parseObject(server.requests().get(0).body()).get("max_tokens"));
+        assertEquals((long) ModelClient.SERVICE_TOKENS, Json.parseObject(server.requests().get(0).body()).get("max_tokens"));
     }
 
     private ModelConnection connection(Protocol protocol, String token) {
