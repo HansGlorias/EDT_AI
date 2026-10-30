@@ -33,7 +33,13 @@ public class CommitMessageHandler extends AbstractHandler {
         ChatView view;
         try {
             // Окно коммита остаётся активным: чат только показывается рядом.
-            view = (ChatView) page.showView(ChatView.ID, null, target == null ? IWorkbenchPage.VIEW_ACTIVATE : IWorkbenchPage.VIEW_VISIBLE);
+            int mode = target == null ? IWorkbenchPage.VIEW_ACTIVATE : IWorkbenchPage.VIEW_VISIBLE;
+            view = ChatView.freeOnPage(page);
+            if (view == null || view.session().isBusy()) {
+                view = (ChatView) page.showView(ChatView.ID, "new:" + System.nanoTime(), mode);
+            } else {
+                page.showView(ChatView.ID, view.getViewSite().getSecondaryId(), mode);
+            }
         } catch (PartInitException e) {
             throw new ExecutionException("Не удалось открыть EDT AI", e);
         }

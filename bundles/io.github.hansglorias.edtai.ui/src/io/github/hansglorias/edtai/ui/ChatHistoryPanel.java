@@ -48,6 +48,8 @@ final class ChatHistoryPanel {
     interface Callbacks {
         void open(String id);
 
+        void openInNew(String id);
+
         void rename(String id);
 
         void export(String id);
@@ -148,7 +150,9 @@ final class ChatHistoryPanel {
         create.setImage(Icons.image(Icons.NEW_CHAT));
         create.addListener(SWT.Selection, event -> callbacks.newChat());
         new MenuItem(menu, SWT.SEPARATOR);
-        List<MenuItem> items = List.of(item(menu, "Открыть", callbacks::open), item(menu, "Переименовать…\tF2", callbacks::rename),
+        List<MenuItem> items = List.of(item(menu, "Открыть", callbacks::open),
+                item(menu, "Открыть в новой вкладке", callbacks::openInNew),
+                item(menu, "Переименовать…\tF2", callbacks::rename),
                 item(menu, "Экспорт в Markdown…", callbacks::export), item(menu, "Удалить", callbacks::delete));
         menu.addListener(SWT.Show, event -> items.forEach(item -> item.setEnabled(selected() != null)));
         table.setMenu(menu);
