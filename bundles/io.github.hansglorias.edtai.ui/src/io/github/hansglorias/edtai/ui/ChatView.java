@@ -8,7 +8,6 @@ import java.net.URI;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -245,6 +244,8 @@ public class ChatView extends ViewPart {
     /** Все диалоги; {@link #chatId} — открытый в этом виде. */
     private final ChatStore chats = new ChatStore(stateLocation.resolve(CHATS_DIRECTORY));
     private String chatId;
+    /** {@code true} на время восстановления истории из файла, чтобы persistingListener не перезаписывал его. */
+    private volatile boolean restoring;
     /** Чат, с которым создан вид из secondaryId; {@code null} — обычный или новый. */
     private String wantedChat;
     /** Сессия открытого чата; меняется вместе с {@link #chatId}. */
@@ -418,7 +419,9 @@ public class ChatView extends ViewPart {
 
             @Override
             public void historyChanged() {
-                save();
+                if (!restoring) {
+                    save();
+                }
             }
 
             @Override
@@ -1143,15 +1146,6 @@ public class ChatView extends ViewPart {
     }
 
     /** Подключает вид к чату {@code id} с уже загруженными сообщениями (или пустыми). */
-    /** Время изменения файла чата в мс; нет файла — 0. */
-    private long fileModified(String id) {
-        try {
-            return Files.getLastModifiedTime(chats.file(id).path()).toMillis();
-        } catch (IOException e) {
-            return 0;
-        }
-    }
-
     private void switchChat(String id, List<ChatMessage> messages) {
         if (session != null) {
             session.removeListener(chatListener);
@@ -1168,23 +1162,21 @@ public class ChatView extends ViewPart {
         session.addListener(chatListener);
         openViews.put(id, this);
         allowedInChat.computeIfAbsent(id, key -> ConcurrentHashMap.newKeySet());
-        saved = List.of();
+        // Если сессия уже была с историей — не сохраняем её в новый файл: saved = текущим сообщениям.
+        saved = session.messages();
         expandedCalls.clear();
         recall = -1;
         rendered.clear();
         scrollToEnd = false;
         // Файл читаем только в новую сессию: у живой своя история (ответ может идти в фоне).
         if (session.messages().isEmpty() && !messages.isEmpty()) {
-            // restore() зовёт historyChanged → persistingListener сохранит файл:
-            // запоминаем mtime до, возвращаем после, чтобы чат не всплывал в топе.
-            long wasModified = fileModified(id);
+            restoring = true;
             try {
                 session.restore(messages);
-                Files.setLastModifiedTime(chats.file(id).path(), FileTime.fromMillis(wasModified));
             } catch (IllegalStateException e) {
                 // Сессия уже занята: история остаётся её.
-            } catch (IOException e) {
-                // Не удалось вернуть время: чат всплывёт в списке, не страшно.
+            } finally {
+                restoring = false;
             }
         }
         scrollToEnd = !session.messages().isEmpty();
@@ -2948,7 +2940,8 @@ public class ChatView extends ViewPart {
         } catch (RuntimeException e) {
             title = "Чат";
         }
-        setContentDescription(title);
+        String version = FrameworkUtil.getBundle(getClass()).getVersion().toString();
+        setContentDescription(title + " · " + version);
     }
 
     @Override

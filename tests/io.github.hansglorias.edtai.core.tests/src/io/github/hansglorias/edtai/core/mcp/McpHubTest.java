@@ -236,7 +236,7 @@ class McpHubTest {
         assertEquals(List.of("get_edt_version"), tools.stream().map(Tool::name).toList());
         assertEquals(2, problems.size());
         assertEquals(ToolUse.Status.FAILED, problems.get(0).status());
-        assertTrue(problems.get(0).label().startsWith("MCP «Нет» — ошибка: не подключился: Не удалось подключиться к MCP-серверу"),
+        assertTrue(problems.get(0).label().startsWith("MCP «Нет» — ошибка сервера: не подключился: Не удалось подключиться к MCP-серверу"),
                 problems.get(0).label());
         assertTrue(problems.get(1).outcome().contains("stdio пока не поддерживается"));
 
