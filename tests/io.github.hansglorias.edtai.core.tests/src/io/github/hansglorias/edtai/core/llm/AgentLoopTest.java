@@ -96,8 +96,10 @@ class AgentLoopTest {
 
         assertEquals("Смотрю модуль.\n\nВ нём процедура А.", answer);
         assertEquals(String.join("", parts), answer);
-        assertEquals(List.of(new ToolUse("call_1", "read_module", "Читает модуль Общий", "", ToolUse.Status.RUNNING),
-                new ToolUse("call_1", "read_module", "Читает модуль Общий", "строки 1–1 из 1", ToolUse.Status.DONE)), uses);
+        assertEquals(List.of(new ToolUse("call_1", "read_module", "Читает модуль Общий", "", ToolUse.Status.RUNNING, -1, null, null),
+                new ToolUse("call_1", "read_module", "Читает модуль Общий", "строки 1–1 из 1", ToolUse.Status.DONE, -1, null, null)),
+                uses.stream().map(use -> use.withUsage(null)).toList());
+        assertTrue(uses.stream().allMatch(use -> use.usage() != null), "каждому вызову проставлены токены шага");
 
         Map<String, Object> first = Json.parseObject(server.requests().get(0).body());
         assertEquals("read_module", Json.stringAt(first, "tools", 0, "function", "name"));
@@ -456,8 +458,10 @@ class AgentLoopTest {
 
         assertEquals("Готово.", run(Protocol.OPENAI_COMPATIBLE));
 
+        ToolUse failed = uses.get(uses.size() - 1);
         assertEquals(new ToolUse("call_1", "read_module", "Читает модуль Общий", "повтор того же вызова, не выполнен",
-                ToolUse.Status.FAILED), uses.get(uses.size() - 1));
+                ToolUse.Status.FAILED, -1, null, null), failed.withUsage(null));
+        assertTrue(failed.usage() != null, "повтору тоже проставлены токены шага");
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(2).body()).get("messages"));
         assertEquals("Ошибка: " + AgentLoop.REPEATED, Json.stringAt(messages.get(messages.size() - 1), "content"));
         assertEquals("system", Json.stringAt(messages.get(0), "role"));
