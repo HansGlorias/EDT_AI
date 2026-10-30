@@ -62,9 +62,9 @@ public final class ChatStore {
 
     /** Новый идентификатор: время создания + случайный суффикс, чтобы два вызова подряд не дали один id. */
     public String newId() {
-        String id = LocalDateTime.now().format(ID);
+        String id = LocalDateTime.now().format(ID) + "-" + Integer.toHexString(ThreadLocalRandom.current().nextInt(0x1000000));
         while (Files.exists(directory.resolve(id + SUFFIX))) {
-            id = LocalDateTime.now().format(ID) + "-" + Integer.toHexString(ThreadLocalRandom.current().nextInt(0x10000));
+            id = LocalDateTime.now().format(ID) + "-" + Integer.toHexString(ThreadLocalRandom.current().nextInt(0x1000000));
         }
         return id;
     }
