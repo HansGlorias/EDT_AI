@@ -29,7 +29,13 @@ public class AskAboutSelectionHandler extends AbstractHandler {
         AttachedContext context = editor == null ? null : AttachedContext.fromEditor(editor);
         ChatView view;
         try {
-            view = (ChatView) page.showView(ChatView.ID);
+            view = ChatView.freeOnPage(page);
+            if (view == null) {
+                view = (ChatView) page.showView(ChatView.ID);
+            } else if (view.session().isBusy()) {
+                view = (ChatView) page.showView(ChatView.ID, "new:" + System.nanoTime(), IWorkbenchPage.VIEW_ACTIVATE);
+            }
+            page.activate(view);
         } catch (PartInitException e) {
             throw new ExecutionException("Не удалось открыть EDT AI", e);
         }
