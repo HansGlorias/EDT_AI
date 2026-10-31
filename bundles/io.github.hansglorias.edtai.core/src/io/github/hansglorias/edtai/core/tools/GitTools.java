@@ -80,6 +80,11 @@ public final class GitTools {
 
     private final class StatusTool implements Tool {
         @Override
+        public boolean repeatableRead() {
+            return true;
+        }
+
+        @Override
         public String name() {
             return "git_status";
         }
@@ -126,6 +131,11 @@ public final class GitTools {
     }
 
     private final class DiffTool implements Tool {
+        @Override
+        public boolean repeatableRead() {
+            return true;
+        }
+
         @Override
         public String name() {
             return "git_diff";
@@ -203,6 +213,11 @@ public final class GitTools {
     }
 
     private final class LogTool implements Tool {
+        @Override
+        public boolean repeatableRead() {
+            return true;
+        }
+
         @Override
         public String name() {
             return "git_log";

@@ -1,7 +1,6 @@
 package io.github.hansglorias.edtai.core.llm;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
@@ -12,7 +11,6 @@ import java.util.function.Consumer;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
-import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.json.JsonException;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
@@ -36,7 +34,7 @@ final class AgentLoop {
     static final int MAX_STEPS = 50;
 
     /** Вместо результата старого шага, когда запрос не помещается в окно модели. */
-    static final String OMITTED = "(результат не передан: не помещается в окно модели; если он нужен — вызови инструмент снова)";
+    static final String OMITTED = AgentTranscript.OMITTED;
 
     static final String REPEATED = "Этот вызов с теми же аргументами уже был в этом ответе, его результат выше. Не повторяй его:"
             + " используй полученный результат или вызови с другими аргументами.";
@@ -65,18 +63,16 @@ final class AgentLoop {
     private final StringBuilder answer = new StringBuilder();
     private boolean separate;
     /** Шаги этого ответа: вызовы модели и их результаты. */
-    private final List<Step> steps = new ArrayList<>();
+    private final AgentTranscript transcript = new AgentTranscript();
+    private final ToolExecutionLedger ledger = new ToolExecutionLedger();
+    /** Первый шаг, результат которого передаётся модели в последнем запросе. */
+    private int firstVisibleStep;
     /** Что последним сообщили в ленту про обрезку истории. */
     private ToolUse trimmed;
-
-    private record Step(ModelReply reply, List<ProtocolAdapter.ToolResult> results) {
-    }
 
     /** История и шаги, которые помещаются в окно модели. */
     private record Prepared(List<ChatMessage> history, List<Object> extra) {
     }
-    /** Вызовы этого ответа (имя и аргументы) → номер шага: повтор не выполняем. */
-    private final Map<String, Integer> seen = new HashMap<>();
     /** Сколько раз сервер ответил «не помещается»: бюджет делится на 2 в этой степени. */
     private int shrink;
     /** Сервер отклонил запрос с инструментами: больше их не передаём. */
@@ -139,6 +135,7 @@ final class AgentLoop {
                     ToolUse.Status.FAILED));
         }
         for (int step = 1;; step++) {
+            checkCancelled();
             ModelReply reply = request();
             if (reply.calls().isEmpty()) {
                 return ChatMessage.stripTrace(ThinkFilter.strip(answer.toString())).strip();
@@ -152,10 +149,11 @@ final class AgentLoop {
             // Токены шага — у первого его вызова: шаг один, вызовов в нём может быть несколько.
             TokenUsage tokens = lastStep;
             for (ToolCall call : reply.calls()) {
+                checkCancelled();
                 results.add(execute(call, tokens));
                 tokens = null;
             }
-            steps.add(new Step(reply, results));
+            transcript.add(reply, results);
             separate = answer.length() > 0;
         }
     }
@@ -167,13 +165,12 @@ final class AgentLoop {
     private Prepared prepare() {
         int budget = RequestBudget.chars(connection()) >> shrink;
         int omitted = 0;
-        List<Object> extra = extra(omitted);
-        while (omitted < steps.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > budget) {
-            extra = extra(++omitted);
+        List<Object> extra = transcript.project(adapter, omitted);
+        while (omitted < transcript.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > budget) {
+            extra = transcript.project(adapter, ++omitted);
         }
-        // Результат пропущенного шага модели больше не виден: повторить такой вызов можно.
-        int visibleFrom = omitted;
-        seen.values().removeIf(step -> step < visibleFrom);
+        // Обрезка меняет только представление: выполненные операции не забываются.
+        firstVisibleStep = omitted;
         List<Object> fixed = extra;
         RequestBudget.Fitted fitted = RequestBudget.fit(history, part -> RequestBudget.size(connection(), part, fixed, tools), budget);
         if (fitted.trimmed() && !fitted.notice().equals(trimmed)) {
@@ -183,21 +180,6 @@ final class AgentLoop {
         return new Prepared(fitted.history(), extra);
     }
 
-    /** Вызовы и результаты шагов в формате протокола; у первых {@code omitted} шагов — без результатов. */
-    private List<Object> extra(int omitted) {
-        List<Object> extra = new ArrayList<>();
-        for (int i = 0; i < steps.size(); i++) {
-            Step step = steps.get(i);
-            extra.add(adapter.assistantMessage(step.reply()));
-            List<ProtocolAdapter.ToolResult> results = step.results();
-            if (i < omitted) {
-                results = results.stream().map(result -> new ProtocolAdapter.ToolResult(result.call(), OMITTED, false)).toList();
-            }
-            extra.addAll(adapter.toolResults(results));
-        }
-        return extra;
-    }
-
     /**
      * Запрос к модели. Если сервер отклонил первый запрос из-за
      * инструментов — сначала без инструментов MCP-серверов (часто виновата
@@ -205,6 +187,7 @@ final class AgentLoop {
      */
     private ModelReply request() throws Exception {
         while (true) {
+            checkCancelled();
             try {
                 Prepared request = prepare();
                 ModelReply reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
@@ -220,7 +203,7 @@ final class AgentLoop {
                     shrink++;
                     continue;
                 }
-                if (!e.rejectsTools() || tools.isEmpty() || !steps.isEmpty()) {
+                if (!e.rejectsTools() || tools.isEmpty() || !transcript.isEmpty()) {
                     throw e;
                 }
                 boolean anthropic = base.protocol() == Protocol.ANTHROPIC;
@@ -272,32 +255,67 @@ final class AgentLoop {
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
         String summary = tool.summary(input);
-        String key = call.name() + " " + Json.write(input);
-        if (seen.containsKey(key)) {
-            onTool.accept(ToolUse.failed(call.id(), call.name(), summary, ToolUse.Problem.REPEATED, ""));
-            return new ProtocolAdapter.ToolResult(call, REPEATED, true);
+        ToolExecutionLedger.Key key = ToolExecutionLedger.key(call.name(), input);
+        ToolExecutionLedger.Decision decision = ledger.decide(key, firstVisibleStep);
+        if (decision.action() != ToolExecutionLedger.Action.RUN) {
+            return previous(call, summary, decision, onTool);
         }
+        checkCancelled();
         if (tool.needsApproval()) {
             ToolUse waiting = new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.AWAITING);
             onTool.accept(waiting);
-            ToolApprover.Decision decision = decide(waiting, call.arguments());
-            if (decision == ToolApprover.Decision.DENY) {
+            ToolApprover.Decision approval = decide(waiting, call.arguments());
+            checkCancelled();
+            if (approval == ToolApprover.Decision.DENY) {
+                ledger.denied(key, transcript.size());
                 onTool.accept(ToolUse.failed(call.id(), call.name(), summary, ToolUse.Problem.DENIED, ""));
                 return new ProtocolAdapter.ToolResult(call, "Пользователь отклонил вызов этого инструмента. Не вызывай его"
                         + " повторно с теми же аргументами; объясни, что хотел сделать, или ответь без него.", true);
             }
         }
         onTool.accept(new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.RUNNING));
-        seen.put(key, steps.size());
+        checkCancelled();
+        ledger.started(key, tool, transcript.size());
         try {
             Tool.Result output = tool.call(input);
+            ledger.succeeded(key, output.text());
             onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));
             return new ProtocolAdapter.ToolResult(call, output.text(), false);
         } catch (ToolException | RuntimeException e) {
             String error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             ToolUse.Problem problem = e instanceof ToolException failure ? failure.problem() : ToolUse.Problem.FAILED;
+            ledger.failed(key, error, problem);
             onTool.accept(ToolUse.failed(call.id(), call.name(), summary, problem, error));
             return new ProtocolAdapter.ToolResult(call, error, true);
+        }
+    }
+
+    /** Повтор показывает подтверждённый результат, но не воспроизводит побочные эффекты и вложения. */
+    private ProtocolAdapter.ToolResult previous(ToolCall call, String summary, ToolExecutionLedger.Decision decision,
+            Consumer<ToolUse> onTool) {
+        if (decision.action() == ToolExecutionLedger.Action.REPLAY) {
+            String outcome = "результат прежнего вызова, повторно не выполнялся";
+            onTool.accept(new ToolUse(call.id(), call.name(), summary, outcome, ToolUse.Status.DONE));
+            return new ProtocolAdapter.ToolResult(call, "Операция уже была выполнена в этом ответе; повторно не выполнялась."
+                    + " Сохранённый результат того вызова (не проверка текущего состояния):\n" + decision.previous().text(), false);
+        }
+        String text = switch (decision.action()) {
+            case DENIED -> ToolExecutionLedger.DENIED;
+            case UNCERTAIN -> ToolExecutionLedger.UNCERTAIN + "\nПредыдущая ошибка: " + decision.previous().text();
+            case FAILED -> "Повтор чтения не выполнен: прежняя ошибка требует других аргументов или исчерпан лимит"
+                    + " повторов временной ошибки.\n" + decision.previous().text();
+            default -> REPEATED;
+        };
+        ToolUse.Problem problem = decision.action() == ToolExecutionLedger.Action.DENIED
+                ? ToolUse.Problem.DENIED : ToolUse.Problem.REPEATED;
+        onTool.accept(ToolUse.failed(call.id(), call.name(), summary, problem,
+                decision.action() == ToolExecutionLedger.Action.REPEATED ? "" : text));
+        return new ProtocolAdapter.ToolResult(call, text, true);
+    }
+
+    private void checkCancelled() {
+        if (result.isDone() || Thread.currentThread().isInterrupted()) {
+            throw new CancellationException();
         }
     }
 
