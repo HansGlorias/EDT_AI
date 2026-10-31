@@ -20,8 +20,21 @@ class SlashCommandTest {
     }
 
     @Test
+    void dialogModes() {
+        assertEquals(Optional.of(new SlashCommand.Invocation(SlashCommand.PLAN, "выгрузка в КД")), SlashCommand.parse("/plan выгрузка в КД"));
+        assertEquals(DialogMode.PLAN, SlashCommand.PLAN.mode());
+        assertEquals(SlashCommand.OPTIONS, SlashCommand.of(DialogMode.OPTIONS));
+        assertEquals(null, SlashCommand.REVIEW.mode());
+
+        Attachment plan = DialogMode.PLAN.attachment();
+        assertEquals("режим «План»", plan.label());
+        assertEquals("Режим ответа «План»: " + DialogMode.PLAN.instruction(), plan.promptText());
+        assertEquals(true, DialogMode.PLAN.instruction().contains("файлы не меняй"));
+    }
+
+    @Test
     void matchesByPrefix() {
-        assertEquals(List.of(SlashCommand.ATTACH, SlashCommand.AUTO), SlashCommand.matching("a"));
+        assertEquals(List.of(SlashCommand.ANSWER, SlashCommand.ATTACH, SlashCommand.AUTO), SlashCommand.matching("a"));
         assertEquals(List.of(SlashCommand.values()), SlashCommand.matching(""));
         assertEquals(List.of(), SlashCommand.matching("x"));
         assertEquals(List.of(SlashCommand.READONLY), SlashCommand.matching("READ"));
