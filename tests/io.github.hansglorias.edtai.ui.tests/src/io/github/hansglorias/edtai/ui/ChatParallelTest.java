@@ -33,7 +33,9 @@ class ChatParallelTest extends AbstractChatTest {
             response.end();
         });
         configure(server);
-        return showView();
+        ChatView view = showView();
+        view.showHistoryPanel(true);
+        return view;
     }
 
     @Test
