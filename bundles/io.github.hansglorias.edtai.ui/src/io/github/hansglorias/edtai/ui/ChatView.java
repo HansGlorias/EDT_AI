@@ -848,9 +848,8 @@ public class ChatView extends ViewPart {
         GridLayoutFactory.fillDefaults().numColumns(5).spacing(2, 0).applyTo(actions);
         Chip attachButton = Chip.plus(actions);
         GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.CENTER).applyTo(attachButton);
-        attachButton.setToolTipText("Приложить файлы: текст, документы Word, Excel, PowerPoint, PDF, картинки"
-                + " (скриншот — Ctrl+V, файл можно перетащить)");
-        attachButton.addListener(SWT.Selection, event -> chooseFiles());
+        attachButton.setToolTipText("Добавить файл или модуль проекта");
+        attachButton.addListener(SWT.Selection, event -> showMenu(attachmentMenu(), attachButton));
 
         modeButton = new Chip(actions, true);
         GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.CENTER).applyTo(modeButton);
@@ -2396,6 +2395,18 @@ public class ChatView extends ViewPart {
             showNotice("Этот фрагмент уже прикреплён");
         }
         input.setFocus();
+    }
+
+    Menu attachmentMenu() {
+        Menu menu = new Menu(getSite().getShell(), SWT.POP_UP);
+        MenuItem file = new MenuItem(menu, SWT.PUSH);
+        file.setText("Загрузить файл…");
+        file.setImage(Icons.image(Icons.ATTACH));
+        file.addListener(SWT.Selection, event -> chooseFiles());
+        MenuItem module = new MenuItem(menu, SWT.PUSH);
+        module.setText("Сослаться на модуль проекта…");
+        module.addListener(SWT.Selection, event -> attachModule());
+        return menu;
     }
 
     private void attachModule() {

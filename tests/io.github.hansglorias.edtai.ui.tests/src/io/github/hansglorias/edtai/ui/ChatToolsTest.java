@@ -95,8 +95,11 @@ class ChatToolsTest extends AbstractChatTest {
                 marker.getAttribute(org.eclipse.core.resources.IMarker.MESSAGE, ""));
         Screenshots.capture(view.control(), "review");
 
+        // В тестовом workbench нет BSL-редактора EDT; системная ассоциация
+        // .bsl может открыть внешнюю программу вместо редактора Eclipse.
+        org.eclipse.ui.ide.IDE.setDefaultEditor(file, "org.eclipse.ui.DefaultTextEditor");
         view.linkAction("ОбщийМодуль.Тест.Модуль:2").run();
-        settle();
+        waitUntil(() -> page.getActiveEditor() != null);
         assertEquals(file, page.getActiveEditor().getEditorInput().getAdapter(org.eclipse.core.resources.IFile.class));
 
         view.linkAction(MessageRenderer.CLEAR_MARKERS).run();
