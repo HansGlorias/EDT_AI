@@ -225,13 +225,49 @@ public class ChatView extends ViewPart {
     private final McpHub mcp = new McpHub();
     /** Чаты, для которых уже просили название у модели: по разу. */
     private final Set<String> titleRequested = ConcurrentHashMap.newKeySet();
-    /** Инструменты, которые пользователь разрешил «в этом чате»; сбрасываются «Новым чатом». */
-    private final Set<String> allowedInChat = ConcurrentHashMap.newKeySet();
-    private final ChatSession session = new ChatSession(
+    /**
+     * Живой диалог: сессия и всё, что относится к её ответу. Открыт в виде
+     * один ({@link #current}), остальные живы, пока отвечают в фоне.
+     */
+    private final class Live {
+        final String id;
+        final ChatSession session;
+        /** Инструменты, которые пользователь разрешил «в этом чате». */
+        final Set<String> allowed = ConcurrentHashMap.newKeySet();
+        /** Правки модели в идущем ответе; по его окончании — в {@link ChatView#changes}. */
+        final List<EditTools.Change> pendingChanges = new CopyOnWriteArrayList<>();
+        /**
+         * Файлы {@code src/}, изменённые на диске во время вызовов инструментов
+         * MCP в идущем ответе: EDT-MCP пишет метаданные и модули мимо плагина.
+         * Изменения в остальное время ответа — пользователя или другого чата.
+         */
+        final Set<IFile> touched = ConcurrentHashMap.newKeySet();
+        /** Идёт ли вызов инструмента MCP: только тогда изменения файлов — в {@link #touched}. */
+        final ToolActivity toolActivity = new ToolActivity();
+        /** Что сохранено в файл чата. */
+        volatile List<ChatMessage> saved = List.of();
+        /** Вопрос о разрешении инструмента, пока чат в фоне: задаётся, когда чат откроют. */
+        Runnable approval;
+
+        Live(String id) {
+            this.id = id;
+            session = newSession(this);
+            session.addListener(liveListener(this));
+        }
+    }
+
+    /** Живые диалоги по id: открытый и отвечающие в фоне. */
+    private final Map<String, Live> lives = new ConcurrentHashMap<>();
+    private Live current;
+    /** Сессия открытого диалога. */
+    private ChatSession session;
+
+    private ChatSession newSession(Live chat) {
+        return new ChatSession(
             ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), new ToolSource() {
                 @Override
                 public List<Tool> tools(Consumer<ToolUse> problems) {
-                    return ChatView.this.tools(problems);
+                    return ChatView.this.tools(chat, problems);
                 }
 
                 @Override
@@ -242,7 +278,38 @@ public class ChatView extends ViewPart {
                     }
                     return isReadOnly() ? (brief + "\n\n" + ProjectBrief.READ_ONLY_RULES).strip() : brief;
                 }
-            }, this::approve));
+            }, (use, arguments) -> approve(chat, use, arguments)));
+    }
+
+    /**
+     * Ответ любого живого диалога, открытого или фонового: правки — к ответу,
+     * история — в файл, название; фоновый, закончив, больше не живой.
+     */
+    private ChatListener liveListener(Live chat) {
+        return new ChatListener() {
+            @Override
+            public void busyChanged(boolean busy) {
+                if (busy) {
+                    chat.touched.clear();
+                    lateKey = null;
+                    chat.toolActivity.reset();
+                }
+                inUi(() -> {
+                    if (!busy) {
+                        attachChanges(chat);
+                        if (chat != current) {
+                            chat.approval = null;
+                            saveIfChanged(chat);
+                            lives.remove(chat.id, chat);
+                        }
+                        generateTitle(chat);
+                        deliverCommitMessage(chat);
+                    }
+                    refreshHistoryPanel();
+                });
+            }
+        };
+    }
     private final Path stateLocation = Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath();
     /** Скиллы: встроенные, свои (в рабочей области) и открытых проектов. */
     private final SkillLibrary skills = new SkillLibrary(stateLocation.resolve("skills"), ChatView::projectSkillDirectories,
@@ -253,20 +320,10 @@ public class ChatView extends ViewPart {
     private String chatId;
 
     private Composite root;
-    /** Правки модели в идущем ответе; по его окончании — в {@link #changes}. */
-    private final List<EditTools.Change> pendingChanges = new CopyOnWriteArrayList<>();
     /** Правки модели по ответам (до перезапуска EDT): ключ — {@link #changeKey}. */
     private final Map<String, List<EditTools.Change>> changes = new HashMap<>();
-    /**
-     * Файлы {@code src/}, изменённые на диске во время вызовов инструментов
-     * MCP в идущем ответе: EDT-MCP пишет метаданные и модули мимо плагина.
-     * Изменения в остальное время ответа — пользователя или другого чата.
-     */
-    private final Set<IFile> touched = ConcurrentHashMap.newKeySet();
-    /** Такие файлы по ответам: ключ — {@link #changeKey}. */
+    /** Файлы, изменённые мимо плагина, по ответам: ключ — {@link #changeKey}. */
     private final Map<String, Set<IFile>> touchedByAnswer = new ConcurrentHashMap<>();
-    /** Идёт ли вызов инструмента MCP: только тогда изменения файлов — в {@link #touched}. */
-    private final ToolActivity toolActivity = new ToolActivity();
     /** EDT может дописать файлы чуть позже конца ответа: их — к этому ответу до {@link #lateUntil}. */
     private volatile String lateKey;
     private volatile long lateUntil;
@@ -302,6 +359,8 @@ public class ChatView extends ViewPart {
     private Predicate<String> commitTarget;
     /** Номер ответа на «Сообщение коммита» в истории. */
     private int commitAnswer;
+    /** Чат, в котором просили сообщение коммита. */
+    private Live commitChat;
     private Text input;
     private SendButton sendButton;
     private Label status;
@@ -343,7 +402,6 @@ public class ChatView extends ViewPart {
 
     private final List<Rendered> rendered = new ArrayList<>();
     private boolean refreshScheduled;
-    private List<ChatMessage> saved = List.of();
     private String notice;
 
     /** Отправленные сообщения для ↑ / ↓ в пустом поле; {@code recall} — какое сейчас показано. */
@@ -373,19 +431,11 @@ public class ChatView extends ViewPart {
 
         @Override
         public void busyChanged(boolean busy) {
-            if (busy) {
-                touched.clear();
-                lateKey = null;
-                toolActivity.reset();
-            }
             scheduleRefresh();
             inUi(() -> markBusy(busy));
             if (!busy) {
                 inUi(() -> {
-                    attachChanges();
                     approvalBar.dismiss();
-                    generateTitle();
-                    deliverCommitMessage();
                     sendQueued();
                 });
             }
@@ -393,7 +443,8 @@ public class ChatView extends ViewPart {
     };
 
     private final IResourceChangeListener resourceListener = event -> {
-        boolean busy = session.isBusy();
+        List<Live> answering = lives.values().stream().filter(chat -> chat.session.isBusy()).toList();
+        boolean busy = !answering.isEmpty();
         String late = lateKey;
         if (event.getDelta() == null || !busy && (late == null || System.currentTimeMillis() > lateUntil)) {
             return;
@@ -419,9 +470,8 @@ public class ChatView extends ViewPart {
             return;
         }
         if (busy) {
-            if (toolActivity.active()) {
-                touched.addAll(files);
-            }
+            // Ответ, в котором сейчас вызов MCP, — его правка; нет такого — правка пользователя.
+            answering.stream().filter(chat -> chat.toolActivity.active()).forEach(chat -> chat.touched.addAll(files));
         } else {
             touchedByAnswer.computeIfAbsent(late, key -> ConcurrentHashMap.newKeySet()).addAll(files);
             scheduleRefresh();
@@ -546,14 +596,13 @@ public class ChatView extends ViewPart {
 
         createActions();
 
-        session.addListener(chatListener);
         preferences().addPreferenceChangeListener(preferenceListener);
         ResourcesPlugin.getWorkspace().addResourceChangeListener(resourceListener, IResourceChangeEvent.POST_CHANGE);
         settings = SettingsStore.workspace().load();
         contextBar.setLimit(settings.contextLimit());
         updateModelButton();
-        window = session.provider().window();
         restoreHistory();
+        window = session.provider().window();
         updateStatus();
         updateEmptyState();
         updateSendButton();
@@ -989,17 +1038,9 @@ public class ChatView extends ViewPart {
         };
     }
 
-    /** Новый пустой диалог; текущий остаётся в истории чатов. */
+    /** Новый пустой диалог; текущий остаётся в истории чатов, его ответ идёт дальше в фоне. */
     private void newChat() {
-        session.cancel();
-        saveIfChanged();
-        session.clear();
-        allowedInChat.clear();
-        if (session.provider() instanceof ModelChatProvider provider) {
-            provider.forgetRejections();
-        }
-        chatId = chats.newId();
-        saved = List.of();
+        show(new Live(freshId()), List.of());
         try {
             chats.prune();
         } catch (IOException e) {
@@ -1013,39 +1054,84 @@ public class ChatView extends ViewPart {
         if (id.equals(chatId)) {
             return;
         }
-        if (session.isBusy()) {
-            showNotice("Дождитесь ответа или остановите его, чтобы открыть другой чат");
-            refreshHistoryPanel();
-            return;
-        }
-        saveIfChanged();
         try {
-            List<ChatMessage> messages = chats.file(id).load();
-            session.restore(messages);
-            chatId = id;
-            saved = messages;
-            scrollToEnd = !messages.isEmpty();
-            allowedInChat.clear();
+            Live chat = lives.get(id);
+            if (chat != null) {
+                show(chat, null);
+            } else {
+                show(new Live(id), chats.file(id).load());
+            }
             chats.setCurrent(id);
-            refreshHistoryPanel();
         } catch (IOException e) {
             showNotice("Не удалось открыть чат: " + e.getMessage());
+        }
+        refreshHistoryPanel();
+    }
+
+    /** Id нового чата: нет ни файла, ни живого диалога с таким. */
+    private String freshId() {
+        String id = chats.newId();
+        while (lives.containsKey(id)) {
+            id = id + "-1";
+        }
+        return id;
+    }
+
+    /**
+     * Показывает диалог в виде. Прежний, если отвечает, остаётся живым в
+     * фоне, иначе — сохраняется и отпускается. {@code messages} — история
+     * нового живого диалога из файла; {@code null} — диалог уже живой.
+     */
+    private void show(Live chat, List<ChatMessage> messages) {
+        Live previous = current;
+        if (previous != null) {
+            previous.session.removeListener(chatListener);
+            previous.approval = approvalBar.park();
+            if (!queueBar.isEmpty()) {
+                queueBar.drain().forEach(this::returnToInput);
+                showNotice("Сообщения из очереди вернулись в поле ввода");
+            }
+            if (!previous.session.isBusy()) {
+                saveIfChanged(previous);
+                lives.remove(previous.id, previous);
+            }
+        }
+        if (messages != null) {
+            chat.session.restore(messages);
+            chat.saved = messages;
+        }
+        lives.put(chat.id, chat);
+        current = chat;
+        session = chat.session;
+        chatId = chat.id;
+        session.addListener(chatListener);
+        expandedCalls.clear();
+        recall = -1;
+        scrollToEnd = !session.messages().isEmpty();
+        if (previous != null) {
+            markBusy(session.isBusy());
+            scheduleRefresh();
+            Runnable approval = chat.approval;
+            chat.approval = null;
+            if (approval != null) {
+                approval.run();
+            }
         }
     }
 
     /** Удаляет открытый диалог и начинает новый. */
     private void deleteChat() {
-        session.cancel();
+        Live deleted = current;
+        deleted.session.cancel();
         try {
-            chats.delete(chatId);
+            chats.delete(deleted.id);
         } catch (IOException e) {
             showNotice("Не удалось удалить чат: " + e.getMessage());
             return;
         }
-        saved = List.of();
-        session.clear();
-        allowedInChat.clear();
-        chatId = chats.newId();
+        deleted.session.clear();
+        deleted.saved = List.of();
+        show(new Live(freshId()), List.of());
         refreshHistoryPanel();
     }
 
@@ -1053,7 +1139,8 @@ public class ChatView extends ViewPart {
     private List<ChatMessage> messagesOf(String id) {
         List<ChatMessage> messages;
         try {
-            messages = id.equals(chatId) ? session.messages() : chats.file(id).load();
+            Live chat = lives.get(id);
+            messages = chat != null ? chat.session.messages() : chats.file(id).load();
         } catch (IOException e) {
             showNotice("Не удалось прочитать чат: " + e.getMessage());
             return null;
@@ -1163,42 +1250,51 @@ public class ChatView extends ViewPart {
             return;
         }
         try {
-            historyPanel.show(chats.search(historyPanel.query()), chatId);
+            historyPanel.show(chats.search(historyPanel.query()), chatId, answering());
         } catch (IOException e) {
-            historyPanel.show(List.of(), chatId);
+            historyPanel.show(List.of(), chatId, Set.of());
         }
+    }
+
+    /** Чаты, которые сейчас отвечают. */
+    private Set<String> answering() {
+        return lives.values().stream().filter(chat -> chat.session.isBusy()).map(chat -> chat.id).collect(Collectors.toSet());
     }
 
     // ---- правки модели: дифф и откат ----
 
     private String changeKey(ChatMessage answer) {
-        return chatId + "|" + answer.time();
+        return changeKey(chatId, answer);
+    }
+
+    private static String changeKey(String id, ChatMessage answer) {
+        return id + "|" + answer.time();
     }
 
     /** Ответ закончился: его правки — к последнему ответу ассистента. */
-    private void attachChanges() {
-        if (pendingChanges.isEmpty() && touched.isEmpty()) {
+    private void attachChanges(Live chat) {
+        if (chat.pendingChanges.isEmpty() && chat.touched.isEmpty()) {
             return;
         }
-        List<ChatMessage> messages = session.messages();
+        List<ChatMessage> messages = chat.session.messages();
         for (int i = messages.size() - 1; i >= 0; i--) {
             if (messages.get(i).role() == ChatRole.ASSISTANT) {
-                String key = changeKey(messages.get(i));
-                if (!pendingChanges.isEmpty()) {
-                    changes.computeIfAbsent(key, k -> new ArrayList<>()).addAll(pendingChanges);
+                String key = changeKey(chat.id, messages.get(i));
+                if (!chat.pendingChanges.isEmpty()) {
+                    changes.computeIfAbsent(key, k -> new ArrayList<>()).addAll(chat.pendingChanges);
                 }
-                if (!touched.isEmpty()) {
-                    touchedByAnswer.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).addAll(touched);
+                if (!chat.touched.isEmpty()) {
+                    touchedByAnswer.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).addAll(chat.touched);
                 }
-                if (toolActivity.used()) {
+                if (chat.toolActivity.used()) {
                     lateKey = key;
                     lateUntil = System.currentTimeMillis() + LATE_CHANGES_MS;
                 }
                 break;
             }
         }
-        pendingChanges.clear();
-        touched.clear();
+        chat.pendingChanges.clear();
+        chat.touched.clear();
         scheduleRefresh();
     }
 
@@ -2117,16 +2213,16 @@ public class ChatView extends ViewPart {
      * После ответа: если у чата ещё нет названия, просит модель придумать его
      * по первому обмену — по разу на чат. Пользователь может переименовать.
      */
-    private void generateTitle() {
-        String id = chatId;
-        List<ChatMessage> messages = session.messages();
+    private void generateTitle(Live chat) {
+        String id = chat.id;
+        List<ChatMessage> messages = chat.session.messages();
         boolean answered = messages.stream().anyMatch(message -> message.role() == ChatRole.ASSISTANT
                 && message.status() == Status.DONE && !message.text().isBlank());
         if (!preferences().getBoolean(GENERATE_TITLES, true) || !answered || chats.customTitle(id).isPresent()
                 || !titleRequested.add(id)) {
             return;
         }
-        session.provider().title(messages).whenComplete((title, error) -> inUi(() -> {
+        chat.session.provider().title(messages).whenComplete((title, error) -> inUi(() -> {
             try {
                 if (error == null && title != null && !title.isBlank() && chats.customTitle(id).isEmpty()
                         && Files.exists(chats.file(id).path())) {
@@ -2162,15 +2258,20 @@ public class ChatView extends ViewPart {
             return;
         }
         commitTarget = target;
+        commitChat = current;
         commitAnswer = session.messages().size() + 1;
         submit(COMMIT_PROMPT, List.of(), List.of());
     }
 
     /** Ответ на «Сообщение коммита» готов: текст — в окно коммита. */
-    private void deliverCommitMessage() {
+    private void deliverCommitMessage(Live chat) {
+        if (chat != commitChat) {
+            return;
+        }
         Predicate<String> target = commitTarget;
         commitTarget = null;
-        List<ChatMessage> messages = session.messages();
+        commitChat = null;
+        List<ChatMessage> messages = chat.session.messages();
         if (target == null || commitAnswer >= messages.size()) {
             return;
         }
@@ -2397,8 +2498,8 @@ public class ChatView extends ViewPart {
             }
         }
         // Новый чат сохраняем сразу, с первым вопросом: он появляется в панели чатов, не дожидаясь ответа.
-        if ((idle || saved.isEmpty()) && !messages.equals(saved)) {
-            saveHistory(messages);
+        if ((idle || current.saved.isEmpty()) && !messages.equals(current.saved)) {
+            saveHistory(current, messages);
         }
         updateEmptyState();
         updateSendButton();
@@ -2473,38 +2574,37 @@ public class ChatView extends ViewPart {
     private void restoreHistory() {
         try {
             chats.migrate(stateLocation.resolve(HISTORY_FILE));
-            chatId = chats.current().orElseGet(chats::newId);
-            List<ChatMessage> messages = chats.file(chatId).load();
-            session.restore(messages);
-            saved = messages;
-            scrollToEnd = !messages.isEmpty();
+            String id = chats.current().orElseGet(chats::newId);
+            show(new Live(id), chats.file(id).load());
         } catch (IOException e) {
-            chatId = chats.newId();
+            show(new Live(chats.newId()), List.of());
             Platform.getLog(getClass()).warn("Не удалось восстановить диалог EDT AI из " + chats.file(chatId).path().getParent(), e);
         }
     }
 
-    private void saveIfChanged() {
-        List<ChatMessage> messages = session.messages();
-        if (!messages.equals(saved)) {
-            saveHistory(messages);
+    private void saveIfChanged(Live chat) {
+        List<ChatMessage> messages = chat.session.messages();
+        if (!messages.equals(chat.saved)) {
+            saveHistory(chat, messages);
         }
     }
 
     /** Пустой диалог не хранится: файла нет, в истории его нет. */
-    private void saveHistory(List<ChatMessage> messages) {
-        ChatHistoryFile file = chats.file(chatId);
+    private void saveHistory(Live chat, List<ChatMessage> messages) {
+        ChatHistoryFile file = chats.file(chat.id);
         try {
             if (messages.isEmpty()) {
                 Files.deleteIfExists(file.path());
             } else {
                 file.save(messages);
-                chats.setCurrent(chatId);
+                if (chat == current) {
+                    chats.setCurrent(chat.id);
+                }
             }
         } catch (IOException e) {
             Platform.getLog(getClass()).warn("Не удалось сохранить диалог EDT AI в " + file.path(), e);
         }
-        saved = messages;
+        chat.saved = messages;
         refreshHistoryPanel();
     }
 
@@ -2651,14 +2751,14 @@ public class ChatView extends ViewPart {
      * Вызывается в фоновом потоке ответа: подключение к серверу может занять
      * время.
      */
-    private List<Tool> tools(Consumer<ToolUse> problems) {
+    private List<Tool> tools(Live chat, Consumer<ToolUse> problems) {
         AiSettings current = SettingsStore.workspace().load();
         if (!current.toolsEnabled()) {
             return List.of();
         }
         EclipseWorkspaceFiles files = EclipseWorkspaceFiles.current();
         List<Tool> tools = new ArrayList<>(ProjectTools.create(files, current::contextLimit));
-        tools.addAll(EditTools.create(files, pendingChanges::add));
+        tools.addAll(EditTools.create(files, chat.pendingChanges::add));
         tools.addAll(SkillTools.create(skills));
         tools.addAll(FileTools.create());
         try {
@@ -2674,23 +2774,33 @@ public class ChatView extends ViewPart {
             tools.removeIf(Tool::modifies);
         }
         // Встроенные читающие инструменты файлов не меняют: изменения во время их вызова — не модели.
-        return toolActivity.track(tools, tool -> !builtIn.contains(tool.name()) || tool.modifies());
+        return chat.toolActivity.track(tools, tool -> !builtIn.contains(tool.name()) || tool.modifies());
     }
 
-    /** Вопрос пользователю перед вызовом инструмента MCP-сервера: панель над полем ввода. */
-    private CompletableFuture<Decision> approve(ToolUse use, String arguments) {
-        if (allowedInChat.contains(use.name()) || isAutoApprove()) {
+    /**
+     * Вопрос пользователю перед вызовом инструмента MCP-сервера: панель над
+     * полем ввода; чат в фоне — вопрос ждёт, пока его откроют.
+     */
+    private CompletableFuture<Decision> approve(Live chat, ToolUse use, String arguments) {
+        if (chat.allowed.contains(use.name()) || isAutoApprove()) {
             return CompletableFuture.completedFuture(Decision.ALLOW);
         }
         CompletableFuture<Decision> decision = new CompletableFuture<>();
         decision.thenAccept(value -> {
             if (value == Decision.ALLOW_IN_CHAT) {
-                allowedInChat.add(use.name());
+                chat.allowed.add(use.name());
             } else if (value == Decision.ALWAYS) {
                 inUi(() -> setAutoApprove(true));
             }
         });
-        inUi(() -> approvalBar.ask(use, arguments, decision));
+        inUi(() -> {
+            if (chat == current) {
+                approvalBar.ask(use, arguments, decision);
+            } else if (!decision.isDone()) {
+                chat.approval = () -> approvalBar.ask(use, arguments, decision);
+                showNotice("Чат «" + chats.title(chat.id, chat.session.messages()) + "» ждёт разрешения на " + use.name());
+            }
+        });
         return decision;
     }
 
@@ -2717,10 +2827,10 @@ public class ChatView extends ViewPart {
             renderer.dispose();
         }
         session.removeListener(chatListener);
-        session.cancel();
+        lives.values().forEach(chat -> chat.session.cancel());
         // Закрытие сессий MCP — запросы по сети, не в UI-потоке.
         background("EDT AI: закрытие MCP", mcp::close);
-        saveIfChanged();
+        lives.values().forEach(this::saveIfChanged);
         preferences().removePreferenceChangeListener(preferenceListener);
         ResourcesPlugin.getWorkspace().removeResourceChangeListener(resourceListener);
         super.dispose();

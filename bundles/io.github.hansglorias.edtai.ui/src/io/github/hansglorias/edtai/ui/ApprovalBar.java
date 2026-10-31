@@ -48,6 +48,8 @@ final class ApprovalBar {
     private final Button deny;
     private final Callbacks callbacks;
     private CompletableFuture<Decision> pending;
+    /** Задать открытый вопрос снова: для {@link #park()}. */
+    private Runnable again;
 
     ApprovalBar(Composite parent, Callbacks callbacks) {
         this.callbacks = callbacks;
@@ -97,6 +99,7 @@ final class ApprovalBar {
             pending.complete(Decision.DENY);
         }
         pending = decision;
+        again = () -> ask(use, json, decision);
         message.setText("Модель вызывает инструмент: " + use.summary());
         message.setToolTipText(use.name());
         String shown = json == null ? "" : json.strip();
@@ -116,6 +119,22 @@ final class ApprovalBar {
                 setVisible(false);
             }
         }));
+    }
+
+    /**
+     * Убирает открытый вопрос, не отвечая на него (чат ушёл в фон).
+     *
+     * @return как задать его снова или {@code null}, если вопроса нет
+     */
+    Runnable park() {
+        CompletableFuture<Decision> open = pending;
+        if (open == null || open.isDone()) {
+            return null;
+        }
+        Runnable ask = again;
+        pending = null;
+        setVisible(false);
+        return ask;
     }
 
     /** Снимает вопрос: ответ остановлен. */
