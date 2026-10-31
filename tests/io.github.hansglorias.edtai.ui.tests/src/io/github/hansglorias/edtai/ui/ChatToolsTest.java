@@ -92,6 +92,8 @@ class ChatToolsTest extends AbstractChatTest {
         assertTrue(result.contains("2  \tСообщить(\"Тест\");"), result);
 
         String transcript = view.history().getText();
+        assertTrue(transcript.matches("(?s).*строки 1–3 из 3 · ↑≈\\S+ ↓≈\\S+\n.*"), "токены шага у вызова: " + transcript);
+        transcript = withoutTokens(transcript);
         // Вызов — между текстом шагов, там, где модель его сделала.
         assertTrue(transcript.contains("\nПосмотрю модуль.\n\n" + MessageRenderer.TOOL
                 + "Читает модуль ОбщийМодуль.Тест — строки 1–3 из 3\nВ модуле одна процедура Тест."), transcript);

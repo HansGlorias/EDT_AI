@@ -97,7 +97,9 @@ class AgentLoopTest {
         assertEquals("Смотрю модуль.\n\nВ нём процедура А.", answer);
         assertEquals(String.join("", parts), answer);
         assertEquals(List.of(new ToolUse("call_1", "read_module", "Читает модуль Общий", "", ToolUse.Status.RUNNING),
-                new ToolUse("call_1", "read_module", "Читает модуль Общий", "строки 1–1 из 1", ToolUse.Status.DONE)), uses);
+                new ToolUse("call_1", "read_module", "Читает модуль Общий", "строки 1–1 из 1", ToolUse.Status.DONE)),
+                withoutUsage());
+        assertTrue(uses.stream().allMatch(use -> use.usage() != null && use.usage().estimated()), "токены шага — по оценке");
 
         Map<String, Object> first = Json.parseObject(server.requests().get(0).body());
         assertEquals("read_module", Json.stringAt(first, "tools", 0, "function", "name"));
@@ -373,6 +375,9 @@ class AgentLoopTest {
         assertEquals("Готово.", runWithUsage(Protocol.ANTHROPIC));
 
         assertEquals(List.of(new TokenUsage(150, 20, 170, false), new TokenUsage(350, 30, 210, false)), usages);
+        ToolUse call = uses.get(uses.size() - 1);
+        assertEquals(new TokenUsage(150, 20, 170, false), call.usage(), "у вызова — токены шага, на котором он решён");
+        assertTrue(call.label().endsWith(" · ↑150 ↓20"), call.label());
     }
 
     @Test
@@ -457,7 +462,7 @@ class AgentLoopTest {
         assertEquals("Готово.", run(Protocol.OPENAI_COMPATIBLE));
 
         assertEquals(new ToolUse("call_1", "read_module", "Читает модуль Общий", "повтор того же вызова, не выполнен",
-                ToolUse.Status.FAILED), uses.get(uses.size() - 1));
+                ToolUse.Status.FAILED), uses.get(uses.size() - 1).withUsage(null));
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(2).body()).get("messages"));
         assertEquals("Ошибка: " + AgentLoop.REPEATED, Json.stringAt(messages.get(messages.size() - 1), "content"));
         assertEquals("system", Json.stringAt(messages.get(0), "role"));
@@ -509,6 +514,11 @@ class AgentLoopTest {
         List<Object> messages = chat(Json.parseObject(server.requests().get(2).body()));
         assertEquals(AgentLoop.OMITTED, Json.stringAt(messages.get(2), "content"));
         assertEquals("я".repeat(1500), Json.stringAt(messages.get(4), "content"));
+    }
+
+    /** Вызовы без токенов шага: для сравнения с ожидаемыми. */
+    private List<ToolUse> withoutUsage() {
+        return uses.stream().map(use -> use.withUsage(null)).toList();
     }
 
     private String run(Protocol protocol) throws Exception {

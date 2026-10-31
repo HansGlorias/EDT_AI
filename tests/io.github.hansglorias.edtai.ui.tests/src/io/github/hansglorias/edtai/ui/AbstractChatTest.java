@@ -157,6 +157,11 @@ abstract class AbstractChatTest {
         return "data: {\"choices\":[{\"delta\":{\"content\":" + Json.write(text) + "}}]}\n\n";
     }
 
+    /** Лента без токенов шага у строк вызовов: « · ↑≈1,2k ↓≈30». */
+    static String withoutTokens(String transcript) {
+        return transcript.replaceAll(" · ↑≈?\\S+ ↓≈?\\S+", "");
+    }
+
     static void waitUntil(BooleanSupplier condition) {
         waitUntil(condition, () -> "");
     }
