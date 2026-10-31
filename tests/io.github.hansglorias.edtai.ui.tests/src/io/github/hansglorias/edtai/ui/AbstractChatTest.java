@@ -63,7 +63,6 @@ abstract class AbstractChatTest {
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.DISABLED_SKILLS);
         // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, false);
-        ChatView.resetSessionsForTest();
         deleteChats();
         Platform.addLogListener(logListener);
     }
@@ -85,7 +84,6 @@ abstract class AbstractChatTest {
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.DISABLED_SKILLS);
         // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, false);
-        ChatView.resetSessionsForTest();
         deleteChats();
         Platform.removeLogListener(logListener);
         assertEquals(List.of(), loggedErrors.stream().map(AbstractChatTest::describe).toList());

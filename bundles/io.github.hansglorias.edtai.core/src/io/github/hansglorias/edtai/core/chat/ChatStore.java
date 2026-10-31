@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Stream;
 
 import io.github.hansglorias.edtai.core.json.Json;
@@ -60,11 +59,11 @@ public final class ChatStore {
         return new ChatHistoryFile(directory.resolve(id + SUFFIX));
     }
 
-    /** Новый идентификатор: время создания + случайный суффикс, чтобы два вызова подряд не дали один id. */
+    /** Новый идентификатор: время создания, по нему же сортируются диалоги с одинаковым временем изменения. */
     public String newId() {
         String id = LocalDateTime.now().format(ID);
         while (Files.exists(directory.resolve(id + SUFFIX))) {
-            id = LocalDateTime.now().format(ID) + "-" + Integer.toHexString(ThreadLocalRandom.current().nextInt(0x10000));
+            id = id + "-1";
         }
         return id;
     }

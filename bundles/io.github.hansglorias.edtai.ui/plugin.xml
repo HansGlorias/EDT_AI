@@ -12,7 +12,7 @@
             category="io.github.hansglorias.edtai.ui.category"
             class="io.github.hansglorias.edtai.ui.ChatView"
             icon="icons/edtai.png"
-            allowMultiple="true"
+            allowMultiple="false"
             restorable="true">
       </view>
    </extension>
