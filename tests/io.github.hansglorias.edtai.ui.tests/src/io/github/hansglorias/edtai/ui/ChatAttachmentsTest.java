@@ -101,7 +101,13 @@ class ChatAttachmentsTest extends AbstractChatTest {
         assertTrue(reopened.history().getText().indexOf(MessageRenderer.OBJECT) > 0, "миниатюра после перезапуска");
         List<Attachment> saved = reopened.session().messages().get(0).attachments();
         assertEquals(List.of("log.txt", "image/png"), List.of(saved.get(0).name(), saved.get(1).mediaType()), "вложения сохраняются");
-        assertFalse(reopened.pasteAttachments(), "в буфере нет картинок и файлов — обычная вставка текста");
+        Clipboard clipboard = new Clipboard(reopened.input().getDisplay());
+        try {
+            clipboard.clearContents();
+            assertFalse(reopened.pasteAttachments(), "в буфере нет картинок и файлов — обычная вставка текста");
+        } finally {
+            clipboard.dispose();
+        }
     }
 
     @Test

@@ -99,7 +99,7 @@ class ChatToolsTest extends AbstractChatTest {
         // В тестовой платформе нет BSL-редактора EDT; не использовать ассоциацию .bsl в ОС.
         IDE.setDefaultEditor(file, "org.eclipse.ui.DefaultTextEditor");
         view.linkAction("ОбщийМодуль.Тест.Модуль:2").run();
-        settle();
+        waitUntil(() -> page.getActiveEditor() != null);
         assertEquals(file, page.getActiveEditor().getEditorInput().getAdapter(org.eclipse.core.resources.IFile.class));
 
         view.linkAction(MessageRenderer.CLEAR_MARKERS).run();
