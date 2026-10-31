@@ -79,6 +79,7 @@ class McpHubTest {
         assertEquals("{\"success\": false, \"error\": \"нет проекта\"}", error.getMessage());
         assertEquals(List.of(), problems);
         assertFalse(read.modifies(), "по имени: читающий глагол");
+        assertFalse(read.repeatableRead(), "имя не доказывает безопасность повторного выполнения");
         assertFalse(tools.get("get_edt_version").modifies());
         assertTrue(tools.get("broken").modifies(), "незнакомое имя — правка");
     }
@@ -91,6 +92,8 @@ class McpHubTest {
 
         assertFalse(tools.get("update_index").modifies(), "сервер сказал: только читает");
         assertTrue(tools.get("get_and_fix").modifies(), "сервер сказал: меняет");
+        assertTrue(tools.get("update_index").repeatableRead());
+        assertFalse(tools.get("get_and_fix").repeatableRead());
     }
 
     @Test

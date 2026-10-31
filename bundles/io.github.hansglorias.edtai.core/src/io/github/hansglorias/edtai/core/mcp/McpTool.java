@@ -64,6 +64,11 @@ final class McpTool implements Tool {
         return info.modifies();
     }
 
+    @Override
+    public boolean repeatableRead() {
+        return Boolean.TRUE.equals(info.readOnly());
+    }
+
     /** «MCP «EDT»: read_module_source (ОбщийМодуль.Х)» — значения первых двух аргументов. */
     @Override
     public String summary(Map<String, Object> input) {

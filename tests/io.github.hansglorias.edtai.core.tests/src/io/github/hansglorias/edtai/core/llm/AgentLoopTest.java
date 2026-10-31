@@ -36,6 +36,11 @@ class AgentLoopTest {
     /** Инструмент для тестов: возвращает имя модуля из аргументов. */
     private static final Tool READ = new Tool() {
         @Override
+        public boolean repeatableRead() {
+            return true;
+        }
+
+        @Override
         public String name() {
             return "read_module";
         }
@@ -418,6 +423,11 @@ class AgentLoopTest {
     /** Тот же инструмент, но с подтверждением, как у MCP-серверов. */
     private static Tool approved(Tool tool) {
         return new Tool() {
+            @Override
+            public boolean repeatableRead() {
+                return tool.repeatableRead();
+            }
+
             @Override
             public String name() {
                 return tool.name();

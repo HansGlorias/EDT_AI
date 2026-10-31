@@ -22,6 +22,7 @@ import org.eclipse.jface.action.ActionContributionItem;
 import org.eclipse.jface.action.IContributionItem;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.ui.ide.IDE;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -95,9 +96,8 @@ class ChatToolsTest extends AbstractChatTest {
                 marker.getAttribute(org.eclipse.core.resources.IMarker.MESSAGE, ""));
         Screenshots.capture(view.control(), "review");
 
-        // В тестовом workbench нет BSL-редактора EDT; системная ассоциация
-        // .bsl может открыть внешнюю программу вместо редактора Eclipse.
-        org.eclipse.ui.ide.IDE.setDefaultEditor(file, "org.eclipse.ui.DefaultTextEditor");
+        // В тестовой платформе нет BSL-редактора EDT; не использовать ассоциацию .bsl в ОС.
+        IDE.setDefaultEditor(file, "org.eclipse.ui.DefaultTextEditor");
         view.linkAction("ОбщийМодуль.Тест.Модуль:2").run();
         waitUntil(() -> page.getActiveEditor() != null);
         assertEquals(file, page.getActiveEditor().getEditorInput().getAdapter(org.eclipse.core.resources.IFile.class));

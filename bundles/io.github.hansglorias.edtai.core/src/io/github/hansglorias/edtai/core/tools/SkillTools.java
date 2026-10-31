@@ -29,6 +29,11 @@ public final class SkillTools {
     private record Read(SkillLibrary library) implements Tool {
 
         @Override
+        public boolean repeatableRead() {
+            return true;
+        }
+
+        @Override
         public String name() {
             return "skill";
         }
