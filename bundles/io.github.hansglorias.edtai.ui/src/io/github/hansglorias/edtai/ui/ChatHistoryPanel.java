@@ -6,6 +6,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import org.eclipse.jface.layout.GridDataFactory;
@@ -40,6 +41,8 @@ import io.github.hansglorias.edtai.core.chat.ChatStore;
  */
 final class ChatHistoryPanel {
 
+    /** Вместо времени у чата, который сейчас отвечает (в том числе в фоне). */
+    static final String ANSWERING = "отвечает…";
     private static final DateTimeFormatter TODAY = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter EARLIER = DateTimeFormatter.ofPattern("dd.MM");
     /** Пауза после набора в поиске: каждый поиск читает все диалоги. */
@@ -170,8 +173,8 @@ final class ChatHistoryPanel {
         return search.getText();
     }
 
-    /** Показывает диалоги; {@code current} — открытый. */
-    void show(List<ChatStore.Entry> entries, String current) {
+    /** Показывает диалоги; {@code current} — открытый, {@code answering} — те, что сейчас отвечают. */
+    void show(List<ChatStore.Entry> entries, String current, Set<String> answering) {
         filling = true;
         try {
             table.removeAll();
@@ -180,7 +183,8 @@ final class ChatHistoryPanel {
             for (ChatStore.Entry entry : entries) {
                 LocalDateTime updated = LocalDateTime.ofInstant(entry.updated(), ZoneId.systemDefault());
                 TableItem item = new TableItem(table, SWT.NONE);
-                item.setText(new String[] { entry.title(), (updated.toLocalDate().equals(today) ? TODAY : EARLIER).format(updated) });
+                item.setText(new String[] { entry.title(), answering.contains(entry.id()) ? ANSWERING
+                        : (updated.toLocalDate().equals(today) ? TODAY : EARLIER).format(updated) });
                 ids.add(entry.id());
                 if (entry.id().equals(current)) {
                     table.setSelection(item);
@@ -214,6 +218,15 @@ final class ChatHistoryPanel {
             titles.add(item.getText(0));
         }
         return titles;
+    }
+
+    /** Вторая колонка: время или «отвечает…». */
+    List<String> times() {
+        List<String> times = new ArrayList<>();
+        for (TableItem item : table.getItems()) {
+            times.add(item.getText(1));
+        }
+        return times;
     }
 
     /** «Новый чат» в заголовке панели, как щелчок. */
