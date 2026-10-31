@@ -242,6 +242,14 @@ public final class McpHub implements AutoCloseable {
     public record Health(State state, String text) {
     }
 
+    /** Для кнопки у поля ввода: «MCP 1/2» — подключено из настроенных; не настроены — «MCP». */
+    public static String counter(List<ServerStatus> servers) {
+        if (servers.isEmpty()) {
+            return "MCP";
+        }
+        return "MCP " + servers.stream().filter(server -> server.state() == State.CONNECTED).count() + "/" + servers.size();
+    }
+
     /**
      * Общее состояние: хоть один не подключился — ошибка; все включённые
      * подключены — норма; включённых нет — выключено; иначе не проверялись.

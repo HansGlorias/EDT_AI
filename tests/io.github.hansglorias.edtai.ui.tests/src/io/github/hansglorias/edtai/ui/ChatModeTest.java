@@ -28,21 +28,39 @@ class ChatModeTest extends AbstractChatTest {
         Menu menu = view.modeMenu();
         List<String> items = java.util.Arrays.stream(menu.getItems()).map(MenuItem::getText).filter(text -> !text.isEmpty()).toList();
         menu.dispose();
-        assertEquals(List.of("Обычный вопрос", "Ответ\t/answer", "Варианты\t/options", "Рекомендация\t/recommend", "План\t/plan"), items);
+        assertEquals(List.of("Агент — правит модули и вызывает инструменты; перед инструментами MCP спрашивает",
+                "Авто — правит модули и вызывает инструменты MCP без вопроса", "План — изучает проект и составляет план, ничего не меняет",
+                "Вопросы — только отвечает: проект не меняет, правки предлагает кодом в ответе", "Следующий вопрос:",
+                "    Ответ\t/answer", "    Варианты\t/options", "    Рекомендация\t/recommend", "    План\t/plan"), items);
 
-        view.chooseMode(DialogMode.PLAN);
-        assertEquals("План", view.modeButton().getText());
-        assertTrue(view.status().getText().contains("режим «План»"), view.status().getText());
+        choose(view.modeMenu(), "План\t");
+        assertEquals("Агент · План", view.modeButton().getText());
+        assertTrue(view.status().getText().contains("следующий вопрос — «План»"), view.status().getText());
 
         ask(view, "выгрузка остатков в КД");
         ChatMessage question = view.session().messages().get(0);
         assertEquals("выгрузка остатков в КД", question.text());
         assertEquals(List.of("режим «План»"), question.attachments().stream().map(Attachment::label).toList());
         assertTrue(server.requests().get(0).body().contains("Составь план реализации"), server.requests().get(0).body());
-        assertEquals("Режим", view.modeButton().getText(), "после отправки — снова обычный вопрос");
+        assertEquals("Агент", view.modeButton().getText(), "после отправки — снова обычный вопрос");
 
         ask(view, "ещё вопрос");
         assertTrue(view.session().messages().get(2).attachments().isEmpty());
+    }
+
+    @Test
+    void planModeSendsEveryQuestionWithPlanAndWithoutEditing() throws Exception {
+        ChatView view = view();
+        choose(view.modeMenu(), "План —");
+        assertEquals("План", view.modeButton().getText());
+
+        ask(view, "выгрузка в КД");
+        ask(view, "а с отбором?");
+        assertEquals(List.of("режим «План»"), view.session().messages().get(2).attachments().stream().map(Attachment::label).toList(),
+                "каждый вопрос — с инструкцией плана");
+        String tools = String.valueOf(io.github.hansglorias.edtai.core.json.Json.parseObject(server.requests().get(0).body()).get("tools"));
+        assertTrue(tools.contains("read_module") && !tools.contains("edit_module"), "инструменты правки не передаются: " + tools);
+        view.setAutoApprove(false);
     }
 
     @Test
@@ -51,7 +69,7 @@ class ChatModeTest extends AbstractChatTest {
         view.input().setText("/options");
         view.send();
         assertEquals("", view.input().getText());
-        assertEquals("Варианты", view.modeButton().getText());
+        assertEquals("Агент · Варианты", view.modeButton().getText());
         assertTrue(view.session().messages().isEmpty(), "команда без текста только выбирает режим");
 
         view.chooseMode(null);

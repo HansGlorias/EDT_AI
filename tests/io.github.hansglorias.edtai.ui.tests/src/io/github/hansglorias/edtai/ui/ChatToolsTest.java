@@ -142,17 +142,15 @@ class ChatToolsTest extends AbstractChatTest {
         answering(List.of("Покажу исправление кодом."));
         configure(server);
         ChatView view = showView();
-        assertFalse(view.readOnlyButton().getSelection());
+        assertEquals("Агент", view.modeButton().getText());
 
-        view.readOnlyButton().setSelection(true);
-        view.readOnlyButton().notifyListeners(SWT.Selection, new Event());
-        assertTrue(view.status().getText().startsWith("Только вопросы: модель не меняет проект"), view.status().getText());
-        assertEquals(ChatView.READ_ONLY_MODE, view.readOnlyButton().getText(), "включённый режим подписан");
+        choose(view.modeMenu(), "Вопросы");
+        assertTrue(view.status().getText().startsWith("Режим «Вопросы»: только отвечает"), view.status().getText());
+        assertEquals("Вопросы", view.modeButton().getText(), "режим на кнопке");
         view.setAutoApprove(true);
-        assertEquals("Авто", view.autoButton().getText());
+        assertEquals("Авто", view.modeButton().getText());
         Screenshots.capture(view.control(), "composer-modes");
-        view.setAutoApprove(false);
-        assertEquals("", view.autoButton().getText(), "выключенный — только серый значок");
+        choose(view.modeMenu(), "Вопросы");
         ask(view, "Исправь модуль Тест");
 
         Map<String, Object> request = Json.parseObject(server.requests().get(0).body());
@@ -161,10 +159,11 @@ class ChatToolsTest extends AbstractChatTest {
                 "git_log"), names, "скиллы проект не меняют — остаются");
         String system = Json.stringAt(Json.asList(request.get("messages")).get(0), "content");
         assertTrue(system.contains(ProjectBrief.READ_ONLY_RULES), system);
+        assertTrue(view.session().messages().get(0).attachments().isEmpty(), "«Вопросы» — без инструкции плана");
 
         view.input().setText("/readonly");
         view.send();
-        assertFalse(view.readOnlyButton().getSelection(), "команда переключает режим");
+        assertEquals("Агент", view.modeButton().getText(), "команда переключает режим");
         ask(view, "А теперь исправь");
         Map<String, Object> second = Json.parseObject(server.requests().get(1).body());
         assertTrue(Json.write(second.get("tools")).contains("edit_module"));

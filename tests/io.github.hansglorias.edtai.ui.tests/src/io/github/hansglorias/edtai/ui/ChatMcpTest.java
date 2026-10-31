@@ -161,7 +161,7 @@ class ChatMcpTest extends AbstractChatTest {
         waitUntil(() -> view.approvalBar().isShown());
         click(view.approvalBar().alwaysButton());
         waitUntil(() -> !view.session().isBusy() && view.session().messages().size() == 2);
-        waitUntil(() -> view.status().getText().startsWith("Авторежим включён"), () -> view.status().getText());
+        waitUntil(() -> "Авто".equals(view.modeButton().getText()), () -> view.modeButton().getText());
 
         view.newChatForTest();
         ask(view, "А ещё раз?");

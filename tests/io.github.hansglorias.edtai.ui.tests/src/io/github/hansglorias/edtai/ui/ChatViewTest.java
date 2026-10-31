@@ -88,8 +88,7 @@ class ChatViewTest extends AbstractChatTest {
     @Test
     void sendButtonIsLevelWithModeButtons() throws Exception {
         ChatView view = showView();
-        ToolBar tools = view.autoButton().getParent();
-        Rectangle row = tools.getBounds();
+        Rectangle row = view.modeButton().getParent().getBounds();
         Rectangle send = view.sendButton().getBounds();
 
         assertTrue(send.height <= row.height, "кнопка не выше ряда: " + send + " " + row);
