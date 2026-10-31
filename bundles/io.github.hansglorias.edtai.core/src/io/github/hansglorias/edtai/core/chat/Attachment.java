@@ -46,12 +46,19 @@ public record Attachment(String name, String mediaType, String data) {
     public static final String SKILL = "text/x-skill";
     /** Тип вложения-режима: инструкция режима к вопросу ({@link AgentMode#attachment()}). */
     public static final String MODE = "text/x-mode";
+    /** Находки ревью (JSON, {@code Finding.toJson}): в ленте — карточка, модели не уходит. */
+    public static final String REVIEW = "text/x-review";
     /** Текст, взятый из документа: сам файл модели не уходит. */
     public static final String DOCUMENT = "text/x-document";
 
     /** Инструкция скилла к вопросу: команда {@code /имя}. */
     public static Attachment skill(String name, String instructions) {
         return new Attachment(name, SKILL, instructions);
+    }
+
+    /** Итог ревью: находки для карточки в ленте. */
+    public static Attachment review(String json) {
+        return new Attachment("Ревью", REVIEW, json);
     }
 
     /** Инструкция режима к вопросу: {@link AgentMode#attachment()}. */

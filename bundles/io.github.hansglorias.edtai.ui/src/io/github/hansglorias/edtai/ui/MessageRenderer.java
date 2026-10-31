@@ -32,6 +32,7 @@ import org.eclipse.swt.program.Program;
 
 import io.github.hansglorias.edtai.core.chat.AnswerParts;
 import io.github.hansglorias.edtai.core.chat.Attachment;
+import io.github.hansglorias.edtai.core.review.Finding;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
@@ -119,7 +120,16 @@ final class MessageRenderer {
 
         /** Сохранить файл из ответа модели. */
         void saveAttachment(Attachment file);
+
+        /** Открыть модуль находки ревью на её строке. */
+        void openFinding(Finding finding);
+
+        /** Снять маркеры ревью в редакторе. */
+        void clearReviewMarkers();
     }
+
+    static final String CLEAR_MARKERS = "убрать отметки";
+    private static final String BULLET = "●";
 
     /** Миниатюра картинки в ленте: место под неё — символ с {@link GlyphMetrics}, рисует её вид. */
     record Thumbnail(Image image, int width, int height, Runnable open) implements Runnable {
@@ -210,6 +220,7 @@ final class MessageRenderer {
                 text.append(placeholder);
             }
             changedFiles(message, offset, text, styles);
+            review(message, offset, text, styles, codeRanges);
             files(message, offset, text, styles, codeRanges);
         } else {
             if (message.role() == ChatRole.ERROR) {
@@ -344,11 +355,12 @@ final class MessageRenderer {
      * значок, имя, размер, «Сохранить…», «Открыть». Строка с фоном, как у кода.
      */
     private void files(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles, List<int[]> codeRanges) {
-        if (message.attachments().isEmpty()) {
+        List<Attachment> files = message.attachments().stream().filter(file -> !Attachment.REVIEW.equals(file.mediaType())).toList();
+        if (files.isEmpty()) {
             return;
         }
         text.append('\n');
-        for (Attachment file : message.attachments()) {
+        for (Attachment file : files) {
             text.append('\n');
             int start = offset + text.length();
             Runnable open = () -> callbacks.openAttachment(file);
@@ -371,6 +383,56 @@ final class MessageRenderer {
             link(text, styles, offset, OPEN_FILE, open);
             codeRanges.add(new int[] { start, offset + text.length() });
         }
+    }
+
+    /**
+     * Карточка ревью: итог («Ревью · 2 ошибки · 1 замечание»), затем по
+     * строке на находку — цветная точка серьёзности, «Модуль:строка» ссылкой
+     * на строку и суть; как исправить — подсказкой при наведении.
+     */
+    private void review(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles, List<int[]> codeRanges) {
+        for (Attachment file : message.attachments()) {
+            if (!Attachment.REVIEW.equals(file.mediaType())) {
+                continue;
+            }
+            List<Finding> findings;
+            try {
+                findings = Finding.fromJson(file.data());
+            } catch (RuntimeException e) {
+                continue;
+            }
+            text.append("\n\n");
+            int start = offset + text.length();
+            String head = "Ревью · " + Finding.summary(findings);
+            styles.add(style(offset + text.length(), head.length(), null, SWT.BOLD));
+            text.append(head);
+            if (!findings.isEmpty()) {
+                text.append("   ");
+                link(text, styles, offset, CLEAR_MARKERS, callbacks::clearReviewMarkers);
+            }
+            for (Finding finding : findings) {
+                text.append('\n');
+                styles.add(style(offset + text.length(), BULLET.length(), severityColor(finding.severity()), SWT.NORMAL));
+                text.append(BULLET).append("  ");
+                link(text, styles, offset, finding.module() + ":" + finding.line(), () -> callbacks.openFinding(finding));
+                String title = "  " + finding.title();
+                StyleRange range = style(offset + text.length(), title.length(), null, SWT.NORMAL);
+                if (!finding.fix().isEmpty()) {
+                    range.data = new Hint("Как исправить: " + finding.fix());
+                }
+                styles.add(range);
+                text.append(title);
+            }
+            codeRanges.add(new int[] { start, offset + text.length() });
+        }
+    }
+
+    private Color severityColor(Finding.Severity severity) {
+        return switch (severity) {
+            case ERROR -> errorColor();
+            case WARNING -> new Color(new RGB(0xD9, 0x77, 0x06));
+            case INFO -> new Color(new RGB(0x25, 0x63, 0xEB));
+        };
     }
 
     private void link(StringBuilder text, List<StyleRange> styles, int offset, String label, Runnable run) {
