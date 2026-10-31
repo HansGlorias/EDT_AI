@@ -132,7 +132,6 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.CommitMessage;
 import io.github.hansglorias.edtai.core.chat.AgentMode;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
-import io.github.hansglorias.edtai.core.chat.DialogMode;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
 import io.github.hansglorias.edtai.core.chat.ChatStore;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
@@ -211,7 +210,7 @@ public class ChatView extends ViewPart {
 
     /** Как часто перерисовывать ленту во время стриминга. */
     private static final int REFRESH_DELAY_MS = 40;
-    private static final int MIN_INPUT_LINES = 1;
+    private static final int MIN_INPUT_LINES = 2;
     private static final int MAX_INPUT_LINES = 10;
     private static final int NOTICE_MS = 4000;
     /** Как часто обновлять секунды в строке состояния, пока идёт ответ. */
@@ -375,8 +374,6 @@ public class ChatView extends ViewPart {
     private Chip modelButton;
     /** Режим модели и формат следующего вопроса: одна кнопка слева. */
     private Chip modeButton;
-    /** Режим следующего вопроса; {@code null} — обычный. Сбрасывается после отправки. */
-    private DialogMode mode;
     /** Модели с сервера ({@code /models}); пока не загружены — пусто. */
     private List<String> serverModels = List.of();
     /** Почему список не загрузился; {@code null} — загрузился или не загружали. */
@@ -790,7 +787,7 @@ public class ChatView extends ViewPart {
     private void createInput(Composite parent) {
         composer = new Composite(parent, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(composer);
-        GridLayoutFactory.fillDefaults().margins(COMPOSER_MARGIN, COMPOSER_MARGIN - 3).spacing(0, 0).applyTo(composer);
+        GridLayoutFactory.fillDefaults().margins(COMPOSER_MARGIN, COMPOSER_MARGIN - 3).spacing(0, 5).applyTo(composer);
         composer.addListener(SWT.Paint, this::paintComposer);
 
         input = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
@@ -831,14 +828,11 @@ public class ChatView extends ViewPart {
             }
         });
 
-        Composite actions = new Composite(composer, SWT.NONE);
+        actions = new Composite(composer, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(actions);
         GridLayoutFactory.fillDefaults().numColumns(5).spacing(2, 0).applyTo(actions);
-        ToolBar tools = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
-        GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.CENTER).applyTo(tools);
-
-        ToolItem attachButton = new ToolItem(tools, SWT.PUSH);
-        attachButton.setImage(Icons.image(Icons.ATTACH));
+        Chip attachButton = Chip.plus(actions);
+        GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.CENTER).applyTo(attachButton);
         attachButton.setToolTipText("Приложить файлы: текст, документы Word, Excel, PowerPoint, PDF, картинки"
                 + " (скриншот — Ctrl+V, файл можно перетащить)");
         attachButton.addListener(SWT.Selection, event -> chooseFiles());
@@ -898,6 +892,22 @@ public class ChatView extends ViewPart {
         gc.setForeground(focused ? input.getDisplay().getSystemColor(SWT.COLOR_LIST_SELECTION) : borderColor());
         gc.setLineWidth(focused ? 2 : 1);
         gc.drawRoundRectangle(focused ? 1 : 0, focused ? 1 : 0, size.x - (focused ? 3 : 1), size.y - (focused ? 3 : 1), 10, 10);
+        // Тонкая черта между полем ввода и рядом кнопок — бледнее обводки.
+        if (actions != null && !actions.isDisposed()) {
+            int y = actions.getBounds().y - 3;
+            gc.setLineWidth(1);
+            gc.setForeground(separatorColor());
+            gc.drawLine(COMPOSER_MARGIN, y, size.x - 1 - COMPOSER_MARGIN, y);
+        }
+    }
+
+    /** Ряд кнопок под полем ввода. */
+    private Composite actions;
+
+    private Color separatorColor() {
+        RGB back = input.getBackground().getRGB();
+        RGB fore = input.getForeground().getRGB();
+        return new Color(new RGB((back.red * 7 + fore.red) / 8, (back.green * 7 + fore.green) / 8, (back.blue * 7 + fore.blue) / 8));
     }
 
     private Color borderColor;
@@ -1595,18 +1605,17 @@ public class ChatView extends ViewPart {
             return;
         }
         SlashCommand.Invocation command = SlashCommand.parse(text).orElse(null);
-        if (command != null && command.command().mode() != null && command.argument().isEmpty()) {
-            input.setText("");
-            chooseMode(command.command().mode());
-            return;
+        if (command != null && command.command() == SlashCommand.PLAN) {
+            // «/plan» — режим «План»; с текстом — и сразу вопрос в нём.
+            if (agentMode() != AgentMode.PLAN) {
+                setAgentMode(AgentMode.PLAN);
+            }
+            if (command.argument().isEmpty()) {
+                input.setText("");
+                return;
+            }
         }
-        if (command == null && mode != null) {
-            // Режим — командой перед текстом: так он доживёт и до очереди.
-            text = SlashCommand.of(mode).text() + " " + text;
-            command = SlashCommand.parse(text).orElse(null);
-            chooseMode(null);
-        }
-        if (command != null && command.command().mode() == null && promptOf(command.command()) == null) {
+        if (command != null && command.command() != SlashCommand.PLAN && promptOf(command.command()) == null) {
             input.setText("");
             if (command.command() == SlashCommand.MODEL) {
                 modelCommand(command.argument());
@@ -1664,9 +1673,8 @@ public class ChatView extends ViewPart {
             text = argument.isEmpty() ? "Выполни скилл «" + skill.name() + "»." : argument;
             attachments.add(Attachment.skill(skill.name(), skill.body()));
         }
-        if (command != null && command.command().mode() != null) {
+        if (command != null && command.command() == SlashCommand.PLAN) {
             text = command.argument();
-            attachments.add(command.command().mode().attachment());
         } else if (command != null) {
             if (command.command() == SlashCommand.SKILL) {
                 skills.find("create-skill").ifPresent(guide -> attachments.add(Attachment.skill(guide.name(), guide.body())));
@@ -1674,9 +1682,10 @@ public class ChatView extends ViewPart {
             String prompt = promptOf(command.command());
             text = command.argument().isEmpty() ? prompt : prompt + "\n\n" + command.argument();
         }
-        if (agentMode() == AgentMode.PLAN && attachments.stream().noneMatch(file -> Attachment.MODE.equals(file.mediaType()))) {
+        Attachment instruction = agentMode().attachment();
+        if (instruction != null) {
             // Режим «План»: каждый вопрос — с инструкцией плана (инструменты правки и так не передаются).
-            attachments.add(DialogMode.PLAN.attachment());
+            attachments.add(instruction);
         }
         session.send(text, context, attachments);
     }
@@ -2102,10 +2111,7 @@ public class ChatView extends ViewPart {
         pending.forEach(Runnable::run);
     }
 
-    /**
-     * Меню режима: режим модели ({@link AgentMode}, во всех чатах) и формат
-     * следующего вопроса ({@link DialogMode}, один раз).
-     */
+    /** Меню режима модели ({@link AgentMode}, во всех чатах); выбранный отмечен. */
     Menu modeMenu() {
         Menu menu = new Menu(modeButton);
         AgentMode current = agentMode();
@@ -2119,16 +2125,6 @@ public class ChatView extends ViewPart {
                 }
             });
         }
-        new MenuItem(menu, SWT.SEPARATOR);
-        MenuItem header = new MenuItem(menu, SWT.PUSH);
-        header.setText("Следующий вопрос:");
-        header.setEnabled(false);
-        for (DialogMode each : List.of(DialogMode.ANSWER, DialogMode.OPTIONS, DialogMode.RECOMMEND, DialogMode.PLAN)) {
-            MenuItem item = new MenuItem(menu, SWT.CHECK);
-            item.setText("    " + each.label() + "\t" + SlashCommand.of(each).text());
-            item.setSelection(each == mode);
-            item.addListener(SWT.Selection, event -> chooseMode(item.getSelection() ? each : null));
-        }
         return menu;
     }
 
@@ -2137,23 +2133,13 @@ public class ChatView extends ViewPart {
         return text.isEmpty() ? text : text.substring(0, 1).toLowerCase(Locale.ROOT) + text.substring(1);
     }
 
-    /** Формат следующего вопроса; {@code null} — обычный. */
-    void chooseMode(DialogMode value) {
-        mode = value;
-        updateModeButton();
-        updateStatus();
-        if (value != null) {
-            input.setFocus();
-        }
-    }
-
     /** Режим модели цветом, как у агентов: «Авто» — оранжевый, «План» — бирюзовый, «Вопросы» — синий. */
     private void updateModeButton() {
         if (modeButton == null || modeButton.isDisposed()) {
             return;
         }
         AgentMode agent = agentMode();
-        String text = agent.label() + (mode == null ? "" : " · " + mode.label());
+        String text = agent.label();
         if (!text.equals(modeButton.getText())) {
             modeButton.setText(text);
             modeButton.getParent().layout(true, true);
@@ -2164,9 +2150,8 @@ public class ChatView extends ViewPart {
             case PLAN -> new RGB(0x0D, 0x94, 0x88);
             case ASK -> new RGB(0x25, 0x63, 0xEB);
         });
-        modeButton.setToolTipText("Режим «" + agent.label() + "»: " + agent.description() + "."
-                + (mode == null ? "" : "\nСледующий вопрос — «" + mode.label() + "»: " + mode.instruction())
-                + "\nЩелчок — сменить режим (/auto, /readonly, /plan…)");
+        modeButton.setToolTipText("Режим «" + agent.label() + "»: " + agent.description() + ".\nЩелчок — сменить режим (/auto,"
+                + " /readonly, /plan)");
     }
 
     /** Меню выбора модели под кнопкой. */
@@ -2748,9 +2733,6 @@ public class ChatView extends ViewPart {
             text = "Модель не настроена";
         } else {
             List<String> parts = new ArrayList<>(List.of(settings.model()));
-            if (mode != null) {
-                parts.add("следующий вопрос — «" + mode.label() + "»");
-            }
             ReplyActivity activity = session.activity();
             TokenUsage usage = session.usage();
             if (approvalBar != null && approvalBar.isShown()) {

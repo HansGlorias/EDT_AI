@@ -23,6 +23,8 @@ final class Chip extends Canvas {
     private static final int ARROW = 7;
 
     private final boolean arrow;
+    /** Вместо текста — тонкий «+» (приложить файлы). */
+    private boolean plus;
     private final Font font;
     private String text = "";
     private RGB color;
@@ -47,6 +49,13 @@ final class Chip extends Canvas {
             }
         });
         addListener(SWT.Dispose, event -> font.dispose());
+    }
+
+    /** Кнопка «+»: квадратная, по высоте как надписи. */
+    static Chip plus(Composite parent) {
+        Chip chip = new Chip(parent, false);
+        chip.plus = true;
+        return chip;
     }
 
     String getText() {
@@ -77,6 +86,10 @@ final class Chip extends Canvas {
         try {
             gc.setFont(font);
             Point extent = gc.textExtent(text.isEmpty() ? " " : text);
+            if (plus) {
+                int side = extent.y + 2 * PAD_Y;
+                return new Point(side, side);
+            }
             return new Point(extent.x + 2 * PAD_X + (arrow ? ARROW + 3 : 0), extent.y + 2 * PAD_Y);
         } finally {
             gc.dispose();
@@ -97,6 +110,16 @@ final class Chip extends Canvas {
         }
         RGB textColor = color != null ? color : mix(back, fore, 0.75);
         gc.setForeground(new Color(textColor));
+        if (plus) {
+            int half = Math.max(3, size.y / 4);
+            int cx = size.x / 2;
+            int cy = size.y / 2;
+            gc.setLineWidth(Math.max(1, size.y / 12));
+            gc.setLineCap(SWT.CAP_ROUND);
+            gc.drawLine(cx - half, cy, cx + half, cy);
+            gc.drawLine(cx, cy - half, cx, cy + half);
+            return;
+        }
         gc.setFont(font);
         Point extent = gc.textExtent(text.isEmpty() ? " " : text);
         int y = (size.y - extent.y) / 2;
