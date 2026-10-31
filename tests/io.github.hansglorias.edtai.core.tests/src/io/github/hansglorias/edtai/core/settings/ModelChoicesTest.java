@@ -11,9 +11,19 @@ class ModelChoicesTest {
 
     @Test
     void currentRecentThenServer() {
-        assertEquals(List.of("gpt-4o", "qwen3-32b", "local", "Deepseek-r1", "llama"),
-                ModelChoices.merge("gpt-4o", List.of("qwen3-32b", "gpt-4o", "local", " "), List.of("llama", "qwen3-32b", "Deepseek-r1")));
+        assertEquals(List.of("gpt-4o", "qwen3-32b", "Deepseek-r1", "llama"),
+                ModelChoices.merge("gpt-4o", List.of("qwen3-32b", "gpt-4o", "local", " "), List.of("llama", "qwen3-32b", "Deepseek-r1")),
+                "недавней «local» на сервере нет — не показываем");
+        assertEquals(List.of("gpt-4o", "qwen3-32b", "local"), ModelChoices.merge("gpt-4o", List.of("qwen3-32b", "local"), List.of()),
+                "сервер списка не отдал — недавние все");
         assertEquals(List.of("a"), ModelChoices.merge("", List.of(), List.of("a")));
+    }
+
+    @Test
+    void recentAreKeptPerServer() {
+        assertEquals("recentModels@api.deepseek.com", ModelChoices.recentKey("recentModels", "https://api.deepseek.com/"));
+        assertEquals("recentModels@localhost:11434_v1", ModelChoices.recentKey("recentModels", "http://LocalHost:11434/v1"));
+        assertEquals("recentModels", ModelChoices.recentKey("recentModels", " "));
     }
 
     @Test

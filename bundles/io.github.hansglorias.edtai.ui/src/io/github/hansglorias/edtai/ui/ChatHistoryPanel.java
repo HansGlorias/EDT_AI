@@ -17,6 +17,10 @@ import org.eclipse.jface.viewers.ColumnPixelData;
 import org.eclipse.jface.viewers.ColumnWeightData;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.PaletteData;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
@@ -41,8 +45,11 @@ import io.github.hansglorias.edtai.core.chat.ChatStore;
  */
 final class ChatHistoryPanel {
 
-    /** Вместо времени у чата, который сейчас отвечает (в том числе в фоне). */
-    static final String ANSWERING = "отвечает…";
+    /** Жёлтая точка у чата, который сейчас отвечает (в том числе в фоне). */
+    static final String ANSWERING = "отвечает";
+    /** Точка «ответ готов» у чата, который ответил в фоне. */
+    static final String DONE = "готово";
+    private static final int DOT_SIZE = 12;
     private static final DateTimeFormatter TODAY = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter EARLIER = DateTimeFormatter.ofPattern("dd.MM");
     /** Пауза после набора в поиске: каждый поиск читает все диалоги. */
@@ -73,6 +80,9 @@ final class ChatHistoryPanel {
     private final Callbacks callbacks;
     private final List<String> ids = new ArrayList<>();
     private boolean filling;
+    /** Точки состояния у названия: отвечает — жёлтая, ответил, пока чат не открывали, — зелёная. */
+    private Image answeringDot;
+    private Image doneDot;
     private int searchGeneration;
 
     ChatHistoryPanel(Composite parent, Callbacks callbacks) {
@@ -173,8 +183,11 @@ final class ChatHistoryPanel {
         return search.getText();
     }
 
-    /** Показывает диалоги; {@code current} — открытый, {@code answering} — те, что сейчас отвечают. */
-    void show(List<ChatStore.Entry> entries, String current, Set<String> answering) {
+    /**
+     * Показывает диалоги; {@code current} — открытый, {@code answering} —
+     * те, что сейчас отвечают, {@code unread} — ответили в фоне, ещё не открыты.
+     */
+    void show(List<ChatStore.Entry> entries, String current, Set<String> answering, Set<String> unread) {
         filling = true;
         try {
             table.removeAll();
@@ -183,8 +196,9 @@ final class ChatHistoryPanel {
             for (ChatStore.Entry entry : entries) {
                 LocalDateTime updated = LocalDateTime.ofInstant(entry.updated(), ZoneId.systemDefault());
                 TableItem item = new TableItem(table, SWT.NONE);
-                item.setText(new String[] { entry.title(), answering.contains(entry.id()) ? ANSWERING
-                        : (updated.toLocalDate().equals(today) ? TODAY : EARLIER).format(updated) });
+                item.setText(new String[] { entry.title(), (updated.toLocalDate().equals(today) ? TODAY : EARLIER).format(updated) });
+                item.setImage(0, answering.contains(entry.id()) ? dot(true) : unread.contains(entry.id()) ? dot(false) : null);
+                item.setData(answering.contains(entry.id()) ? ANSWERING : unread.contains(entry.id()) ? DONE : null);
                 ids.add(entry.id());
                 if (entry.id().equals(current)) {
                     table.setSelection(item);
@@ -199,6 +213,40 @@ final class ChatHistoryPanel {
             ((GridData) nothing.getLayoutData()).exclude = !empty;
             panel.layout(true);
         }
+    }
+
+    /** Круглая точка со сглаживанием: прозрачный фон — и в светлой, и в тёмной теме. */
+    private Image dot(boolean answering) {
+        Image image = answering ? answeringDot : doneDot;
+        if (image == null) {
+            RGB color = answering ? new RGB(0xE3, 0xA0, 0x08) : new RGB(0x2D, 0xA4, 0x4E);
+            int size = DOT_SIZE;
+            ImageData data = new ImageData(size, size, 24, new PaletteData(0xFF0000, 0xFF00, 0xFF));
+            double center = (size - 1) / 2.0;
+            double radius = size * 0.34;
+            for (int y = 0; y < size; y++) {
+                for (int x = 0; x < size; x++) {
+                    data.setPixel(x, y, data.palette.getPixel(color));
+                    double distance = Math.hypot(x - center, y - center);
+                    data.setAlpha(x, y, (int) Math.round(255 * Math.max(0, Math.min(1, radius + 0.5 - distance))));
+                }
+            }
+            image = new Image(panel.getDisplay(), data);
+            if (answering) {
+                answeringDot = image;
+            } else {
+                doneDot = image;
+            }
+            panel.addListener(SWT.Dispose, event -> {
+                if (answeringDot != null) {
+                    answeringDot.dispose();
+                }
+                if (doneDot != null) {
+                    doneDot.dispose();
+                }
+            });
+        }
+        return image;
     }
 
     private String selected() {
@@ -218,6 +266,15 @@ final class ChatHistoryPanel {
             titles.add(item.getText(0));
         }
         return titles;
+    }
+
+    /** Точки у названий: {@link #ANSWERING}, {@link #DONE} или {@code null}. */
+    List<String> dots() {
+        List<String> dots = new ArrayList<>();
+        for (TableItem item : table.getItems()) {
+            dots.add((String) item.getData());
+        }
+        return dots;
     }
 
     /** Вторая колонка: время или «отвечает…». */

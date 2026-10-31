@@ -59,7 +59,7 @@ abstract class AbstractChatTest {
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
-        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.RECENT_MODELS);
+        removeRecentModels();
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.DISABLED_SKILLS);
         // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, false);
@@ -80,7 +80,7 @@ abstract class AbstractChatTest {
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
-        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.RECENT_MODELS);
+        removeRecentModels();
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.DISABLED_SKILLS);
         // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, false);
@@ -158,6 +158,16 @@ abstract class AbstractChatTest {
     }
 
     /** Лента без токенов шага у строк вызовов: « · ↑≈1,2k ↓≈30». */
+    /** Недавние модели всех серверов. */
+    static void removeRecentModels() throws Exception {
+        org.osgi.service.prefs.Preferences node = InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
+        for (String key : node.keys()) {
+            if (key.startsWith(ChatView.RECENT_MODELS)) {
+                node.remove(key);
+            }
+        }
+    }
+
     static String withoutTokens(String transcript) {
         return transcript.replaceAll(" · ↑≈?\\S+ ↓≈?\\S+", "");
     }

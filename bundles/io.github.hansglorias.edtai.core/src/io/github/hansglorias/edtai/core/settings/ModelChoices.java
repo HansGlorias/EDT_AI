@@ -19,11 +19,15 @@ public final class ModelChoices {
     private ModelChoices() {
     }
 
-    /** Текущая, недавние, затем остальные с сервера по алфавиту; без повторов и пустых. */
+    /**
+     * Текущая, недавние, затем остальные с сервера по алфавиту; без повторов
+     * и пустых. Если сервер отдал список, недавних, которых в нём нет (с
+     * другого сервера), не показываем.
+     */
     public static List<String> merge(String current, List<String> recent, List<String> server) {
         Set<String> result = new LinkedHashSet<>();
         add(result, current);
-        recent.forEach(name -> add(result, name));
+        recent.stream().filter(name -> server.isEmpty() || server.contains(name)).forEach(name -> add(result, name));
         List<String> rest = new ArrayList<>(server);
         rest.sort(String.CASE_INSENSITIVE_ORDER);
         rest.forEach(name -> add(result, name));
@@ -45,6 +49,16 @@ public final class ModelChoices {
             add(result, line);
         }
         return result.stream().limit(RECENT).toList();
+    }
+
+    /**
+     * Ключ настроек недавних моделей сервера {@code baseUrl}: у каждого
+     * сервера свои. Без «/» — это разделитель узлов настроек Eclipse.
+     */
+    public static String recentKey(String prefix, String baseUrl) {
+        String server = (baseUrl == null ? "" : baseUrl).strip().replaceFirst("^(?i)https?://", "").replaceAll("/+$", "")
+                .toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9.:_-]", "_");
+        return server.isEmpty() ? prefix : prefix + "@" + server;
     }
 
     public static String format(List<String> recent) {

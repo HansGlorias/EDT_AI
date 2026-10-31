@@ -52,20 +52,26 @@ class ChatParallelTest extends AbstractChatTest {
         assertTrue(view.session().messages().isEmpty(), "новый чат пустой, без истории прежнего");
         assertTrue(view.isEmptyStateShown());
         assertNotEquals(first, view.historyFile().path().getFileName().toString());
-        assertEquals(List.of(ChatHistoryPanel.ANSWERING), view.historyPanel().times(), "прежний чат отвечает в фоне");
+        assertEquals(List.of(ChatHistoryPanel.ANSWERING), view.historyPanel().dots(), "жёлтая точка");
 
         ask(view, "быстрый вопрос");
+        Screenshots.capture(view.control(), "parallel-chats");
+        assertEquals(java.util.Arrays.asList(null, ChatHistoryPanel.ANSWERING), view.historyPanel().dots());
         assertEquals(List.of("быстрый вопрос", "Быстрый ответ"), view.session().messages().stream().map(ChatMessage::text).toList());
 
         release.countDown();
-        waitUntil(() -> !view.historyPanel().times().contains(ChatHistoryPanel.ANSWERING), () -> view.historyPanel().times().toString());
+        waitUntil(() -> !view.historyPanel().dots().contains(ChatHistoryPanel.ANSWERING), () -> view.historyPanel().dots().toString());
         waitUntil(() -> load(view, id).size() == 2);
         assertEquals("Ответ на долгий", load(view, id).get(1).text());
+        settle();
+        // Ответивший чат сохранён последним — он первый в списке.
+        assertEquals(java.util.Arrays.asList(ChatHistoryPanel.DONE, null), view.historyPanel().dots(), "ответил в фоне — зелёная точка");
 
         view.openChatForTest(id);
         settle();
         assertEquals(List.of("долгий вопрос", "Ответ на долгий"), view.session().messages().stream().map(ChatMessage::text).toList());
         assertTrue(view.history().getText().contains("Ответ на долгий"));
+        assertTrue(view.historyPanel().dots().stream().allMatch(java.util.Objects::isNull), "открыли — точки нет");
     }
 
     @Test
