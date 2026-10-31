@@ -16,7 +16,7 @@ import org.eclipse.swt.widgets.Event;
  * треугольник, подсветка под указателем. Ниже и уже, чем {@code ToolItem}:
  * ряд под полем ввода не спорит с ним за внимание. Щелчок — {@code SWT.Selection}.
  */
-final class Chip extends Canvas {
+class Chip extends Canvas {
 
     private static final int PAD_X = 6;
     private static final int PAD_Y = 2;
@@ -44,7 +44,7 @@ final class Chip extends Canvas {
         addListener(SWT.MouseExit, event -> setHover(false));
         addListener(SWT.MouseUp, event -> {
             Point size = getSize();
-            if (event.button == 1 && event.x >= 0 && event.y >= 0 && event.x < size.x && event.y < size.y) {
+            if (isEnabled() && event.button == 1 && event.x >= 0 && event.y >= 0 && event.x < size.x && event.y < size.y) {
                 notifyListeners(SWT.Selection, new Event());
             }
         });
@@ -86,7 +86,7 @@ final class Chip extends Canvas {
         try {
             gc.setFont(font);
             Point extent = gc.textExtent(text.isEmpty() ? " " : text);
-            if (plus) {
+            if (iconOnly()) {
                 int side = extent.y + 2 * PAD_Y;
                 return new Point(side, side);
             }
@@ -102,22 +102,16 @@ final class Chip extends Canvas {
         gc.setAntialias(SWT.ON);
         RGB back = getBackground().getRGB();
         RGB fore = getForeground().getRGB();
-        if (hover) {
+        if (hover && isEnabled()) {
             gc.setBackground(new Color(mix(back, fore, 0.1)));
             gc.fillRoundRectangle(0, 0, size.x, size.y, 6, 6);
         } else {
             gc.setBackground(getBackground());
         }
-        RGB textColor = color != null ? color : mix(back, fore, 0.75);
+        RGB textColor = !isEnabled() ? mix(back, fore, 0.3) : color != null ? color : mix(back, fore, 0.75);
         gc.setForeground(new Color(textColor));
-        if (plus) {
-            int half = Math.max(3, size.y / 4);
-            int cx = size.x / 2;
-            int cy = size.y / 2;
-            gc.setLineWidth(Math.max(1, size.y / 12));
-            gc.setLineCap(SWT.CAP_ROUND);
-            gc.drawLine(cx - half, cy, cx + half, cy);
-            gc.drawLine(cx, cy - half, cx, cy + half);
+        if (iconOnly()) {
+            paintIcon(gc, size);
             return;
         }
         gc.setFont(font);
@@ -130,6 +124,20 @@ final class Chip extends Canvas {
             gc.setBackground(new Color(textColor));
             gc.fillPolygon(new int[] { x, mid - 1, x + ARROW - 1, mid - 1, x + (ARROW - 1) / 2, mid + 2 });
         }
+    }
+
+    protected boolean iconOnly() {
+        return plus;
+    }
+
+    protected void paintIcon(GC gc, Point size) {
+        int half = Math.max(3, size.y / 4);
+        int cx = size.x / 2;
+        int cy = size.y / 2;
+        gc.setLineWidth(Math.max(1, size.y / 12));
+        gc.setLineCap(SWT.CAP_ROUND);
+        gc.drawLine(cx - half, cy, cx + half, cy);
+        gc.drawLine(cx, cy - half, cx, cy + half);
     }
 
     private static RGB mix(RGB from, RGB to, double share) {

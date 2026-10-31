@@ -1,54 +1,18 @@
 package io.github.hansglorias.edtai.ui;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
-import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Event;
 
-/**
- * Круглая кнопка у поля ввода, как в чатах: стрелка вверх — отправить,
- * квадрат — остановить ответ. Без текста, подпись — в подсказке. Цвет —
- * фирменный синий EDT AI, без текста для отправки — серый круг.
- */
-final class SendButton extends Canvas {
+/** Кнопка отправки и остановки в том же стиле и размере, что остальные кнопки ввода. */
+final class SendButton extends Chip {
 
-    /** Диаметр, в точках экрана: вровень с кнопками режимов в ряду под полем ввода. */
-    static final int SIZE = 22;
-    private static final RGB ACCENT = new RGB(52, 104, 214);
-    private static final RGB ACCENT_HOVER = new RGB(38, 84, 186);
-
-    private final Color accent;
-    private final Color accentHover;
-    private Color disabled;
-    private RGB disabledFrom;
     private boolean busy;
     private boolean queue;
-    private boolean hover;
 
     SendButton(Composite parent) {
-        super(parent, SWT.DOUBLE_BUFFERED | SWT.NO_FOCUS);
-        accent = new Color(ACCENT);
-        accentHover = new Color(ACCENT_HOVER);
-        addListener(SWT.Paint, this::paint);
-        addListener(SWT.MouseEnter, event -> setHover(true));
-        addListener(SWT.MouseExit, event -> setHover(false));
-        addListener(SWT.MouseUp, event -> {
-            if (event.button == 1 && isEnabled() && getClientArea().contains(event.x, event.y)) {
-                notifyListeners(SWT.Selection, new Event());
-            }
-        });
-        addListener(SWT.Dispose, event -> {
-            accent.dispose();
-            accentHover.dispose();
-            if (disabled != null) {
-                disabled.dispose();
-            }
-        });
-        setCursor(getDisplay().getSystemCursor(SWT.CURSOR_HAND));
+        super(parent, false);
         updateTooltip();
     }
 
@@ -86,57 +50,30 @@ final class SendButton extends Canvas {
         }
     }
 
-    @Override
-    public Point computeSize(int wHint, int hHint, boolean changed) {
-        return new Point(SIZE, SIZE);
-    }
-
     private void updateTooltip() {
         setToolTipText(busy ? "Остановить ответ (Esc)" : queue ? "В очередь: уйдёт после ответа (Enter). Остановить ответ — Esc"
                 : "Отправить (Enter)");
     }
 
-    private void setHover(boolean value) {
-        hover = value;
-        redraw();
+    @Override
+    protected boolean iconOnly() {
+        return true;
     }
 
-    private void paint(Event event) {
-        GC gc = event.gc;
-        gc.setAntialias(SWT.ON);
-        gc.setBackground(getParent().getBackground());
-        gc.fillRectangle(getClientArea());
-        boolean active = isEnabled();
-        gc.setBackground(!active ? disabledColor() : hover ? accentHover : accent);
-        gc.fillOval(0, 0, SIZE - 1, SIZE - 1);
-        Color white = getDisplay().getSystemColor(SWT.COLOR_WHITE);
-        gc.setBackground(white);
-        gc.setForeground(white);
-        int c = (SIZE - 1) / 2;
+    @Override
+    protected void paintIcon(GC gc, Point size) {
+        int cx = size.x / 2;
+        int cy = size.y / 2;
+        int half = Math.max(3, size.y / 4);
         if (busy) {
-            gc.fillRoundRectangle(c - 4, c - 4, 8, 8, 2, 2);
+            gc.setBackground(gc.getForeground());
+            gc.fillRoundRectangle(cx - half, cy - half, 2 * half, 2 * half, 2, 2);
         } else {
-            // Стрелка вверх: стержень и наконечник.
-            gc.setLineWidth(2);
+            gc.setLineWidth(Math.max(1, size.y / 12));
             gc.setLineCap(SWT.CAP_ROUND);
             gc.setLineJoin(SWT.JOIN_ROUND);
-            gc.drawLine(c, c + 4, c, c - 4);
-            gc.drawPolyline(new int[] { c - 4, c, c, c - 4, c + 4, c });
+            gc.drawLine(cx, cy + half, cx, cy - half);
+            gc.drawPolyline(new int[] { cx - half, cy, cx, cy - half, cx + half, cy });
         }
-    }
-
-    /** Серый круг: текст подмешан к фону — виден и в тёмной теме. */
-    private Color disabledColor() {
-        RGB background = getParent().getBackground().getRGB();
-        if (disabled == null || !background.equals(disabledFrom)) {
-            if (disabled != null) {
-                disabled.dispose();
-            }
-            RGB foreground = getParent().getForeground().getRGB();
-            disabled = new Color((background.red * 3 + foreground.red) / 4, (background.green * 3 + foreground.green) / 4,
-                    (background.blue * 3 + foreground.blue) / 4);
-            disabledFrom = background;
-        }
-        return disabled;
     }
 }

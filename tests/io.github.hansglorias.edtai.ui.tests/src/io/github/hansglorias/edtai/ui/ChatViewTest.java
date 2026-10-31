@@ -19,6 +19,8 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.ui.dialogs.PreferencesUtil;
@@ -88,11 +90,46 @@ class ChatViewTest extends AbstractChatTest {
     @Test
     void sendButtonIsLevelWithModeButtons() throws Exception {
         ChatView view = showView();
-        Rectangle row = view.modeButton().getParent().getBounds();
+        waitUntil(() -> view.sendButton().getSize().y > 0);
+        Rectangle mode = view.modeButton().getBounds();
+        Rectangle plus = view.modeButton().getParent().getChildren()[0].getBounds();
         Rectangle send = view.sendButton().getBounds();
 
-        assertTrue(send.height <= row.height, "кнопка не выше ряда: " + send + " " + row);
-        assertTrue(Math.abs((send.y + send.height / 2.0) - (row.y + row.height / 2.0)) <= 1, "по центру ряда: " + send + " " + row);
+        assertEquals(plus.height, send.height);
+        assertEquals(plus.width, send.width);
+        assertEquals(mode.height, send.height);
+        assertEquals(mode.y, send.y);
+        Screenshots.capture(view.control(), "composer-send-disabled");
+        view.input().setText("Вопрос");
+        Screenshots.capture(view.control(), "composer-send");
+        Rectangle ready = view.sendButton().getBounds();
+        view.sendButton().setBusy(true);
+        assertEquals(ready, view.sendButton().getBounds(), "остановка не меняет размер кнопки");
+        Screenshots.capture(view.control(), "composer-stop");
+    }
+
+    @Test
+    void attachmentMenuOffersFileAndProjectModule() throws Exception {
+        ChatView view = showView();
+        Menu menu = view.attachmentMenu();
+        try {
+            assertEquals(List.of("Загрузить файл…", "Сослаться на модуль проекта…"),
+                    java.util.Arrays.stream(menu.getItems()).map(item -> item.getText()).toList());
+            boolean[] opened = { false };
+            view.control().getDisplay().timerExec(100, () -> {
+                for (Shell shell : view.control().getDisplay().getShells()) {
+                    if ("Прикрепить модуль к чату AI".equals(shell.getText())) {
+                        opened[0] = true;
+                        shell.close();
+                    }
+                }
+            });
+            menu.getItem(1).notifyListeners(SWT.Selection, new Event());
+            assertTrue(opened[0], "пункт меню открывает поиск модулей рабочей области");
+            assertTrue(view.contextBar().isEmpty(), "отмена не добавляет контекст");
+        } finally {
+            menu.dispose();
+        }
     }
 
     @Test
