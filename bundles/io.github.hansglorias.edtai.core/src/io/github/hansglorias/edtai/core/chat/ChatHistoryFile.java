@@ -88,6 +88,10 @@ public final class ChatHistoryFile {
                     if (use.at() >= 0) {
                         saved.put("at", use.at());
                     }
+                    if (use.usage() != null) {
+                        saved.put("tokens", Json.object("input", use.usage().input(), "output", use.usage().output(),
+                                "estimated", use.usage().estimated()));
+                    }
                     tools.add(saved);
                 }
                 item.put("tools", tools);
@@ -147,9 +151,17 @@ public final class ChatHistoryFile {
             String status = Json.stringAt(use, "status");
             tools.add(new ToolUse(Json.stringAt(use, "id"), name, Json.stringAt(use, "summary"), Json.stringAt(use, "outcome"),
                     status == null ? ToolUse.Status.DONE : ToolUse.Status.valueOf(status),
-                    Json.at(use, "at") instanceof Number at ? at.intValue() : -1));
+                    Json.at(use, "at") instanceof Number at ? at.intValue() : -1, null, tokens(use)));
         }
         return tools;
+    }
+
+    /** Токены шага у вызова; старые диалоги — без них. */
+    private static TokenUsage tokens(Object use) {
+        if (Json.at(use, "tokens", "input") instanceof Number input && Json.at(use, "tokens", "output") instanceof Number output) {
+            return TokenUsage.step(input.longValue(), output.longValue(), Boolean.TRUE.equals(Json.at(use, "tokens", "estimated")));
+        }
+        return null;
     }
 
     private static List<Attachment> attachments(Object message) throws IOException {

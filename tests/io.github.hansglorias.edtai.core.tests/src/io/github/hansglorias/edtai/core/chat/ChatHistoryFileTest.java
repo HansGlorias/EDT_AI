@@ -57,8 +57,10 @@ class ChatHistoryFileTest {
         List<ChatMessage> messages = List.of(
                 new ChatMessage(ChatRole.USER, "что тут?", Instant.parse("2026-10-28T09:00:00Z"), Status.DONE, List.of(lines, file)),
                 new ChatMessage(ChatRole.ASSISTANT, "ответ", Instant.parse("2026-10-28T09:00:05Z"), Status.DONE, List.of(),
-                        List.of(new ToolUse("call_1", "read_module", "Читает модуль Х", "строки 1–5 из 5", ToolUse.Status.DONE),
-                                new ToolUse("call_2", "search_code", "Ищет «А»", "нет доступа", ToolUse.Status.FAILED))));
+                        List.of(new ToolUse("call_1", "read_module", "Читает модуль Х", "строки 1–5 из 5", ToolUse.Status.DONE)
+                                .withUsage(TokenUsage.step(12_400, 310, false)),
+                                new ToolUse("call_2", "search_code", "Ищет «А»", "нет доступа", ToolUse.Status.FAILED)
+                                        .withUsage(TokenUsage.step(900, 40, true)))));
         ChatHistoryFile history = new ChatHistoryFile(temp.resolve("chat.json"));
 
         history.save(messages);
@@ -66,6 +68,8 @@ class ChatHistoryFileTest {
         List<ChatMessage> loaded = history.load();
         assertEquals(messages, loaded);
         assertEquals("ОбщийМодуль.Цены.Модуль: 10–12 (обрезано)", loaded.get(0).context().get(0).label());
+        assertEquals("Читает модуль Х — строки 1–5 из 5 · ↑12k ↓310", loaded.get(1).tools().get(0).label());
+        assertEquals("Ищет «А» — ошибка: нет доступа · ↑≈900 ↓≈40", loaded.get(1).tools().get(1).label());
         assertFalse(Files.readString(history.path()).contains("\"context\":[]"), "у сообщений без фрагментов поля нет");
     }
 

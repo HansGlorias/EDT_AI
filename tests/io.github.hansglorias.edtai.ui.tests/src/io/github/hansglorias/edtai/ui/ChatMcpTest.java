@@ -97,7 +97,7 @@ class ChatMcpTest extends AbstractChatTest {
 
         assertEquals(List.of("get_edt_version"), calls);
         assertFalse(view.approvalBar().isShown());
-        String transcript = view.history().getText();
+        String transcript = withoutTokens(view.history().getText());
         assertTrue(transcript.contains(MessageRenderer.TOOL + "MCP «EDT»: get_edt_version — Версия EDT\nУ вас EDT 2026.1."), transcript);
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
         assertEquals("## Версия EDT\n2026.1.0", Json.stringAt(messages.get(messages.size() - 1), "content"));
@@ -116,7 +116,8 @@ class ChatMcpTest extends AbstractChatTest {
         view.refresh();
 
         assertEquals(List.of(), calls);
-        assertTrue(view.history().getText().contains("get_edt_version — ошибка: отклонено\nНе дали посмотреть."), view.history().getText());
+        assertTrue(withoutTokens(view.history().getText()).contains("get_edt_version — ошибка: отклонено\nНе дали посмотреть."),
+                view.history().getText());
     }
 
     @Test

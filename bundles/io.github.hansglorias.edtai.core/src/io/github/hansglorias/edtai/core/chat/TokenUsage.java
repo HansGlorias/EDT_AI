@@ -35,6 +35,12 @@ public record TokenUsage(long input, long output, long context, boolean estimate
         return fill + " · ответ ↑" + approx + format(input) + " ↓" + approx + format(output);
     }
 
+    /** Шаг коротко, для строки вызова инструмента: «↑12k ↓310», по оценке — «↑≈12k ↓≈310». */
+    public String describeStep() {
+        String approx = estimated ? "≈" : "";
+        return "↑" + approx + format(input) + " ↓" + approx + format(output);
+    }
+
     /** Занятое окно по оценке, когда ответа в этом чате ещё не было. */
     public static String describeEstimate(long tokens, long window) {
         return "контекст ≈" + format(tokens) + (window > 0 ? " из " + format(window) : "");

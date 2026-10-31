@@ -83,6 +83,8 @@ final class AgentLoop {
     private boolean toolsRejected;
     /** Токены ответа за прошедшие шаги. */
     private TokenUsage usage;
+    /** Токены последнего запроса к модели. */
+    private TokenUsage lastStep;
 
     /**
      * @param source   инструменты; запрашиваются в фоновом потоке перед первым запросом
@@ -147,8 +149,11 @@ final class AgentLoop {
                 return answer.toString().strip();
             }
             List<ProtocolAdapter.ToolResult> results = new ArrayList<>();
+            // Токены шага — у первого его вызова: шаг один, вызовов в нём может быть несколько.
+            TokenUsage tokens = lastStep;
             for (ToolCall call : reply.calls()) {
-                results.add(execute(call));
+                results.add(execute(call, tokens));
+                tokens = null;
             }
             steps.add(new Step(reply, results));
             separate = answer.length() > 0;
@@ -205,6 +210,7 @@ final class AgentLoop {
                 ModelReply reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
                 TokenUsage step = reply.usage() != null ? reply.usage()
                         : estimate(RequestBudget.size(connection(), request.history(), request.extra(), tools), reply);
+                lastStep = step;
                 usage = usage == null ? step : usage.plus(step);
                 onUsage.accept(usage);
                 return reply;
@@ -249,7 +255,8 @@ final class AgentLoop {
         return tools.isEmpty() ? base : base.withSystemPromptPart(ProjectBrief.TOOL_RULES);
     }
 
-    private ProtocolAdapter.ToolResult execute(ToolCall call) {
+    private ProtocolAdapter.ToolResult execute(ToolCall call, TokenUsage tokens) {
+        Consumer<ToolUse> onTool = use -> this.onTool.accept(tokens == null ? use : use.withUsage(tokens));
         Tool tool = tools.stream().filter(candidate -> candidate.name().equals(call.name())).findFirst().orElse(null);
         if (tool == null) {
             String error = "Инструмента «" + call.name() + "» нет";
