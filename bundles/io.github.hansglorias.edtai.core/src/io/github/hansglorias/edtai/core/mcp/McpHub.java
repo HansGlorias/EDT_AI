@@ -304,13 +304,25 @@ public final class McpHub implements AutoCloseable {
     McpCallResult call(McpServer server, String tool, Map<String, Object> arguments) throws ToolException {
         Connection connection = connections.get(server.name());
         if (connection == null) {
-            throw new ToolException("MCP-сервер «" + server.name() + "» отключён");
+            throw new ToolException(ToolUse.Problem.SERVER, "MCP-сервер «" + server.name() + "» отключён");
         }
         try {
             return connection.client().callTool(tool, arguments);
         } catch (McpException e) {
-            throw new ToolException(e.getMessage());
+            throw new ToolException(problem(e), e.getMessage());
         }
+    }
+
+    /** Нет ответа в срок или нет связи с сервером — не ошибка самого инструмента. */
+    static ToolUse.Problem problem(McpException e) {
+        Throwable cause = e.getCause();
+        if (cause instanceof java.net.http.HttpConnectTimeoutException || cause instanceof java.net.ConnectException) {
+            return ToolUse.Problem.SERVER;
+        }
+        if (cause instanceof java.net.http.HttpTimeoutException) {
+            return ToolUse.Problem.TIMEOUT;
+        }
+        return cause instanceof java.io.IOException ? ToolUse.Problem.SERVER : ToolUse.Problem.FAILED;
     }
 
     /** Закрывает подключения: например, после изменения настроек. */

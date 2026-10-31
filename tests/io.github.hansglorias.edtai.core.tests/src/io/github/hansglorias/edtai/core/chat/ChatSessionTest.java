@@ -325,7 +325,7 @@ class ChatSessionTest {
         session.cancel();
         reply.get(TIMEOUT, TimeUnit.SECONDS);
 
-        assertEquals(List.of("Смотрит сведения о проекте — Демо 1.0", "Читает модуль Х — ошибка: прервано"),
+        assertEquals(List.of("Смотрит сведения о проекте — Демо 1.0", "Читает модуль Х — прервано"),
                 last(session).tools().stream().map(ToolUse::label).toList());
         assertEquals("Ответ", last(session).text());
     }

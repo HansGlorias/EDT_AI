@@ -116,7 +116,7 @@ class ChatMcpTest extends AbstractChatTest {
         view.refresh();
 
         assertEquals(List.of(), calls);
-        assertTrue(withoutTokens(view.history().getText()).contains("get_edt_version — ошибка: отклонено\nНе дали посмотреть."),
+        assertTrue(withoutTokens(view.history().getText()).contains("get_edt_version — отклонено\nНе дали посмотреть."),
                 view.history().getText());
     }
 
@@ -190,7 +190,7 @@ class ChatMcpTest extends AbstractChatTest {
         assertFalse(view.approvalBar().isShown());
         assertEquals(List.of(), calls);
         view.refresh();
-        assertTrue(view.history().getText().contains("get_edt_version — ошибка: прервано"), view.history().getText());
+        assertTrue(withoutTokens(view.history().getText()).contains("get_edt_version — прервано"), view.history().getText());
     }
 
     @Test

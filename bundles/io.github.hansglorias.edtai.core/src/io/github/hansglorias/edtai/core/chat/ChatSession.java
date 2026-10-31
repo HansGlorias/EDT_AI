@@ -465,7 +465,7 @@ public final class ChatSession {
     /** Инструмент, который не успел завершиться до конца ответа. */
     private static ToolUse interrupted(ToolUse use) {
         return use.status() == ToolUse.Status.RUNNING || use.status() == ToolUse.Status.AWAITING
-                ? use.withOutcome("прервано", ToolUse.Status.FAILED)
+                ? use.withProblem(ToolUse.Problem.INTERRUPTED, "")
                 : use;
     }
 

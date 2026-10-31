@@ -16,14 +16,41 @@ import java.util.Set;
  * @param file    файл, который вызов приложил к ответу; сессия переносит его в сообщение, в историю не пишется
  * @param usage   токены шага модели, на котором она решила вызвать инструмент (у первого вызова шага);
  *                {@code null} — не известно или не первый вызов шага
+ * @param problem что за ошибка у {@link Status#FAILED}; {@code null} — не известно (старые диалоги),
+ *                тогда в ленте «ошибка: текст»
  */
 public record ToolUse(String id, String name, String summary, String outcome, Status status, int at, Attachment file,
-        TokenUsage usage) {
+        TokenUsage usage, Problem problem) {
 
     public enum Status {
         /** Ждёт, пока пользователь разрешит или отклонит вызов. */
         AWAITING, RUNNING, DONE, FAILED
     }
+
+    /** Почему вызов не удался: коротко в строке ленты, подробности — в {@link #outcome}. */
+    public enum Problem {
+        NO_TOOL("нет такого инструмента"),
+        BAD_ARGUMENTS("неверные аргументы"),
+        REPEATED("повтор, не выполнен"),
+        DENIED("отклонено"),
+        SERVER("сервер недоступен"),
+        TIMEOUT("нет ответа"),
+        FAILED("ошибка инструмента"),
+        INTERRUPTED("прервано");
+
+        private final String label;
+
+        Problem(String label) {
+            this.label = label;
+        }
+
+        public String label() {
+            return label;
+        }
+    }
+
+    /** Сколько текста ошибки в строке ленты; целиком — в подсказке. */
+    public static final int SHORT_OUTCOME = 120;
 
     public ToolUse {
         id = Objects.requireNonNullElse(id, "");
@@ -33,8 +60,18 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         status = Objects.requireNonNullElse(status, Status.DONE);
     }
 
+    public ToolUse(String id, String name, String summary, String outcome, Status status, int at, Attachment file,
+            TokenUsage usage) {
+        this(id, name, summary, outcome, status, at, file, usage, null);
+    }
+
     public ToolUse(String id, String name, String summary, String outcome, Status status, int at, Attachment file) {
         this(id, name, summary, outcome, status, at, file, null);
+    }
+
+    /** Неудачный вызов: {@code detail} — подробности, может быть пустым. */
+    public static ToolUse failed(String id, String name, String summary, Problem problem, String detail) {
+        return new ToolUse(id, name, summary, detail, Status.FAILED, -1, null, null, problem);
     }
 
     public ToolUse(String id, String name, String summary, String outcome, Status status, int at) {
@@ -46,20 +83,20 @@ public record ToolUse(String id, String name, String summary, String outcome, St
     }
 
     public ToolUse withAt(int newAt) {
-        return new ToolUse(id, name, summary, outcome, status, newAt, file, usage);
+        return new ToolUse(id, name, summary, outcome, status, newAt, file, usage, problem);
     }
 
     public ToolUse withFile(Attachment newFile) {
-        return new ToolUse(id, name, summary, outcome, status, at, newFile, usage);
+        return new ToolUse(id, name, summary, outcome, status, at, newFile, usage, problem);
     }
 
     public ToolUse withUsage(TokenUsage newUsage) {
-        return new ToolUse(id, name, summary, outcome, status, at, file, newUsage);
+        return new ToolUse(id, name, summary, outcome, status, at, file, newUsage, problem);
     }
 
-    /** Тот же вызов с другим итогом: токены и место в ленте сохраняются. */
-    public ToolUse withOutcome(String newOutcome, Status newStatus) {
-        return new ToolUse(id, name, summary, newOutcome, newStatus, at, file, usage);
+    /** Тот же вызов неудачным: токены и место в ленте сохраняются. */
+    public ToolUse withProblem(Problem newProblem, String detail) {
+        return new ToolUse(id, name, summary, detail, Status.FAILED, at, file, usage, newProblem);
     }
 
     /** Служебные строки ленты (сервер не подключился, окно модели), а не вызовы инструментов. */
@@ -80,7 +117,23 @@ public record ToolUse(String id, String name, String summary, String outcome, St
             case AWAITING -> summary + " — ждёт разрешения";
             case RUNNING -> summary + "…";
             case DONE -> outcome.isEmpty() ? summary : summary + " — " + outcome;
-            case FAILED -> summary + " — ошибка: " + outcome;
+            case FAILED -> problem == null ? summary + " — ошибка: " + outcome
+                    : summary + " — " + problem.label() + (outcome.isBlank() ? "" : ": " + shortOutcome());
         };
+    }
+
+    /** Первая строка ошибки, не длиннее {@link #SHORT_OUTCOME}. */
+    private String shortOutcome() {
+        String line = outcome.strip().lines().findFirst().orElse("");
+        return line.length() <= SHORT_OUTCOME ? line : line.substring(0, SHORT_OUTCOME - 1).stripTrailing() + "…";
+    }
+
+    /** Подробности ошибки для подсказки, если в строку ленты влезло не всё; иначе {@code null}. */
+    public String details() {
+        if (status != Status.FAILED || outcome.isBlank()) {
+            return null;
+        }
+        String shown = problem == null ? outcome : shortOutcome();
+        return shown.equals(outcome.strip()) ? null : outcome.strip();
     }
 }

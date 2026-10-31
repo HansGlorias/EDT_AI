@@ -88,6 +88,9 @@ public final class ChatHistoryFile {
                     if (use.at() >= 0) {
                         saved.put("at", use.at());
                     }
+                    if (use.problem() != null) {
+                        saved.put("problem", use.problem().name());
+                    }
                     if (use.usage() != null) {
                         saved.put("tokens", Json.object("input", use.usage().input(), "output", use.usage().output(),
                                 "estimated", use.usage().estimated()));
@@ -151,9 +154,20 @@ public final class ChatHistoryFile {
             String status = Json.stringAt(use, "status");
             tools.add(new ToolUse(Json.stringAt(use, "id"), name, Json.stringAt(use, "summary"), Json.stringAt(use, "outcome"),
                     status == null ? ToolUse.Status.DONE : ToolUse.Status.valueOf(status),
-                    Json.at(use, "at") instanceof Number at ? at.intValue() : -1, null, tokens(use)));
+                    Json.at(use, "at") instanceof Number at ? at.intValue() : -1, null, tokens(use), problem(use)));
         }
         return tools;
+    }
+
+    /** Вид ошибки вызова; старые диалоги и неизвестные значения — без него. */
+    private static ToolUse.Problem problem(Object use) {
+        String name = Json.stringAt(use, "problem");
+        for (ToolUse.Problem problem : ToolUse.Problem.values()) {
+            if (problem.name().equals(name)) {
+                return problem;
+            }
+        }
+        return null;
     }
 
     /** Токены шага у вызова; старые диалоги — без них. */

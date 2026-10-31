@@ -709,7 +709,13 @@ public class ChatView extends ViewPart {
                 }
             }
         });
-        history.addListener(SWT.MouseMove, event -> history.setCursor(actionAt(event.x, event.y) != null ? handCursor : null));
+        history.addListener(SWT.MouseMove, event -> {
+            history.setCursor(actionAt(event.x, event.y) != null ? handCursor : null);
+            String hint = hintAt(event.x, event.y);
+            if (!java.util.Objects.equals(hint, history.getToolTipText())) {
+                history.setToolTipText(hint);
+            }
+        });
         // Фон блока кода — на всю ширину ленты, а не только под символами.
         history.addPaintObjectListener(event -> renderer.paintObject(event));
         history.addLineBackgroundListener(event -> {
@@ -2637,6 +2643,16 @@ public class ChatView extends ViewPart {
         }
         StyleRange style = history.getStyleRangeAtOffset(offset);
         return style != null && style.data instanceof Runnable action ? action : null;
+    }
+
+    /** Подсказка под указателем: полный текст ошибки вызова инструмента. */
+    String hintAt(int x, int y) {
+        int offset = history.getOffsetAtPoint(new Point(x, y));
+        if (offset < 0 || offset >= history.getCharCount()) {
+            return null;
+        }
+        StyleRange style = history.getStyleRangeAtOffset(offset);
+        return style != null && style.data instanceof MessageRenderer.Hint hint ? hint.text() : null;
     }
 
     private boolean isScrolledToBottom() {

@@ -5,6 +5,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntSupplier;
 
+import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolException;
@@ -90,7 +91,7 @@ final class McpTool implements Tool {
                 Thread.sleep(hub.buildRetryDelay.toMillis());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new ToolException("остановлено, пока ждали окончания сборки проекта");
+                throw new ToolException(ToolUse.Problem.INTERRUPTED, "остановлено, пока ждали окончания сборки проекта");
             }
             result = hub.call(server, info.name(), input);
         }
