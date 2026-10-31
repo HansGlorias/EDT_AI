@@ -27,6 +27,16 @@ public enum AgentMode {
         return description;
     }
 
+    /** Инструкция к каждому вопросу в режиме «План». */
+    static final String PLAN_INSTRUCTION = "Составь план реализации: цель, допущения, шаги по порядку (какие объекты, модули"
+            + " и процедуры менять), риски, как проверить результат. Изучать проект инструментами можно, но план не выполняй"
+            + " и файлы не меняй.";
+
+    /** Что приложить к вопросу в этом режиме: у «Плана» — его инструкция (в ленте «режим «План»»), иначе {@code null}. */
+    public Attachment attachment() {
+        return this == PLAN ? Attachment.mode(label, PLAN_INSTRUCTION) : null;
+    }
+
     /** Инструменты MCP — без вопроса. */
     public boolean autoApprove() {
         return this == AUTO;

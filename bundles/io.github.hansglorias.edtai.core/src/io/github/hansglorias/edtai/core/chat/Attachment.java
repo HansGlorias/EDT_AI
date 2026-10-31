@@ -44,7 +44,7 @@ public record Attachment(String name, String mediaType, String data) {
 
     /** Тип вложения-скилла: инструкция, которую модель выполняет. */
     public static final String SKILL = "text/x-skill";
-    /** Тип вложения-режима: в каком виде нужен ответ ({@link DialogMode}). */
+    /** Тип вложения-режима: инструкция режима к вопросу ({@link AgentMode#attachment()}). */
     public static final String MODE = "text/x-mode";
     /** Текст, взятый из документа: сам файл модели не уходит. */
     public static final String DOCUMENT = "text/x-document";
@@ -54,7 +54,7 @@ public record Attachment(String name, String mediaType, String data) {
         return new Attachment(name, SKILL, instructions);
     }
 
-    /** Режим вопроса: {@link DialogMode#attachment()}. */
+    /** Инструкция режима к вопросу: {@link AgentMode#attachment()}. */
     public static Attachment mode(String label, String instruction) {
         return new Attachment(label, MODE, instruction);
     }
