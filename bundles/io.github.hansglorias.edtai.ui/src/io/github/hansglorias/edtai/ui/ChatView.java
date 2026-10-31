@@ -130,6 +130,7 @@ import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.CommitMessage;
+import io.github.hansglorias.edtai.core.chat.AgentMode;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.DialogMode;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
@@ -215,12 +216,11 @@ public class ChatView extends ViewPart {
     private static final int NOTICE_MS = 4000;
     /** Как часто обновлять секунды в строке состояния, пока идёт ответ. */
     private static final int TICK_MS = 1000;
-    /** Авторежим: инструменты MCP вызываются без вопроса, во всех чатах. Хранится в настройках рабочей области. */
+    /** Режим модели ({@link AgentMode}), во всех чатах. Хранится в настройках рабочей области. */
+    static final String AGENT_MODE = "agentMode";
+    /** Прежние флажки: из них режим берётся, пока {@link #AGENT_MODE} не сохранён. */
     static final String AUTO_APPROVE = "autoApproveTools";
-    static final String AUTO_MODE = "Авторежим";
-    /** Только вопросы: инструменты, меняющие проект, модели не передаются. Хранится в настройках рабочей области. */
     static final String READ_ONLY = "readOnlyMode";
-    static final String READ_ONLY_MODE = "Только вопросы";
 
     /** Подключения к MCP-серверам из настроек. */
     private final McpHub mcp = new McpHub();
@@ -369,12 +369,12 @@ public class ChatView extends ViewPart {
     private SendButton sendButton;
     private Label status;
     private Cursor handCursor;
-    private ToolItem autoButton;
-    private ToolItem mcpButton;
+    /** «MCP 1/2»: подключено серверов из настроенных; щелчок — /mcp. */
+    private Chip mcpButton;
     /** Выбор модели справа в поле ввода, рядом с «Отправить». */
-    private ToolItem modelButton;
-    /** Режим следующего вопроса: кнопка рядом с моделью. */
-    private ToolItem modeButton;
+    private Chip modelButton;
+    /** Режим модели и формат следующего вопроса: одна кнопка слева. */
+    private Chip modeButton;
     /** Режим следующего вопроса; {@code null} — обычный. Сбрасывается после отправки. */
     private DialogMode mode;
     /** Модели с сервера ({@code /models}); пока не загружены — пусто. */
@@ -389,7 +389,6 @@ public class ChatView extends ViewPart {
     static final String RECENT_MODELS = "recentModels";
     /** Выключенные скиллы: имена через перевод строки. */
     static final String DISABLED_SKILLS = "disabledSkills";
-    private ToolItem readOnlyButton;
     private InputAssist inputAssist;
     /** Вкладка вида помечена как занятая (идёт ответ). */
     private boolean busyShown;
@@ -509,7 +508,7 @@ public class ChatView extends ViewPart {
             });
         }
         contextBar.setLimit(settings.contextLimit());
-        updateModeButtons();
+        updateModeButton();
         updateMcpButton();
         updateModelButton();
         if (!modelsFor.equals(modelsKey())) {
@@ -791,7 +790,7 @@ public class ChatView extends ViewPart {
     private void createInput(Composite parent) {
         composer = new Composite(parent, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(composer);
-        GridLayoutFactory.fillDefaults().margins(COMPOSER_MARGIN, COMPOSER_MARGIN - 2).spacing(0, 2).applyTo(composer);
+        GridLayoutFactory.fillDefaults().margins(COMPOSER_MARGIN, COMPOSER_MARGIN - 3).spacing(0, 0).applyTo(composer);
         composer.addListener(SWT.Paint, this::paintComposer);
 
         input = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
@@ -834,9 +833,9 @@ public class ChatView extends ViewPart {
 
         Composite actions = new Composite(composer, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(actions);
-        GridLayoutFactory.fillDefaults().numColumns(3).applyTo(actions);
+        GridLayoutFactory.fillDefaults().numColumns(5).spacing(2, 0).applyTo(actions);
         ToolBar tools = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
-        GridDataFactory.fillDefaults().grab(true, false).align(SWT.BEGINNING, SWT.CENTER).applyTo(tools);
+        GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.CENTER).applyTo(tools);
 
         ToolItem attachButton = new ToolItem(tools, SWT.PUSH);
         attachButton.setImage(Icons.image(Icons.ATTACH));
@@ -844,61 +843,26 @@ public class ChatView extends ViewPart {
                 + " (скриншот — Ctrl+V, файл можно перетащить)");
         attachButton.addListener(SWT.Selection, event -> chooseFiles());
 
-        autoButton = new ToolItem(tools, SWT.CHECK);
-        autoButton.setToolTipText(AUTO_MODE + ": модель вызывает инструменты MCP без вопроса (правка модулей и git — всегда без"
-                + " вопроса). Команда /auto");
-        autoButton.addListener(SWT.Selection, event -> setAutoApprove(autoButton.getSelection()));
+        modeButton = new Chip(actions, true);
+        GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.CENTER).applyTo(modeButton);
+        modeButton.addListener(SWT.Selection, event -> showMenu(modeMenu(), modeButton));
+        updateModeButton();
 
-        readOnlyButton = new ToolItem(tools, SWT.CHECK);
-        readOnlyButton.setToolTipText(READ_ONLY_MODE + ": модель только отвечает, инструменты правки (edit_module, git_restore,"
-                + " меняющие инструменты MCP) ей не передаются. Команда /readonly");
-        readOnlyButton.addListener(SWT.Selection, event -> setReadOnly(readOnlyButton.getSelection()));
-        updateModeButtons();
-
-        new ToolItem(tools, SWT.SEPARATOR);
-        mcpButton = new ToolItem(tools, SWT.PUSH);
-        mcpButton.setText("MCP");
+        mcpButton = new Chip(actions, false);
+        GridDataFactory.fillDefaults().grab(true, false).align(SWT.BEGINNING, SWT.CENTER).applyTo(mcpButton);
         mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
 
-        ToolBar modelBar = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
-        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(modelBar);
-        modeButton = new ToolItem(modelBar, SWT.DROP_DOWN);
-        modeButton.addListener(SWT.Selection, event -> {
-            Menu menu = modeMenu();
-            Rectangle bounds = modeButton.getBounds();
-            menu.setLocation(modeButton.getParent().toDisplay(bounds.x, bounds.y + bounds.height));
-            menu.setVisible(true);
-        });
-        updateModeButton();
-        modelButton = new ToolItem(modelBar, SWT.DROP_DOWN);
+        modelButton = new Chip(actions, true);
+        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(modelButton);
         modelButton.addListener(SWT.Selection, event -> showModelMenu());
         // Список — заранее, пока указатель над кнопкой: к щелчку он обычно уже есть.
-        modelBar.addListener(SWT.MouseEnter, event -> loadModels(false));
+        modelButton.addListener(SWT.MouseEnter, event -> loadModels(false));
         updateModelButton();
 
         sendButton = new SendButton(actions);
         GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(sendButton);
         sendButton.addListener(SWT.Selection, event -> sendOrStop());
         updateInputHeight();
-    }
-
-    /**
-     * Кнопки режимов: включённый — цветной значок с подписью («Авто»,
-     * «Только вопросы»), выключенный — серый значок без подписи.
-     */
-    private void updateModeButtons() {
-        if (autoButton == null || autoButton.isDisposed()) {
-            return;
-        }
-        boolean auto = isAutoApprove();
-        autoButton.setSelection(auto);
-        autoButton.setImage(auto ? Icons.image(Icons.AUTO) : Icons.gray(Icons.AUTO));
-        autoButton.setText(auto ? "Авто" : "");
-        boolean readOnly = isReadOnly();
-        readOnlyButton.setSelection(readOnly);
-        readOnlyButton.setImage(readOnly ? Icons.image(Icons.READ_ONLY) : Icons.gray(Icons.READ_ONLY));
-        readOnlyButton.setText(readOnly ? READ_ONLY_MODE : "");
-        composer.layout(true, true);
     }
 
     /** Отступ содержимого от рамки ввода. */
@@ -1710,6 +1674,10 @@ public class ChatView extends ViewPart {
             String prompt = promptOf(command.command());
             text = command.argument().isEmpty() ? prompt : prompt + "\n\n" + command.argument();
         }
+        if (agentMode() == AgentMode.PLAN && attachments.stream().noneMatch(file -> Attachment.MODE.equals(file.mediaType()))) {
+            // Режим «План»: каждый вопрос — с инструкцией плана (инструменты правки и так не передаются).
+            attachments.add(DialogMode.PLAN.attachment());
+        }
         session.send(text, context, attachments);
     }
 
@@ -1795,8 +1763,8 @@ public class ChatView extends ViewPart {
         switch (command) {
             case NEW -> newChat();
             case ATTACH -> attachModule();
-            case AUTO -> setAutoApprove(!isAutoApprove());
-            case READONLY -> setReadOnly(!isReadOnly());
+            case AUTO -> setAgentMode(agentMode() == AgentMode.AUTO ? AgentMode.AGENT : AgentMode.AUTO);
+            case READONLY -> setAgentMode(agentMode() == AgentMode.ASK ? AgentMode.AGENT : AgentMode.ASK);
             case COMPACT -> compact();
             case MCP -> showMcpStatus();
             case SKILLS -> showSkills();
@@ -1804,15 +1772,25 @@ public class ChatView extends ViewPart {
         }
     }
 
-    private static boolean isAutoApprove() {
-        return preferences().getBoolean(AUTO_APPROVE, false);
+    /** Режим модели: из настроек, у старых рабочих областей — из прежних флажков. */
+    static AgentMode agentMode() {
+        return AgentMode.parse(preferences().get(AGENT_MODE, ""), preferences().getBoolean(AUTO_APPROVE, false),
+                preferences().getBoolean(READ_ONLY, false));
     }
 
+    private static boolean isAutoApprove() {
+        return agentMode().autoApprove();
+    }
+
+    void setAgentMode(AgentMode value) {
+        preferences().put(AGENT_MODE, value.name());
+        updateModeButton();
+        showNotice("Режим «" + value.label() + "»: " + lowerFirst(value.description()));
+    }
+
+    /** «Авто» включить или выключить (кнопка «Всегда» в вопросе, тесты). */
     void setAutoApprove(boolean on) {
-        preferences().putBoolean(AUTO_APPROVE, on);
-        updateModeButtons();
-        showNotice(on ? "Авторежим включён: инструменты MCP вызываются без вопроса"
-                : "Авторежим выключен: перед вызовом инструмента MCP — вопрос");
+        setAgentMode(on ? AgentMode.AUTO : AgentMode.AGENT);
     }
 
     /**
@@ -2049,7 +2027,7 @@ public class ChatView extends ViewPart {
         String text = settings.model().isEmpty() ? "Модель" : ModelChoices.label(settings.model(), 28);
         if (!text.equals(modelButton.getText())) {
             modelButton.setText(text);
-            composer.layout(true, true);
+            modelButton.getParent().layout(true, true);
         }
         modelButton.setToolTipText(settings.model().isEmpty() ? "Модель не выбрана: щелчок — выбрать"
                 : "Модель: " + settings.model() + " · " + host(settings.baseUrl()) + "\nЩелчок — сменить (/model)");
@@ -2124,32 +2102,42 @@ public class ChatView extends ViewPart {
         pending.forEach(Runnable::run);
     }
 
-    /** Меню режимов: обычный вопрос и {@link DialogMode}; выбранный отмечен. */
+    /**
+     * Меню режима: режим модели ({@link AgentMode}, во всех чатах) и формат
+     * следующего вопроса ({@link DialogMode}, один раз).
+     */
     Menu modeMenu() {
-        Menu menu = new Menu(modeButton.getParent());
-        modeItem(menu, null, "Обычный вопрос");
+        Menu menu = new Menu(modeButton);
+        AgentMode current = agentMode();
+        for (AgentMode each : AgentMode.values()) {
+            MenuItem item = new MenuItem(menu, SWT.RADIO);
+            item.setText(each.label() + " — " + lowerFirst(each.description()));
+            item.setSelection(each == current);
+            item.addListener(SWT.Selection, event -> {
+                if (item.getSelection() && agentMode() != each) {
+                    setAgentMode(each);
+                }
+            });
+        }
         new MenuItem(menu, SWT.SEPARATOR);
-        for (DialogMode each : DialogMode.values()) {
-            modeItem(menu, each, each.label() + "\t" + SlashCommand.of(each).text());
+        MenuItem header = new MenuItem(menu, SWT.PUSH);
+        header.setText("Следующий вопрос:");
+        header.setEnabled(false);
+        for (DialogMode each : List.of(DialogMode.ANSWER, DialogMode.OPTIONS, DialogMode.RECOMMEND, DialogMode.PLAN)) {
+            MenuItem item = new MenuItem(menu, SWT.CHECK);
+            item.setText("    " + each.label() + "\t" + SlashCommand.of(each).text());
+            item.setSelection(each == mode);
+            item.addListener(SWT.Selection, event -> chooseMode(item.getSelection() ? each : null));
         }
         return menu;
     }
 
-    private void modeItem(Menu menu, DialogMode value, String text) {
-        MenuItem item = new MenuItem(menu, SWT.RADIO);
-        item.setText(text);
-        item.setSelection(value == mode);
-        if (value != null) {
-            item.setToolTipText(value.instruction());
-        }
-        item.addListener(SWT.Selection, event -> {
-            if (item.getSelection()) {
-                chooseMode(value);
-            }
-        });
+    /** «Правит модули…» → «правит модули…»: в середину фразы; «MCP» и прочие сокращения не трогает. */
+    private static String lowerFirst(String text) {
+        return text.isEmpty() ? text : text.substring(0, 1).toLowerCase(Locale.ROOT) + text.substring(1);
     }
 
-    /** Режим следующего вопроса; {@code null} — обычный. */
+    /** Формат следующего вопроса; {@code null} — обычный. */
     void chooseMode(DialogMode value) {
         mode = value;
         updateModeButton();
@@ -2159,26 +2147,37 @@ public class ChatView extends ViewPart {
         }
     }
 
+    /** Режим модели цветом, как у агентов: «Авто» — оранжевый, «План» — бирюзовый, «Вопросы» — синий. */
     private void updateModeButton() {
         if (modeButton == null || modeButton.isDisposed()) {
             return;
         }
-        String text = mode == null ? "Режим" : mode.label();
+        AgentMode agent = agentMode();
+        String text = agent.label() + (mode == null ? "" : " · " + mode.label());
         if (!text.equals(modeButton.getText())) {
             modeButton.setText(text);
-            modeButton.getParent().getParent().layout(true, true);
+            modeButton.getParent().layout(true, true);
         }
-        modeButton.setToolTipText(mode == null
-                ? "Режим следующего вопроса: ответ, варианты, рекомендация или план. Сейчас — обычный вопрос"
-                : "Режим следующего вопроса «" + mode.label() + "»: " + mode.instruction() + " После отправки — снова обычный");
+        modeButton.setColor(switch (agent) {
+            case AGENT -> null;
+            case AUTO -> new RGB(0xD9, 0x77, 0x06);
+            case PLAN -> new RGB(0x0D, 0x94, 0x88);
+            case ASK -> new RGB(0x25, 0x63, 0xEB);
+        });
+        modeButton.setToolTipText("Режим «" + agent.label() + "»: " + agent.description() + "."
+                + (mode == null ? "" : "\nСледующий вопрос — «" + mode.label() + "»: " + mode.instruction())
+                + "\nЩелчок — сменить режим (/auto, /readonly, /plan…)");
     }
 
     /** Меню выбора модели под кнопкой. */
     private void showModelMenu() {
         loadModels(false);
-        Menu menu = modelMenu();
-        Rectangle bounds = modelButton.getBounds();
-        menu.setLocation(modelButton.getParent().toDisplay(bounds.x, bounds.y + bounds.height));
+        showMenu(modelMenu(), modelButton);
+    }
+
+    /** Меню под кнопкой у поля ввода (над ней, если внизу не хватает места — решает система). */
+    private static void showMenu(Menu menu, Control under) {
+        menu.setLocation(under.toDisplay(0, under.getSize().y));
         menu.setVisible(true);
     }
 
@@ -2274,14 +2273,13 @@ public class ChatView extends ViewPart {
             return;
         }
         McpHub.Health health = McpHub.health(mcp.lastStatus(SettingsStore.workspace().load().mcpServers()));
-        mcpButton.setImage(Icons.image(switch (health.state()) {
-            case CONNECTED -> Icons.STATUS_OK;
-            case FAILED, UNSUPPORTED -> Icons.STATUS_ERROR;
-            case DISABLED, UNKNOWN -> Icons.STATUS_OFF;
-        }));
+        List<McpHub.ServerStatus> servers = mcp.lastStatus(SettingsStore.workspace().load().mcpServers());
+        mcpButton.setText(McpHub.counter(servers));
+        mcpButton.setColor(health.state() == McpHub.State.FAILED || health.state() == McpHub.State.UNSUPPORTED
+                ? new RGB(0xDC, 0x26, 0x26) : null);
         mcpButton.setToolTipText(health.text() + "\nЩелчок — проверить и показать инструменты (/mcp)");
         mcpButton.setData(health.state());
-        composer.layout(true, true);
+        mcpButton.getParent().layout(true, true);
     }
 
     /** При открытии вида — проверка включённых серверов в фоне: индикатор сразу показывает, подключены ли. */
@@ -2327,14 +2325,7 @@ public class ChatView extends ViewPart {
     }
 
     private static boolean isReadOnly() {
-        return preferences().getBoolean(READ_ONLY, false);
-    }
-
-    void setReadOnly(boolean on) {
-        preferences().putBoolean(READ_ONLY, on);
-        updateModeButtons();
-        showNotice(on ? "Только вопросы: модель не меняет проект, правки предлагает кодом в ответе"
-                : "Только вопросы выключено: модель может править модули");
+        return agentMode().readOnly();
     }
 
     /** Добавляет фрагмент на панель над полем ввода и ставит фокус в поле. */
@@ -2758,7 +2749,7 @@ public class ChatView extends ViewPart {
         } else {
             List<String> parts = new ArrayList<>(List.of(settings.model()));
             if (mode != null) {
-                parts.add("режим «" + mode.label() + "»");
+                parts.add("следующий вопрос — «" + mode.label() + "»");
             }
             ReplyActivity activity = session.activity();
             TokenUsage usage = session.usage();
@@ -2773,8 +2764,8 @@ public class ChatView extends ViewPart {
             } else {
                 parts.add(host(settings.baseUrl()));
             }
-            if (isAutoApprove()) {
-                parts.add(AUTO_MODE.toLowerCase(Locale.ROOT));
+            if (agentMode() != AgentMode.AGENT) {
+                parts.add("режим «" + agentMode().label() + "»");
             }
             text = String.join(" · ", parts);
         }
@@ -2998,28 +2989,20 @@ public class ChatView extends ViewPart {
         return sendButton;
     }
 
-    ToolItem autoButton() {
-        return autoButton;
-    }
-
-    ToolItem mcpButton() {
+    Chip mcpButton() {
         return mcpButton;
     }
 
-    ToolItem modeButton() {
+    Chip modeButton() {
         return modeButton;
     }
 
-    ToolItem modelButton() {
+    Chip modelButton() {
         return modelButton;
     }
 
     boolean isEmptyStateShown() {
         return topLayout.topControl == emptyState;
-    }
-
-    ToolItem readOnlyButton() {
-        return readOnlyButton;
     }
 
     Label status() {

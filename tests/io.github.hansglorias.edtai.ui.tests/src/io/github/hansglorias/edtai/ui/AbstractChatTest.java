@@ -59,6 +59,7 @@ abstract class AbstractChatTest {
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AGENT_MODE);
         removeRecentModels();
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.DISABLED_SKILLS);
         // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
@@ -80,6 +81,7 @@ abstract class AbstractChatTest {
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AGENT_MODE);
         removeRecentModels();
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.DISABLED_SKILLS);
         // Название чата — лишний запрос к модели: тесты считают запросы. Проверяется отдельно.
@@ -158,6 +160,21 @@ abstract class AbstractChatTest {
     }
 
     /** Лента без токенов шага у строк вызовов: « · ↑≈1,2k ↓≈30». */
+    /** Пункт меню, текст которого начинается с {@code prefix}, как щелчок. */
+    static void choose(org.eclipse.swt.widgets.Menu menu, String prefix) {
+        for (org.eclipse.swt.widgets.MenuItem item : menu.getItems()) {
+            if (item.getText().strip().startsWith(prefix)) {
+                if ((item.getStyle() & (org.eclipse.swt.SWT.RADIO | org.eclipse.swt.SWT.CHECK)) != 0) {
+                    item.setSelection(!item.getSelection() || (item.getStyle() & org.eclipse.swt.SWT.RADIO) != 0);
+                }
+                item.notifyListeners(org.eclipse.swt.SWT.Selection, new org.eclipse.swt.widgets.Event());
+                menu.dispose();
+                return;
+            }
+        }
+        throw new AssertionError("нет пункта «" + prefix + "»");
+    }
+
     /** Недавние модели всех серверов. */
     static void removeRecentModels() throws Exception {
         org.osgi.service.prefs.Preferences node = InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);

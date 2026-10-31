@@ -282,16 +282,15 @@ class ChatCommandsTest extends AbstractChatTest {
         view.input().setText("/auto");
         view.send();
         assertTrue(autoApprove());
-        assertTrue(view.autoButton().getSelection(), "кнопка у поля ввода нажата");
-        assertTrue(view.status().getText().startsWith("Авторежим включён"), view.status().getText());
+        assertEquals("Авто", view.modeButton().getText(), "режим на кнопке у поля ввода");
+        assertTrue(view.status().getText().startsWith("Режим «Авто»"), view.status().getText());
         view.input().setText("/AUTO");
         view.send();
         assertFalse(autoApprove());
-        assertFalse(view.autoButton().getSelection());
+        assertEquals("Агент", view.modeButton().getText());
 
-        view.autoButton().setSelection(true);
-        view.autoButton().notifyListeners(SWT.Selection, new Event());
-        assertTrue(autoApprove(), "кнопка включает авторежим");
+        choose(view.modeMenu(), "Авто");
+        assertTrue(autoApprove(), "меню кнопки включает «Авто»");
         view.setAutoApprove(false);
     }
 
@@ -340,6 +339,6 @@ class ChatCommandsTest extends AbstractChatTest {
     }
 
     private static boolean autoApprove() {
-        return InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).getBoolean(ChatView.AUTO_APPROVE, false);
+        return ChatView.agentMode().autoApprove();
     }
 }
