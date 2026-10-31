@@ -66,6 +66,53 @@ class ChatToolsTest extends AbstractChatTest {
     }
 
     @Test
+    void reviewFindingsShowAsCardAndMarkers() throws Exception {
+        String findings = "{\"findings\":[{\"module\":\"ОбщийМодуль.Тест\",\"line\":2,\"severity\":\"error\","
+                + "\"title\":\"Сообщить в общем модуле\",\"fix\":\"ОбщегоНазначения.СообщитьПользователю\"}]}";
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
+                        + "\"type\":\"function\",\"function\":{\"name\":\"report_review\",\"arguments\":" + Json.write(findings)
+                        + "}}]}}]}\n\n", "data: [DONE]\n\n"), 5);
+            } else {
+                response.sse(List.of(openAiPart("Одна ошибка."), "data: [DONE]\n\n"), 5);
+            }
+        });
+        configure(server);
+        ChatView view = showView();
+
+        ask(view, "Сделай ревью модуля Тест");
+
+        String transcript = withoutTokens(view.history().getText());
+        assertTrue(transcript.contains("Ревью · 1 ошибка   " + MessageRenderer.CLEAR_MARKERS + "\n●  ОбщийМодуль.Тест.Модуль:2"
+                + "  Сообщить в общем модуле"), transcript);
+        org.eclipse.core.resources.IFile file = project.getFile("src/CommonModules/Тест/Module.bsl");
+        waitUntil(() -> reviewMarkers(file).length == 1);
+        org.eclipse.core.resources.IMarker marker = reviewMarkers(file)[0];
+        assertEquals(2, marker.getAttribute(org.eclipse.core.resources.IMarker.LINE_NUMBER, 0));
+        assertEquals(org.eclipse.core.resources.IMarker.SEVERITY_ERROR, marker.getAttribute(org.eclipse.core.resources.IMarker.SEVERITY, -1));
+        assertEquals("EDT AI: Сообщить в общем модуле. Исправить: ОбщегоНазначения.СообщитьПользователю",
+                marker.getAttribute(org.eclipse.core.resources.IMarker.MESSAGE, ""));
+        Screenshots.capture(view.control(), "review");
+
+        view.linkAction("ОбщийМодуль.Тест.Модуль:2").run();
+        settle();
+        assertEquals(file, page.getActiveEditor().getEditorInput().getAdapter(org.eclipse.core.resources.IFile.class));
+
+        view.linkAction(MessageRenderer.CLEAR_MARKERS).run();
+        waitUntil(() -> reviewMarkers(file).length == 0);
+        page.closeAllEditors(false);
+    }
+
+    private static org.eclipse.core.resources.IMarker[] reviewMarkers(org.eclipse.core.resources.IFile file) {
+        try {
+            return file.findMarkers(ReviewMarkers.TYPE, false, 0);
+        } catch (org.eclipse.core.runtime.CoreException e) {
+            return new org.eclipse.core.resources.IMarker[0];
+        }
+    }
+
+    @Test
     void modelReadsModuleThroughTool() throws Exception {
         server = FakeModelServer.http().handler((request, response) -> {
             if (!request.body().contains("\"role\":\"tool\"")) {
@@ -85,7 +132,7 @@ class ChatToolsTest extends AbstractChatTest {
 
         Map<String, Object> first = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(first.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
-        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "skill", "save_skill", "attach_file", "git_status", "git_diff", "git_log", "git_restore"), names);
+        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "skill", "save_skill", "report_review", "attach_file", "git_status", "git_diff", "git_log", "git_restore"), names);
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
         String result = Json.stringAt(messages.get(messages.size() - 1), "content");
         assertTrue(result.contains("ОбщийМодуль.Тест.Модуль (проект " + PROJECT + ", src/CommonModules/Тест/Module.bsl)"), result);
@@ -155,7 +202,7 @@ class ChatToolsTest extends AbstractChatTest {
 
         Map<String, Object> request = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(request.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
-        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "skill", "save_skill", "attach_file", "git_status", "git_diff",
+        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "skill", "save_skill", "report_review", "attach_file", "git_status", "git_diff",
                 "git_log"), names, "скиллы проект не меняют — остаются");
         String system = Json.stringAt(Json.asList(request.get("messages")).get(0), "content");
         assertTrue(system.contains(ProjectBrief.READ_ONLY_RULES), system);

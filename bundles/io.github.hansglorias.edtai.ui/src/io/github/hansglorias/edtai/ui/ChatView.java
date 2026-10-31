@@ -132,6 +132,7 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.CommitMessage;
 import io.github.hansglorias.edtai.core.chat.AgentMode;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.review.Finding;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
 import io.github.hansglorias.edtai.core.chat.ChatStore;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
@@ -154,6 +155,7 @@ import io.github.hansglorias.edtai.core.tools.ToolException;
 import io.github.hansglorias.edtai.core.tools.GitTools;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
+import io.github.hansglorias.edtai.core.tools.ReviewTools;
 import io.github.hansglorias.edtai.core.tools.SkillTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolActivity;
@@ -184,15 +186,17 @@ public class ChatView extends ViewPart {
     static final String REVIEW_CHANGES = "Ревью моих изменений";
     static final String COMMIT_MESSAGE = "Сообщение коммита";
     static final String REVIEW_PROMPT = "Сделай ревью моих незакоммиченных изменений: посмотри git_status и git_diff, при"
-            + " необходимости прочитай модули целиком. Найди ошибки, пропущенные случаи и нарушения стандартов 1С; по каждой"
-            + " находке — Модуль:строка и как исправить. Если всё хорошо — так и скажи.";
+            + " необходимости прочитай модули целиком. Найди ошибки, пропущенные случаи и нарушения стандартов 1С. Находки"
+            + " передай инструментом report_review (модуль, строка, серьёзность, суть, как исправить), потом коротко итог."
+            + " Если всё хорошо — так и скажи.";
     static final String COMMIT_PROMPT = "Напиши сообщение коммита для моих незакоммиченных изменений (посмотри git_status и"
             + " git_diff) по скиллу commit-message. Только текст сообщения в блоке кода, без пояснений.";
     static final String EXPLAIN_PROMPT = "Объясни этот код: зачем он, что получает и что возвращает, основные шаги, побочные"
             + " эффекты (запись в базу, блокировки, вызовы сервера, транзакции) и неочевидные места. Если код вызывает другие"
             + " методы проекта и без них не понять — прочитай их. Ссылайся на строки: Модуль:строка.";
     static final String REVIEW_CODE_PROMPT = "Сделай ревью этого кода по скиллам bsl-style и code-standards (запросы — по"
-            + " query-style): найденное списком «строка — что не так — как исправить», от важного к мелкому. Код не правь.";
+            + " query-style). Находки передай инструментом report_review (модуль, строка в модуле, серьёзность, суть, как"
+            + " исправить), потом коротко итог. Код не правь.";
     static final String REFACTOR_PROMPT = "Сделай рефакторинг этого кода по скиллу bsl-style: проще и понятнее, поведение не"
             + " меняй. Правь модуль (edit_module), потом кратко перечисли, что изменил. Если правка рискованная — сначала опиши"
             + " её и спроси.";
@@ -695,6 +699,17 @@ public class ChatView extends ViewPart {
             }
 
             @Override
+            public void openFinding(Finding finding) {
+                reveal(ReviewMarkers.file(ResourcesPlugin.getWorkspace().getRoot(), finding), finding.line(), finding.line());
+            }
+
+            @Override
+            public void clearReviewMarkers() {
+                ReviewMarkers.clear();
+                showNotice("Отметки ревью убраны из редактора и окна «Проблемы»");
+            }
+
+            @Override
             public void openContext(ContextItem item) {
                 IFile file = ResourcesPlugin.getWorkspace().getRoot().getProject(item.project()).getFile(item.path());
                 reveal(file, item.whole() ? 0 : item.firstLine(), item.requestedLastLine());
@@ -1016,6 +1031,13 @@ public class ChatView extends ViewPart {
         menu.add(new Separator());
         menu.add(prompt(REVIEW_CHANGES, REVIEW_PROMPT));
         menu.add(prompt(COMMIT_MESSAGE, COMMIT_PROMPT));
+        menu.add(new Action("Убрать отметки ревью") {
+            @Override
+            public void run() {
+                ReviewMarkers.clear();
+                showNotice("Отметки ревью убраны из редактора и окна «Проблемы»");
+            }
+        });
     }
 
     /** Пункт меню вида: отправляет готовый вопрос, модель сама смотрит git. */
@@ -2837,6 +2859,7 @@ public class ChatView extends ViewPart {
         List<Tool> tools = new ArrayList<>(ProjectTools.create(files, current::contextLimit));
         tools.addAll(EditTools.create(files, chat.pendingChanges::add));
         tools.addAll(SkillTools.create(skills));
+        tools.addAll(ReviewTools.create(files, ReviewMarkers::show));
         tools.addAll(FileTools.create());
         try {
             tools.addAll(GitTools.create(files, current::contextLimit));

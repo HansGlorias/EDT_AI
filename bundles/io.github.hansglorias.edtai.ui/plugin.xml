@@ -146,4 +146,12 @@
          </toolbar>
       </menuContribution>
    </extension>
+   <extension
+         id="review"
+         name="EDT AI: ревью"
+         point="org.eclipse.core.resources.markers">
+      <super type="org.eclipse.core.resources.problemmarker"/>
+      <super type="org.eclipse.core.resources.textmarker"/>
+      <persistent value="true"/>
+   </extension>
 </plugin>
