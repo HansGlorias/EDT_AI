@@ -24,6 +24,9 @@ final class Icons {
     static final String STATUS_OFF = "status_off";
     static final String FILE = "file";
     static final String READ_ONLY = "read_only";
+    static final String COPY = "copy";
+    static final String RETRY = "retry";
+    static final String EDIT = "edit";
 
     private static final String PREFIX = "io.github.hansglorias.edtai.ui.icons/";
 

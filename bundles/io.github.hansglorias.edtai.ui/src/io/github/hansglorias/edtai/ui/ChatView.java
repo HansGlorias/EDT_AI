@@ -402,11 +402,25 @@ public class ChatView extends ViewPart {
 
     /**
      * Что сейчас нарисовано в ленте: сообщение, его действия, с какого символа
-     * оно начинается и где в нём блоки кода (для фона).
+     * оно начинается, где в нём блоки кода (для фона), пузырь вопроса и
+     * строка под сообщением.
      */
     private record Rendered(ChatMessage message, Set<MessageRenderer.Action> actions, List<String> files, Set<String> expanded,
-            int start, List<int[]> codeRanges) {
+            int start, List<int[]> codeRanges, MessageRenderer.Placement placement) {
     }
+
+    /** Пузырь вопроса не шире этой доли ленты. */
+    private static final double BUBBLE_SHARE = 0.8;
+    /** Поля пузыря вокруг текста. */
+    private static final int BUBBLE_PAD_X = 8;
+    private static final int BUBBLE_PAD_Y = 5;
+    private static final int BUBBLE_RADIUS = 14;
+    /** Непрозрачность цвета выделения в пузыре: светлый оттенок, текст читается и в тёмной теме. */
+    private static final int BUBBLE_ALPHA = 36;
+    /** Отступ строки с временем и действиями от сообщения. */
+    private static final int FOOTER_GAP = 4;
+    /** Ширина ленты, под которую разложены пузыри. */
+    private int bubblesWidth = -1;
 
     private final List<Rendered> rendered = new ArrayList<>();
     private boolean refreshScheduled;
@@ -735,15 +749,20 @@ public class ChatView extends ViewPart {
         history.addLineBackgroundListener(event -> {
             if (isInCode(event.lineOffset)) {
                 event.lineBackground = renderer.codeBackground();
-            } else if (isInQuestion(event.lineOffset)) {
-                event.lineBackground = renderer.userBackground();
+            }
+        });
+        // Пузырь вопроса — полупрозрачно поверх текста: фон строки StyledText закрашивает всю ширину.
+        history.addPaintListener(event -> paintBubbles(event.gc, event.y, event.y + event.height));
+        history.addListener(SWT.Resize, event -> {
+            if (history.getClientArea().width != bubblesWidth) {
+                layoutBubbles();
             }
         });
 
         Menu menu = new Menu(history);
         MenuItem copy = new MenuItem(menu, SWT.PUSH);
         copy.setText("Копировать\tCtrl+C");
-        copy.addListener(SWT.Selection, event -> history.copy());
+        copy.addListener(SWT.Selection, event -> copySelection());
         MenuItem selectAll = new MenuItem(menu, SWT.PUSH);
         selectAll.setText("Выделить всё\tCtrl+A");
         selectAll.addListener(SWT.Selection, event -> history.selectAll());
@@ -753,11 +772,33 @@ public class ChatView extends ViewPart {
         newChat.addListener(SWT.Selection, event -> newChat());
         menu.addListener(SWT.Show, event -> copy.setEnabled(history.getSelectionCount() > 0));
         history.setMenu(menu);
+        // Ctrl+C — без символов-заглушек под значками и картинками.
+        history.setKeyBinding(SWT.MOD1 | 'c', SWT.NULL);
+        history.setKeyBinding(SWT.MOD1 | 'C', SWT.NULL);
         history.addListener(SWT.KeyDown, event -> {
             if ((event.stateMask & SWT.MOD1) != 0 && (event.keyCode == 'a' || event.keyCode == 'A')) {
                 history.selectAll();
+            } else if ((event.stateMask & SWT.MOD1) != 0 && (event.keyCode == 'c' || event.keyCode == 'C')) {
+                copySelection();
             }
         });
+    }
+
+    /** Копирует выделенное в ленте: строки со значками — без заглушек под ними. */
+    void copySelection() {
+        if (history.getSelectionCount() == 0) {
+            return;
+        }
+        String text = Arrays.stream(history.getSelectionText().split("\n", -1))
+                .map(line -> line.indexOf(MessageRenderer.OBJECT) < 0 ? line
+                        : line.replace(String.valueOf(MessageRenderer.OBJECT), "").strip())
+                .collect(Collectors.joining("\n"));
+        Clipboard clipboard = new Clipboard(history.getDisplay());
+        try {
+            clipboard.setContents(new Object[] { text }, new Transfer[] { TextTransfer.getInstance() });
+        } finally {
+            clipboard.dispose();
+        }
     }
 
     private void createEmptyState(Composite parent) {
@@ -2577,12 +2618,14 @@ public class ChatView extends ViewPart {
             List<StyleRange> styles = new ArrayList<>();
             for (int i = first; i < messages.size(); i++) {
                 List<int[]> codeRanges = new ArrayList<>();
-                rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), expanded.get(i), start + text.length(),
-                        codeRanges));
-                renderer.render(messages.get(i), i, i > 0, actions.get(i), start, text, styles, codeRanges);
+                int from = start + text.length();
+                MessageRenderer.Placement placement = renderer.render(messages.get(i), i, i > 0, actions.get(i), start, text, styles,
+                        codeRanges);
+                rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), expanded.get(i), from, codeRanges, placement));
             }
             history.replaceTextRange(start, history.getCharCount() - start, text.toString());
             history.replaceStyleRanges(start, text.length(), styles.toArray(StyleRange[]::new));
+            layoutMessages(first);
             history.redraw();
             if (atBottom || scrollToEnd) {
                 history.setTopPixel(Integer.MAX_VALUE);
@@ -2641,17 +2684,103 @@ public class ChatView extends ViewPart {
         return false;
     }
 
-    /** Строка вопроса пользователя (без пустой строки перед ним). */
-    private boolean isInQuestion(int offset) {
-        for (int i = 0; i < rendered.size(); i++) {
-            Rendered item = rendered.get(i);
-            int start = item.start() + (i > 0 ? 2 : 0);
-            int end = i + 1 < rendered.size() ? rendered.get(i + 1).start() : history.getCharCount() + 1;
-            if (offset >= start && offset < end) {
-                return item.message().role() == ChatRole.USER;
+    /**
+     * Раскладывает строки сообщений с номера {@code from}: строку под
+     * сообщением чуть отодвигает, под вопросом — прижимает вправо, вопрос
+     * сдвигает вправо пузырём.
+     */
+    private void layoutMessages(int from) {
+        if (from >= rendered.size()) {
+            return;
+        }
+        // Перед сообщением — пустая строка; строка, где оно начинается, — ещё строка под предыдущим.
+        int firstLine = history.getLineAtOffset(rendered.get(from).start()) + (from > 0 ? 1 : 0);
+        int count = history.getLineCount() - firstLine;
+        if (count <= 0) {
+            return;
+        }
+        history.setLineAlignment(firstLine, count, SWT.LEFT);
+        history.setLineIndent(firstLine, count, 0);
+        history.setLineWrapIndent(firstLine, count, 0);
+        for (int line = firstLine; line < history.getLineCount(); line++) {
+            if (history.getLineVerticalIndent(line) != 0) {
+                history.setLineVerticalIndent(line, 0);
             }
         }
-        return false;
+        for (int i = from; i < rendered.size(); i++) {
+            MessageRenderer.Placement placement = rendered.get(i).placement();
+            int footer = history.getLineAtOffset(placement.footerStart());
+            history.setLineVerticalIndent(footer, FOOTER_GAP + (placement.bubble() ? BUBBLE_PAD_Y : 0));
+            if (placement.bubble()) {
+                history.setLineAlignment(footer, 1, SWT.RIGHT);
+                layoutBubble(placement);
+            }
+        }
+    }
+
+    /** Заново сдвигает все пузыри: ширина ленты изменилась. */
+    private void layoutBubbles() {
+        bubblesWidth = history.getClientArea().width;
+        for (Rendered item : rendered) {
+            if (item.placement().bubble()) {
+                layoutBubble(item.placement());
+            }
+        }
+    }
+
+    /**
+     * Сдвигает вопрос вправо: пузырь по самой длинной строке, но не шире
+     * {@link #BUBBLE_SHARE} ленты — длинный текст переносится внутри него.
+     */
+    private void layoutBubble(MessageRenderer.Placement placement) {
+        int available = history.getClientArea().width - history.getLeftMargin() - history.getRightMargin();
+        if (available <= 0) {
+            return;
+        }
+        bubblesWidth = history.getClientArea().width;
+        int first = history.getLineAtOffset(placement.bubbleStart());
+        int last = history.getLineAtOffset(placement.bubbleEnd());
+        int count = last - first + 1;
+        history.setLineIndent(first, count, 0);
+        history.setLineWrapIndent(first, count, 0);
+        int width = 0;
+        for (int line = first; line <= last; line++) {
+            int start = history.getOffsetAtLine(line);
+            int end = line == last ? placement.bubbleEnd() : history.getOffsetAtLine(line + 1) - 1;
+            if (end > start) {
+                width = Math.max(width, history.getTextBounds(start, end - 1).width);
+            }
+        }
+        int bubble = Math.min((int) (available * BUBBLE_SHARE), width + 2);
+        // Сдвиг и у первой строки абзаца, и у перенесённых.
+        int indent = Math.max(0, available - bubble);
+        history.setLineIndent(first, count, indent);
+        history.setLineWrapIndent(first, count, indent);
+    }
+
+    /** Рисует пузыри вопросов, попавшие в полосу {@code [top, bottom)}. */
+    private void paintBubbles(GC gc, int top, int bottom) {
+        Rectangle area = history.getClientArea();
+        int right = Math.min(area.width - history.getRightMargin() + BUBBLE_PAD_X, area.width - 2);
+        for (Rendered item : rendered) {
+            MessageRenderer.Placement placement = item.placement();
+            if (!placement.bubble()) {
+                continue;
+            }
+            int first = history.getLineAtOffset(placement.bubbleStart());
+            int last = history.getLineAtOffset(placement.bubbleEnd());
+            int y = history.getLinePixel(first) - BUBBLE_PAD_Y;
+            int height = history.getLinePixel(last + 1) + BUBBLE_PAD_Y - y;
+            if (y >= bottom || y + height <= top) {
+                continue;
+            }
+            int x = history.getLeftMargin() + history.getLineIndent(first) - BUBBLE_PAD_X;
+            gc.setAntialias(SWT.ON);
+            gc.setAlpha(BUBBLE_ALPHA);
+            gc.setBackground(renderer.bubbleColor());
+            gc.fillRoundRectangle(x, y, right - x, height, BUBBLE_RADIUS, BUBBLE_RADIUS);
+            gc.setAlpha(255);
+        }
     }
 
     private Runnable actionAt(int x, int y) {
@@ -2670,6 +2799,9 @@ public class ChatView extends ViewPart {
             return null;
         }
         StyleRange style = history.getStyleRangeAtOffset(offset);
+        if (style != null && style.data instanceof MessageRenderer.ActionIcon icon) {
+            return icon.label();
+        }
         return style != null && style.data instanceof MessageRenderer.Hint hint ? hint.text() : null;
     }
 
@@ -3035,15 +3167,26 @@ public class ChatView extends ViewPart {
         return actions.isEmpty() ? null : actions.get(actions.size() - 1);
     }
 
-    /** Действия всех ссылок с текстом {@code text}, по порядку в ленте. */
+    /** Действия всех ссылок с текстом {@code text} (и значков с такой подписью), по порядку в ленте. */
     List<Runnable> linkActions(String text) {
         List<Runnable> actions = new ArrayList<>();
         for (StyleRange style : history.getStyleRanges()) {
-            if (style.data instanceof Runnable action && history.getTextRange(style.start, style.length).equals(text)) {
-                actions.add(action);
+            if (style.data instanceof MessageRenderer.ActionIcon icon ? icon.label().equals(text)
+                    : style.data instanceof Runnable && history.getTextRange(style.start, style.length).equals(text)) {
+                actions.add((Runnable) style.data);
             }
         }
         return actions;
+    }
+
+    /** Отступ слева строки ленты, где стоит {@code offset}: у вопроса — сдвиг пузыря вправо. */
+    int lineIndent(int offset) {
+        return history.getLineIndent(history.getLineAtOffset(offset));
+    }
+
+    /** Выравнивание строки ленты, где стоит {@code offset}. */
+    int lineAlignment(int offset) {
+        return history.getLineAlignment(history.getLineAtOffset(offset));
     }
 
     /** Есть ли у ленты фон кода в строке, где стоит {@code offset}. */

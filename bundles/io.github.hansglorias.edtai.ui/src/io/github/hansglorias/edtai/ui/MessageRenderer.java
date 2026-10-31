@@ -12,7 +12,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.eclipse.jface.preference.JFacePreferences;
-import org.eclipse.jface.resource.FontRegistry;
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTException;
@@ -21,7 +20,6 @@ import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.GlyphMetrics;
 import org.eclipse.swt.graphics.Image;
@@ -44,9 +42,11 @@ import io.github.hansglorias.edtai.core.markdown.RichText;
 import io.github.hansglorias.edtai.core.markdown.Segment;
 
 /**
- * Текст и оформление одного сообщения в ленте: заголовок с именем, временем
- * и действиями, тело — Markdown для ответа модели, обычный текст для
- * остального.
+ * Текст и оформление одного сообщения в ленте, как в мессенджерах: без
+ * подписи автора, вопрос пользователя — пузырём справа (его рисует
+ * {@link ChatView}), ответ — слева во всю ширину. Под сообщением строка с
+ * временем и действиями-значками. Тело — Markdown для ответа модели, обычный
+ * текст для остального.
  */
 final class MessageRenderer {
 
@@ -70,15 +70,36 @@ final class MessageRenderer {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault());
     private static final List<String> CODE_ACTIONS = List.of(COPY, INSERT);
 
-    /** Действия у сообщения в строке заголовка. */
+    /** Действия в строке под сообщением; со значком — показываются значком, подпись — во всплывающей подсказке. */
     enum Action {
-        COPY(MessageRenderer.COPY), RETRY(MessageRenderer.RETRY), EDIT(MessageRenderer.EDIT), CHANGES(MessageRenderer.CHANGES),
-        REVERT(MessageRenderer.REVERT);
+        COPY(MessageRenderer.COPY, Icons.COPY), RETRY(MessageRenderer.RETRY, Icons.RETRY), EDIT(MessageRenderer.EDIT, Icons.EDIT),
+        CHANGES(MessageRenderer.CHANGES, null), REVERT(MessageRenderer.REVERT, null);
 
         final String label;
+        final String icon;
 
-        Action(String label) {
+        Action(String label, String icon) {
             this.label = label;
+            this.icon = icon;
+        }
+    }
+
+    /**
+     * Где в ленте части сообщения: пузырь вопроса пользователя
+     * {@code [bubbleStart, bubbleEnd)} (-1 — не вопрос) и начало строки под
+     * сообщением с временем и действиями.
+     */
+    record Placement(int bubbleStart, int bubbleEnd, int footerStart) {
+        boolean bubble() {
+            return bubbleStart >= 0;
+        }
+    }
+
+    /** Значок действия в строке под сообщением: щелчок — действие, подсказка — подпись. */
+    record ActionIcon(Image image, String label, Runnable action) implements Runnable {
+        @Override
+        public void run() {
+            action.run();
         }
     }
 
@@ -129,6 +150,7 @@ final class MessageRenderer {
     }
 
     static final String CLEAR_MARKERS = "убрать отметки";
+    static final String SUMMARY = "Краткое содержание диалога выше";
     private static final String BULLET = "●";
 
     /** Миниатюра картинки в ленте: место под неё — символ с {@link GlyphMetrics}, рисует её вид. */
@@ -148,6 +170,8 @@ final class MessageRenderer {
     }
 
     private static final int ICON = 16;
+    /** Промежуток после значка действия. */
+    private static final int ICON_GAP = 8;
     /** Значки по расширению, созданные из значков программ системы: их освобождаем сами. */
     private final Map<String, Image> fileIcons = new HashMap<>();
 
@@ -163,8 +187,6 @@ final class MessageRenderer {
     private final Callbacks callbacks;
     private Color codeBackground;
     private RGB codeBackgroundFrom;
-    private Color userBackground;
-    private RGB userBackgroundFrom;
 
     MessageRenderer(StyledText history, Callbacks callbacks) {
         this.history = history;
@@ -177,12 +199,16 @@ final class MessageRenderer {
      * {@code codeRanges}. Смещения — от начала ленты: {@code offset} — где в
      * ленте начинается {@code text}.
      */
-    void render(ChatMessage message, int index, boolean separator, Set<Action> actions, int offset, StringBuilder text,
+    Placement render(ChatMessage message, int index, boolean separator, Set<Action> actions, int offset, StringBuilder text,
             List<StyleRange> styles, List<int[]> codeRanges) {
         if (separator) {
             text.append("\n\n");
         }
-        header(message, index, actions, offset, text, styles);
+        int bubbleStart = message.role() == ChatRole.USER ? offset + text.length() : -1;
+        if (message.role() == ChatRole.SUMMARY) {
+            styles.add(style(offset + text.length(), SUMMARY.length(), metaColor(), SWT.BOLD));
+            text.append(SUMMARY).append('\n');
+        }
         context(message, offset, text, styles);
         if (message.role() != ChatRole.ASSISTANT) {
             attachments(message, offset, text, styles);
@@ -230,59 +256,61 @@ final class MessageRenderer {
             }
             text.append(body);
         }
+        int bubbleEnd = bubbleStart < 0 ? -1 : offset + text.length();
+        text.append('\n');
+        int footerStart = offset + text.length();
+        footer(message, index, actions, offset, text, styles);
+        return new Placement(bubbleStart, bubbleEnd, footerStart);
     }
 
-    private void header(ChatMessage message, int index, Set<Action> actions, int offset, StringBuilder text, List<StyleRange> styles) {
-        String name;
-        Color nameColor;
-        switch (message.role()) {
-            case USER -> {
-                name = "Вы";
-                nameColor = null;
-            }
-            case ASSISTANT -> {
-                name = "Ассистент";
-                nameColor = color(JFacePreferences.COUNTER_COLOR, SWT.COLOR_DARK_BLUE);
-            }
-            case SUMMARY -> {
-                name = "Краткое содержание диалога выше";
-                nameColor = metaColor();
-            }
-            default -> {
-                name = "Ошибка";
-                nameColor = errorColor();
-            }
-        }
-        StyleRange nameStyle = style(offset + text.length(), name.length(), nameColor, SWT.NORMAL);
-        nameStyle.font = nameFont();
-        styles.add(nameStyle);
-        text.append(name);
-
-        String meta = "  " + TIME.format(message.time()) + switch (message.status()) {
+    /**
+     * Строка под сообщением: у ответа — значки действий, ссылки на правки и
+     * время; у вопроса — время и значок «Изменить» (строка прижата вправо,
+     * под пузырь). Без перевода строки в конце.
+     */
+    private void footer(ChatMessage message, int index, Set<Action> actions, int offset, StringBuilder text, List<StyleRange> styles) {
+        String meta = TIME.format(message.time()) + switch (message.status()) {
             case STREAMING -> " · пишет…";
             case STOPPED -> message.role() == ChatRole.ASSISTANT ? " · остановлено" : "";
             case DONE -> "";
         };
-        styles.add(style(offset + text.length(), meta.length(), metaColor(), SWT.NORMAL));
-        text.append(meta);
-
+        boolean user = message.role() == ChatRole.USER;
+        if (user) {
+            styles.add(style(offset + text.length(), meta.length(), metaColor(), SWT.NORMAL));
+            text.append(meta).append(' ');
+        }
+        boolean links = false;
         for (Action action : Action.values()) {
-            if (actions.contains(action)) {
-                text.append("   ");
-                Runnable run = switch (action) {
-                    case COPY -> () -> callbacks.copy(message.text());
-                    case RETRY -> callbacks::retry;
-                    case EDIT -> () -> callbacks.edit(index);
-                    case CHANGES -> () -> callbacks.showChanges(message);
-                    case REVERT -> () -> callbacks.revertChanges(message);
-                };
-                StyleRange link = new StyleRange(offset + text.length(), action.label.length(), linkColor(), null);
-                link.data = run;
-                styles.add(link);
-                text.append(action.label);
+            if (!actions.contains(action)) {
+                continue;
+            }
+            Runnable run = switch (action) {
+                case COPY -> () -> callbacks.copy(message.text());
+                case RETRY -> callbacks::retry;
+                case EDIT -> () -> callbacks.edit(index);
+                case CHANGES -> () -> callbacks.showChanges(message);
+                case REVERT -> () -> callbacks.revertChanges(message);
+            };
+            if (action.icon != null) {
+                StyleRange place = new StyleRange();
+                place.start = offset + text.length();
+                place.length = 1;
+                place.metrics = new GlyphMetrics(ICON - 3, 3, ICON + ICON_GAP);
+                place.data = new ActionIcon(Icons.image(action.icon), action.label, run);
+                styles.add(place);
+                text.append(OBJECT);
+            } else {
+                text.append(links ? "   " : "  ");
+                link(text, styles, offset, action.label, run);
+                links = true;
             }
         }
-        text.append('\n');
+        if (!user) {
+            char last = text.charAt(text.length() - 1);
+            String gap = last == '\n' ? "" : last == OBJECT ? " " : "   ";
+            styles.add(style(offset + text.length() + gap.length(), meta.length(), metaColor(), SWT.NORMAL));
+            text.append(gap).append(meta);
+        }
     }
 
     /**
@@ -612,6 +640,8 @@ final class MessageRenderer {
             event.gc.drawRectangle(event.x, event.y, thumbnail.width() + 1, thumbnail.height() + 1);
         } else if (event.style.data instanceof FileIcon icon && !icon.image().isDisposed()) {
             event.gc.drawImage(icon.image(), event.x + 2, event.y);
+        } else if (event.style.data instanceof ActionIcon icon && !icon.image().isDisposed()) {
+            event.gc.drawImage(icon.image(), event.x, event.y);
         }
     }
 
@@ -621,22 +651,6 @@ final class MessageRenderer {
         thumbnails.clear();
         fileIcons.values().forEach(Image::dispose);
         fileIcons.clear();
-    }
-
-    private static final String NAME_FONT = "io.github.hansglorias.edtai.ui.nameFont";
-
-    /** Имя автора сообщения: жирный шрифт на пункт крупнее текста — сообщения легче различать. */
-    private static Font nameFont() {
-        FontRegistry registry = JFaceResources.getFontRegistry();
-        if (!registry.hasValueFor(NAME_FONT)) {
-            FontData[] data = registry.getFontData(JFaceResources.DEFAULT_FONT);
-            FontData[] larger = new FontData[data.length];
-            for (int i = 0; i < data.length; i++) {
-                larger[i] = new FontData(data[i].getName(), data[i].getHeight() + 1, data[i].getStyle());
-            }
-            registry.put(NAME_FONT, larger);
-        }
-        return registry.getBold(NAME_FONT);
     }
 
     private static Font monospace(boolean bold, boolean italic) {
@@ -662,17 +676,9 @@ final class MessageRenderer {
         return codeBackground;
     }
 
-    /** Фон вопросов пользователя: лёгкий оттенок цвета выделения — вопросы видно среди ответов. */
-    Color userBackground() {
-        RGB background = history.getBackground().getRGB();
-        if (userBackground == null || !background.equals(userBackgroundFrom)) {
-            RGB accent = history.getDisplay().getSystemColor(SWT.COLOR_LIST_SELECTION).getRGB();
-            double share = 0.12;
-            userBackground = new Color(mix(background.red, accent.red, share), mix(background.green, accent.green, share),
-                    mix(background.blue, accent.blue, share));
-            userBackgroundFrom = background;
-        }
-        return userBackground;
+    /** Цвет пузыря вопроса пользователя: цвет выделения, его кладут полупрозрачным поверх ленты. */
+    Color bubbleColor() {
+        return history.getDisplay().getSystemColor(SWT.COLOR_LIST_SELECTION);
     }
 
     private static int mix(int from, int to, double share) {

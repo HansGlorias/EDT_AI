@@ -84,7 +84,7 @@ class ChatAttachmentsTest extends AbstractChatTest {
         assertTrue(text.endsWith("Что за ошибка?"), text);
         assertTrue(view.history().getText().contains(MessageRenderer.FILES + "log.txt, 2 строки; скриншот-"), view.history().getText());
         int place = view.history().getText().indexOf(MessageRenderer.OBJECT);
-        assertTrue(place > 0, "миниатюра скриншота в ленте");
+        assertTrue(place >= 0, "миниатюра скриншота в ленте");
         StyleRange thumbnail = view.history().getStyleRangeAtOffset(place);
         assertTrue(thumbnail.data instanceof MessageRenderer.Thumbnail, String.valueOf(thumbnail.data));
         assertEquals(40, thumbnail.metrics.width - 8, "маленькая картинка не увеличивается");
@@ -98,7 +98,8 @@ class ChatAttachmentsTest extends AbstractChatTest {
 
         page.hideView(view);
         ChatView reopened = showView();
-        assertTrue(reopened.history().getText().indexOf(MessageRenderer.OBJECT) > 0, "миниатюра после перезапуска");
+        assertTrue(reopened.history().getStyleRangeAtOffset(reopened.history().getText().indexOf(MessageRenderer.OBJECT))
+                .data instanceof MessageRenderer.Thumbnail, "миниатюра после перезапуска");
         List<Attachment> saved = reopened.session().messages().get(0).attachments();
         assertEquals(List.of("log.txt", "image/png"), List.of(saved.get(0).name(), saved.get(1).mediaType()), "вложения сохраняются");
         Clipboard clipboard = new Clipboard(reopened.input().getDisplay());
@@ -162,8 +163,8 @@ class ChatAttachmentsTest extends AbstractChatTest {
         assertEquals("PK", new String(document, 0, 2, StandardCharsets.US_ASCII), "docx — zip");
         String transcript = view.history().getText();
         assertTrue(transcript.contains("Инструкция в файле.\n\n" + MessageRenderer.OBJECT + "Инструкция.docx  "), transcript);
-        assertTrue(transcript.endsWith(MessageRenderer.SAVE_FILE + "   " + MessageRenderer.OPEN_FILE), transcript);
-        int icon = transcript.lastIndexOf(MessageRenderer.OBJECT);
+        assertTrue(transcript.contains(MessageRenderer.SAVE_FILE + "   " + MessageRenderer.OPEN_FILE + "\n"), transcript);
+        int icon = transcript.indexOf(MessageRenderer.OBJECT + "Инструкция.docx");
         assertTrue(view.history().getStyleRangeAtOffset(icon).data instanceof MessageRenderer.FileIcon);
         assertTrue(view.hasCodeBackground(icon), "строка файла — карточкой, с фоном");
         Screenshots.capture(view.control(), "answer-file");

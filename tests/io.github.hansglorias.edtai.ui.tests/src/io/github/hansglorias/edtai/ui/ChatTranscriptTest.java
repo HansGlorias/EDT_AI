@@ -19,6 +19,7 @@ import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyleRange;
+import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.widgets.Event;
@@ -91,14 +92,57 @@ class ChatTranscriptTest extends AbstractChatTest {
         ask(view, "Пример?");
 
         List<Runnable> copies = view.linkActions(MessageRenderer.COPY);
-        assertEquals(2, copies.size(), "у ответа и у блока кода");
+        assertEquals(2, copies.size(), "у блока кода и значок под ответом");
 
-        copies.get(1).run();
+        copies.get(0).run();
         assertEquals(CODE, clipboard());
         assertEquals("Скопировано в буфер обмена", view.status().getText());
 
-        copies.get(0).run();
+        copies.get(1).run();
         assertEquals(ANSWER, clipboard());
+    }
+
+    @Test
+    void longQuestionWrapsInsideBubble() throws Exception {
+        answering(List.of("Да."));
+        ChatView view = showView();
+        String question = "Как получить текущую дату на сервере с учётом часового пояса сеанса и чем это отличается от "
+                + "ТекущаяДата() на клиенте? ".repeat(6) + "Напиши пример.";
+        ask(view, question);
+        assertBubble(view, question);
+
+        page.getWorkbenchWindow().getShell().setSize(420, 780);
+        settle();
+        assertBubble(view, question);
+    }
+
+    /** Вопрос сдвинут вправо целиком, вместе с перенесёнными строками, и переносится. */
+    private static void assertBubble(ChatView view, String question) {
+        StyledText history = view.history();
+        int indent = view.lineIndent(0);
+        assertTrue(indent > 0, "вопрос — пузырём справа");
+        int left = history.getLeftMargin() + indent;
+        for (int i = 0; i < question.length(); i++) {
+            int x = history.getLocationAtOffset(i).x;
+            assertTrue(x >= left - 1, "символ " + i + " левее пузыря: " + x + " < " + left);
+        }
+        assertTrue(history.getLocationAtOffset(question.length() - 1).y > history.getLocationAtOffset(0).y, "длинный вопрос переносится");
+    }
+
+    @Test
+    void copiesSelectionWithoutIconPlaceholders() throws Exception {
+        answering(chunks(ANSWER, 40));
+        ChatView view = showView();
+        ask(view, "Пример?");
+        assertTrue(view.history().getText().indexOf(MessageRenderer.OBJECT) >= 0, "под значки — символы-заглушки");
+
+        view.history().selectAll();
+        view.copySelection();
+
+        String copied = clipboard();
+        assertTrue(copied.startsWith("Пример?\n"), copied);
+        assertTrue(copied.contains(CODE), copied);
+        assertFalse(copied.indexOf(MessageRenderer.OBJECT) >= 0, copied);
     }
 
     @Test
