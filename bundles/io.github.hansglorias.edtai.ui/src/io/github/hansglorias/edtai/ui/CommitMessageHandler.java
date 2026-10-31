@@ -4,7 +4,6 @@ import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.e4.ui.model.application.ui.basic.MPart;
-import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
@@ -33,12 +32,8 @@ public class CommitMessageHandler extends AbstractHandler {
         StyledText target = messageArea(HandlerUtil.getActivePart(event));
         ChatView view;
         try {
-            view = ChatView.freeOnPage(page);
-            if (view == null) {
-                view = (ChatView) page.showView(ChatView.ID, "commit:" + System.nanoTime(), IWorkbenchPage.VIEW_VISIBLE);
-            } else {
-                page.activate(view);
-            }
+            // Окно коммита остаётся активным: чат только показывается рядом.
+            view = (ChatView) page.showView(ChatView.ID, null, target == null ? IWorkbenchPage.VIEW_ACTIVATE : IWorkbenchPage.VIEW_VISIBLE);
         } catch (PartInitException e) {
             throw new ExecutionException("Не удалось открыть EDT AI", e);
         }

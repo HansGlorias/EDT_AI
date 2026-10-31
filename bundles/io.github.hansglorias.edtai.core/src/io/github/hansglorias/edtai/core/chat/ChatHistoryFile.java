@@ -88,10 +88,6 @@ public final class ChatHistoryFile {
                     if (use.at() >= 0) {
                         saved.put("at", use.at());
                     }
-                    if (use.usage() != null) {
-                        saved.put("usage", Json.object("input", use.usage().input(), "output", use.usage().output(),
-                                "context", use.usage().context(), "estimated", use.usage().estimated()));
-                    }
                     tools.add(saved);
                 }
                 item.put("tools", tools);
@@ -149,14 +145,9 @@ public final class ChatHistoryFile {
                 throw new IOException("В сохранённом вызове инструмента нет имени");
             }
             String status = Json.stringAt(use, "status");
-            Object usage = Json.at(use, "usage");
-            TokenUsage tokenUsage = usage instanceof Map<?, ?> map
-                    ? new TokenUsage(number(map, "input"), number(map, "output"), number(map, "context"),
-                            Boolean.TRUE.equals(map.get("estimated")))
-                    : null;
             tools.add(new ToolUse(Json.stringAt(use, "id"), name, Json.stringAt(use, "summary"), Json.stringAt(use, "outcome"),
                     status == null ? ToolUse.Status.DONE : ToolUse.Status.valueOf(status),
-                    Json.at(use, "at") instanceof Number at ? at.intValue() : -1, null, tokenUsage));
+                    Json.at(use, "at") instanceof Number at ? at.intValue() : -1));
         }
         return tools;
     }
@@ -177,9 +168,5 @@ public final class ChatHistoryFile {
 
     private static int number(Object part, String key) {
         return Json.at(part, key) instanceof Number number ? number.intValue() : 0;
-    }
-
-    private static long number(Map<?, ?> part, String key) {
-        return part.get(key) instanceof Number number ? number.longValue() : 0;
     }
 }

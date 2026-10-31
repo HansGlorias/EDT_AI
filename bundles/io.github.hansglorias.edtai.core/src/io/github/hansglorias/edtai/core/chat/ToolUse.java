@@ -14,10 +14,8 @@ import java.util.Set;
  * @param at      сколько символов текста ответа было написано до вызова: там строка вызова и стоит в ленте;
  *                -1 — не известно (старые диалоги), строка над текстом
  * @param file    файл, который вызов приложил к ответу; сессия переносит его в сообщение, в историю не пишется
- * @param usage   токены шага модели, в котором был вызван инструмент; {@code null} для старых записей
  */
-public record ToolUse(String id, String name, String summary, String outcome, Status status, int at, Attachment file,
-        TokenUsage usage) {
+public record ToolUse(String id, String name, String summary, String outcome, Status status, int at, Attachment file) {
 
     public enum Status {
         /** Ждёт, пока пользователь разрешит или отклонит вызов. */
@@ -32,10 +30,6 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         status = Objects.requireNonNullElse(status, Status.DONE);
     }
 
-    public ToolUse(String id, String name, String summary, String outcome, Status status, int at, Attachment file) {
-        this(id, name, summary, outcome, status, at, file, null);
-    }
-
     public ToolUse(String id, String name, String summary, String outcome, Status status, int at) {
         this(id, name, summary, outcome, status, at, null);
     }
@@ -44,16 +38,12 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         this(id, name, summary, outcome, status, -1);
     }
 
-    public ToolUse withUsage(TokenUsage newUsage) {
-        return new ToolUse(id, name, summary, outcome, status, at, file, newUsage);
-    }
-
     public ToolUse withAt(int newAt) {
-        return new ToolUse(id, name, summary, outcome, status, newAt, file, usage);
+        return new ToolUse(id, name, summary, outcome, status, newAt, file);
     }
 
     public ToolUse withFile(Attachment newFile) {
-        return new ToolUse(id, name, summary, outcome, status, at, newFile, usage);
+        return new ToolUse(id, name, summary, outcome, status, at, newFile);
     }
 
     /** Служебные строки ленты (сервер не подключился, окно модели), а не вызовы инструментов. */
@@ -64,39 +54,13 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         return !NOTICES.contains(name);
     }
 
-    /** Короткая статистика шага рядом с операцией. */
-    private String usageText() {
-        return usage == null ? "" : " · токены ↑" + TokenUsage.format(usage.input()) + " ↓" + TokenUsage.format(usage.output());
-    }
-
-    /** Тип ошибки операции для понятной подписи в ленте. */
-    private String errorType() {
-        if (status != Status.FAILED) {
-            return "";
-        }
-        String text = outcome.toLowerCase();
-        if (text.contains("json")) {
-            return "неверные аргументы";
-        }
-        if (text.contains("повтор")) {
-            return "повтор";
-        }
-        if (text.contains("отклон")) {
-            return "отказано пользователем";
-        }
-        if (text.contains("подключ") || text.contains("сервер")) {
-            return "ошибка сервера";
-        }
-        return "ошибка инструмента";
-    }
-
     /** Строка для ленты: «Читает модуль Х — строки 1–120 из 120». */
     public String label() {
         return switch (status) {
             case AWAITING -> summary + " — ждёт разрешения";
-            case RUNNING -> summary + "…" + usageText();
-            case DONE -> outcome.isEmpty() ? summary + usageText() : summary + " — " + outcome + usageText();
-            case FAILED -> summary + " — " + errorType() + (outcome.isEmpty() ? "" : ": " + outcome) + usageText();
+            case RUNNING -> summary + "…";
+            case DONE -> outcome.isEmpty() ? summary : summary + " — " + outcome;
+            case FAILED -> summary + " — ошибка: " + outcome;
         };
     }
 }

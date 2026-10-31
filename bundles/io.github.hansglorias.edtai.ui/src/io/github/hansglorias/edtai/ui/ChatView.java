@@ -8,7 +8,6 @@ import java.net.URI;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -108,10 +107,8 @@ import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IMemento;
-import org.eclipse.ui.IViewReference;
 import org.eclipse.ui.IViewSite;
 import org.eclipse.ui.ISharedImages;
-import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.actions.ActionFactory;
@@ -182,9 +179,6 @@ public class ChatView extends ViewPart {
     private static final int HISTORY_MENU = 30;
     private static final String MEMENTO_HISTORY = "historyShown";
     private static final String MEMENTO_HISTORY_WIDTH = "historyWidth";
-    private static final String MEMENTO_CHAT = "chatId";
-    /** Префикс secondaryId вида, открытого на конкретный чат («Открыть в новой вкладке»). */
-    private static final String CHAT_PREFIX = "chat:";
     private static final DateTimeFormatter CHAT_TIME = DateTimeFormatter.ofPattern("dd.MM HH:mm");
     static final String REVIEW_CHANGES = "Ревью моих изменений";
     static final String COMMIT_MESSAGE = "Сообщение коммита";
@@ -229,28 +223,34 @@ public class ChatView extends ViewPart {
 
     /** Подключения к MCP-серверам из настроек. */
     private final McpHub mcp = new McpHub();
-    /** Чаты, для которых уже просили название у модели: по разу на чат в сеансе EDT. */
-    private static final Set<String> titleRequested = ConcurrentHashMap.newKeySet();
-    /** Сессия каждого чата: живёт, пока его вид открыт; фоновый ответ продолжается, когда его вид не виден. */
-    private static final Map<String, ChatSession> sessions = new ConcurrentHashMap<>();
-    /** Чат, открытый в каком-то из видов: один чат — один вид, иначе два поля ленты писали бы в одну сессию. */
-    private static final Map<String, ChatView> openViews = new ConcurrentHashMap<>();
+    /** Чаты, для которых уже просили название у модели: по разу. */
+    private final Set<String> titleRequested = ConcurrentHashMap.newKeySet();
     /** Инструменты, которые пользователь разрешил «в этом чате»; сбрасываются «Новым чатом». */
-    private static final Map<String, Set<String>> allowedInChat = new ConcurrentHashMap<>();
+    private final Set<String> allowedInChat = ConcurrentHashMap.newKeySet();
+    private final ChatSession session = new ChatSession(
+            ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), new ToolSource() {
+                @Override
+                public List<Tool> tools(Consumer<ToolUse> problems) {
+                    return ChatView.this.tools(problems);
+                }
+
+                @Override
+                public String brief() {
+                    String brief = ProjectBrief.describe(EclipseWorkspaceFiles.current());
+                    if (SettingsStore.workspace().load().toolsEnabled()) {
+                        brief = (brief + "\n\n" + skills.prompt()).strip();
+                    }
+                    return isReadOnly() ? (brief + "\n\n" + ProjectBrief.READ_ONLY_RULES).strip() : brief;
+                }
+            }, this::approve));
     private final Path stateLocation = Platform.getStateLocation(FrameworkUtil.getBundle(ChatView.class)).toFile().toPath();
     /** Скиллы: встроенные, свои (в рабочей области) и открытых проектов. */
     private final SkillLibrary skills = new SkillLibrary(stateLocation.resolve("skills"), ChatView::projectSkillDirectories,
             Arrays.stream(SlashCommand.values()).map(command -> command.text().substring(1)).collect(Collectors.toSet()),
             () -> SkillLibrary.parseDisabled(preferences().get(DISABLED_SKILLS, "")));
-    /** Все диалоги; {@link #chatId} — открытый в этом виде. */
+    /** Все диалоги; {@link #chatId} — открытый. */
     private final ChatStore chats = new ChatStore(stateLocation.resolve(CHATS_DIRECTORY));
     private String chatId;
-    /** Чат, с которым создан вид из secondaryId; {@code null} — обычный или новый. */
-    private String wantedChat;
-    /** Сессия открытого чата; меняется вместе с {@link #chatId}. */
-    private ChatSession session;
-    /** Счётчик secondaryId видов, открытых командами, чтобы не совпали. */
-    private static final java.util.concurrent.atomic.AtomicLong NEW_VIEWS = new java.util.concurrent.atomic.AtomicLong();
 
     private Composite root;
     /** Правки модели в идущем ответе; по его окончании — в {@link #changes}. */
@@ -307,7 +307,6 @@ public class ChatView extends ViewPart {
     private Label status;
     private Cursor handCursor;
     private ToolItem autoButton;
-    private String approvalMode = "Авто";
     private ToolItem mcpButton;
     /** Выбор модели справа в поле ввода, рядом с «Отправить». */
     private ToolItem modelButton;
@@ -318,8 +317,6 @@ public class ChatView extends ViewPart {
     private boolean modelsLoading;
     /** Для какого сервера загружен список: сменился адрес — загрузить заново. */
     private String modelsFor = "";
-    /** Запрос списка моделей, который сейчас в фоне; ответ чужого сервера отбрасываем. */
-    private String modelsRequested = "";
     /** Что сделать, когда список загрузится: {@code /model имя}. */
     private final List<Runnable> afterModels = new ArrayList<>();
     static final String RECENT_MODELS = "recentModels";
@@ -353,7 +350,6 @@ public class ChatView extends ViewPart {
     private int recall = -1;
     private boolean recalling;
 
-    /** Листенер своего вида: перерисовка ленты и обвязка конца ответа. Подписан только на сессию открытого чата. */
     private final ChatListener chatListener = new ChatListener() {
         @Override
         public void messageAdded(ChatMessage message) {
@@ -383,10 +379,7 @@ public class ChatView extends ViewPart {
                 toolActivity.reset();
             }
             scheduleRefresh();
-            inUi(() -> {
-                markBusy(busy);
-                refreshHistoryPanel();
-            });
+            inUi(() -> markBusy(busy));
             if (!busy) {
                 inUi(() -> {
                     attachChanges();
@@ -399,50 +392,8 @@ public class ChatView extends ViewPart {
         }
     };
 
-    /**
-     * Фоновый листенер сессии: живёт, пока чат открыт в каком-то виде. Пишет
-     * историю в файл, когда его вид скрыт другим чатом или ответ закончился
-     * без показа вида. Помечает занятой вкладку открытого вида.
-     */
-    private ChatListener persistingListener(String id) {
-        return new ChatListener() {
-            @Override
-            public void messageAdded(ChatMessage message) {
-                save();
-            }
-
-            @Override
-            public void messageUpdated(int index, ChatMessage message) {
-                save();
-            }
-
-            @Override
-            public void historyChanged() {
-                save();
-            }
-
-            @Override
-            public void busyChanged(boolean busy) {
-                if (!busy) {
-                    save();
-                }
-                ChatView view = openViews.get(id);
-                if (view != null) {
-                    view.inUi(() -> view.markTabBusy(busy));
-                }
-            }
-
-            private void save() {
-                ChatSession session = sessions.get(id);
-                if (session != null && !session.isBusy()) {
-                    saveChat(id, session.messages());
-                }
-            }
-        };
-    }
-
     private final IResourceChangeListener resourceListener = event -> {
-        boolean busy = session != null && session.isBusy();
+        boolean busy = session.isBusy();
         String late = lateKey;
         if (event.getDelta() == null || !busy && (late == null || System.currentTimeMillis() > lateUntil)) {
             return;
@@ -545,21 +496,6 @@ public class ChatView extends ViewPart {
             }
 
             @Override
-            public String state(String id) {
-                ChatSession chat = sessions.get(id);
-                return chat != null && chat.isBusy() ? "●" : "";
-            }
-
-            @Override
-            public String stateTooltip(String id) {
-                ChatSession chat = sessions.get(id);
-                if (chat == null) {
-                    return "";
-                }
-                return chat.isBusy() && chat.activity() != null ? chat.activity().describe(Instant.now()) : "Готово";
-            }
-
-            @Override
             public void newChat() {
                 ChatView.this.newChat();
                 input.setFocus();
@@ -610,13 +546,14 @@ public class ChatView extends ViewPart {
 
         createActions();
 
+        session.addListener(chatListener);
         preferences().addPreferenceChangeListener(preferenceListener);
         ResourcesPlugin.getWorkspace().addResourceChangeListener(resourceListener, IResourceChangeEvent.POST_CHANGE);
         settings = SettingsStore.workspace().load();
         contextBar.setLimit(settings.contextLimit());
         updateModelButton();
-        restoreHistory();
         window = session.provider().window();
+        restoreHistory();
         updateStatus();
         updateEmptyState();
         updateSendButton();
@@ -832,14 +769,9 @@ public class ChatView extends ViewPart {
             }
         });
 
-        // Тонкая разделительная линия между полем ввода и панелью кнопок.
-        Composite rule = new Composite(composer, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, false).hint(SWT.DEFAULT, 1).applyTo(rule);
-        rule.setBackground(composer.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW));
-
         Composite actions = new Composite(composer, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(actions);
-        GridLayoutFactory.fillDefaults().numColumns(3).margins(0, 0).spacing(4, 0).applyTo(actions);
+        GridLayoutFactory.fillDefaults().numColumns(3).applyTo(actions);
         ToolBar tools = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
         GridDataFactory.fillDefaults().grab(true, false).align(SWT.BEGINNING, SWT.CENTER).applyTo(tools);
 
@@ -849,15 +781,20 @@ public class ChatView extends ViewPart {
                 + " (скриншот — Ctrl+V, файл можно перетащить)");
         attachButton.addListener(SWT.Selection, event -> chooseFiles());
 
-        autoButton = new ToolItem(tools, SWT.DROP_DOWN);
-        autoButton.setToolTipText("Режим подтверждения действий модели");
-        autoButton.addListener(SWT.Selection, event -> showApprovalMenu());
+        autoButton = new ToolItem(tools, SWT.CHECK);
+        autoButton.setToolTipText(AUTO_MODE + ": модель вызывает инструменты MCP без вопроса (правка модулей и git — всегда без"
+                + " вопроса). Команда /auto");
+        autoButton.addListener(SWT.Selection, event -> setAutoApprove(autoButton.getSelection()));
 
-        readOnlyButton = null;
+        readOnlyButton = new ToolItem(tools, SWT.CHECK);
+        readOnlyButton.setToolTipText(READ_ONLY_MODE + ": модель только отвечает, инструменты правки (edit_module, git_restore,"
+                + " меняющие инструменты MCP) ей не передаются. Команда /readonly");
+        readOnlyButton.addListener(SWT.Selection, event -> setReadOnly(readOnlyButton.getSelection()));
         updateModeButtons();
 
+        new ToolItem(tools, SWT.SEPARATOR);
         mcpButton = new ToolItem(tools, SWT.PUSH);
-        mcpButton.setText("");
+        mcpButton.setText("MCP");
         mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
 
         ToolBar modelBar = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
@@ -874,47 +811,23 @@ public class ChatView extends ViewPart {
         updateInputHeight();
     }
 
+    /**
+     * Кнопки режимов: включённый — цветной значок с подписью («Авто»,
+     * «Только вопросы»), выключенный — серый значок без подписи.
+     */
     private void updateModeButtons() {
         if (autoButton == null || autoButton.isDisposed()) {
             return;
         }
         boolean auto = isAutoApprove();
         autoButton.setSelection(auto);
-        autoButton.setImage(isReadOnly() ? Icons.gray(Icons.AUTO) : auto ? Icons.image(Icons.AUTO) : Icons.gray(Icons.AUTO));
-        autoButton.setText(isReadOnly() ? "План" : auto ? "Авто" : "Спрашивать");
+        autoButton.setImage(auto ? Icons.image(Icons.AUTO) : Icons.gray(Icons.AUTO));
+        autoButton.setText(auto ? "Авто" : "");
         boolean readOnly = isReadOnly();
-        readOnlyButton = null;
+        readOnlyButton.setSelection(readOnly);
+        readOnlyButton.setImage(readOnly ? Icons.image(Icons.READ_ONLY) : Icons.gray(Icons.READ_ONLY));
+        readOnlyButton.setText(readOnly ? READ_ONLY_MODE : "");
         composer.layout(true, true);
-    }
-
-    private void showApprovalMenu() {
-        Menu menu = new Menu(autoButton.getParent());
-        addApprovalMode(menu, "Авто", "Модель сама выполняет разрешённые действия", () -> {
-            setAutoApprove(true);
-            setReadOnly(false);
-        });
-        addApprovalMode(menu, "Спрашивать перед правками", "Чтение автоматически, изменения требуют подтверждения", () -> {
-            setAutoApprove(false);
-            setReadOnly(false);
-        });
-        addApprovalMode(menu, "План", "Только план и ответы, проект не изменяется", () -> {
-            setAutoApprove(false);
-            setReadOnly(true);
-        });
-        menu.addListener(SWT.Hide, event -> menu.getDisplay().asyncExec(menu::dispose));
-        menu.setLocation(autoButton.getParent().toDisplay(autoButton.getBounds().x,
-                autoButton.getBounds().y + autoButton.getBounds().height));
-        menu.setVisible(true);
-    }
-
-    private void addApprovalMode(Menu menu, String title, String description, Runnable action) {
-        MenuItem item = new MenuItem(menu, SWT.PUSH);
-        item.setText(title + " — " + description);
-        item.addListener(SWT.Selection, event -> {
-            approvalMode = title;
-            action.run();
-            updateModeButtons();
-        });
     }
 
     /** Отступ содержимого от рамки ввода. */
@@ -1076,154 +989,71 @@ public class ChatView extends ViewPart {
         };
     }
 
-    private ChatSession newSession(String id) {
-        return new ChatSession(
-                ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), new ToolSource() {
-                    @Override
-                    public List<Tool> tools(Consumer<ToolUse> problems) {
-                        return ChatView.this.tools(problems);
-                    }
-
-                    @Override
-                    public String brief() {
-                        String brief = ProjectBrief.describe(EclipseWorkspaceFiles.current());
-                        if (SettingsStore.workspace().load().toolsEnabled()) {
-                            brief = (brief + "\n\n" + skills.prompt()).strip();
-                        }
-                        return isReadOnly() ? (brief + "\n\n" + ProjectBrief.READ_ONLY_RULES).strip() : brief;
-                    }
-                }, (use, arguments) -> approve(id, use, arguments)));
-    }
-
-    /** Новый пустой диалог в этом виде; текущий остаётся в истории чатов. */
+    /** Новый пустой диалог; текущий остаётся в истории чатов. */
     private void newChat() {
-        if (session.isBusy()) {
-            newChatView();
-            return;
-        }
+        session.cancel();
         saveIfChanged();
-        switchChat(chats.newId(), List.of());
+        session.clear();
+        allowedInChat.clear();
+        if (session.provider() instanceof ModelChatProvider provider) {
+            provider.forgetRejections();
+        }
+        chatId = chats.newId();
+        saved = List.of();
         try {
             chats.prune();
         } catch (IOException e) {
             Platform.getLog(getClass()).warn("Не удалось удалить старые диалоги EDT AI", e);
         }
-        updatePartName();
+        refreshHistoryPanel();
     }
 
-    /** Новый вид с пустым диалогом: текущий чат этого вида не трогаем. */
-    private void newChatView() {
-        try {
-            getSite().getPage().showView(ID, "new:" + NEW_VIEWS.incrementAndGet(), IWorkbenchPage.VIEW_ACTIVATE);
-        } catch (PartInitException e) {
-            showNotice("Не удалось открыть новый чат: " + e.getMessage());
-        }
-    }
-
-    /** Открывает сохранённый диалог; открытый в другом виде — показывает его. */
+    /** Открывает сохранённый диалог. */
     private void openChat(String id) {
         if (id.equals(chatId)) {
             return;
         }
-        ChatView other = openViews.get(id);
-        if (other != null && other != this) {
-            getSite().getPage().activate(other);
+        if (session.isBusy()) {
+            showNotice("Дождитесь ответа или остановите его, чтобы открыть другой чат");
             refreshHistoryPanel();
             return;
         }
+        saveIfChanged();
         try {
             List<ChatMessage> messages = chats.file(id).load();
-            switchChat(id, messages);
+            session.restore(messages);
+            chatId = id;
+            saved = messages;
             scrollToEnd = !messages.isEmpty();
+            allowedInChat.clear();
             chats.setCurrent(id);
-            updatePartName();
+            refreshHistoryPanel();
         } catch (IOException e) {
             showNotice("Не удалось открыть чат: " + e.getMessage());
         }
     }
 
-    /** Подключает вид к чату {@code id} с уже загруженными сообщениями (или пустыми). */
-    /** Время изменения файла чата в мс; нет файла — 0. */
-    private long fileModified(String id) {
-        try {
-            return Files.getLastModifiedTime(chats.file(id).path()).toMillis();
-        } catch (IOException e) {
-            return 0;
-        }
-    }
-
-    private void switchChat(String id, List<ChatMessage> messages) {
-        if (session != null) {
-            session.removeListener(chatListener);
-        }
-        if (chatId != null) {
-            openViews.remove(chatId, this);
-        }
-        chatId = id;
-        session = sessions.computeIfAbsent(id, key -> {
-            ChatSession created = newSession(key);
-            created.addListener(persistingListener(key));
-            return created;
-        });
-        session.addListener(chatListener);
-        openViews.put(id, this);
-        allowedInChat.computeIfAbsent(id, key -> ConcurrentHashMap.newKeySet());
-        saved = List.of();
-        expandedCalls.clear();
-        recall = -1;
-        rendered.clear();
-        scrollToEnd = false;
-        // Файл читаем только в новую сессию: у живой своя история (ответ может идти в фоне).
-        if (session.messages().isEmpty() && !messages.isEmpty()) {
-            // restore() зовёт historyChanged → persistingListener сохранит файл:
-            // запоминаем mtime до, возвращаем после, чтобы чат не всплывал в топе.
-            long wasModified = fileModified(id);
-            try {
-                session.restore(messages);
-                Files.setLastModifiedTime(chats.file(id).path(), FileTime.fromMillis(wasModified));
-            } catch (IllegalStateException e) {
-                // Сессия уже занята: история остаётся её.
-            } catch (IOException e) {
-                // Не удалось вернуть время: чат всплывёт в списке, не страшно.
-            }
-        }
-        scrollToEnd = !session.messages().isEmpty();
-        if (session.isBusy()) {
-            markBusy(true);
-        }
-        refresh();
-        refreshHistoryPanel();
-        updateStatus();
-        // Вернувшись в чат, где ответ уже закончился, отправляем накопленную очередь.
-        sendQueued();
-    }
-
     /** Удаляет открытый диалог и начинает новый. */
     private void deleteChat() {
-        String id = chatId;
         session.cancel();
         try {
-            chats.delete(id);
+            chats.delete(chatId);
         } catch (IOException e) {
             showNotice("Не удалось удалить чат: " + e.getMessage());
             return;
         }
-        session.clear();
-        session.removeListener(chatListener);
-        sessions.remove(id);
-        allowedInChat.remove(id);
-        openViews.remove(id, this);
         saved = List.of();
-        switchChat(chats.newId(), List.of());
-        updatePartName();
+        session.clear();
+        allowedInChat.clear();
+        chatId = chats.newId();
+        refreshHistoryPanel();
     }
 
     /** Сообщения чата: открытого — из вида, остальных — из файла; null — не прочитать или пуст. */
     private List<ChatMessage> messagesOf(String id) {
         List<ChatMessage> messages;
-        ChatSession live = sessions.get(id);
         try {
-            messages = live != null ? live.messages() : chats.file(id).load();
+            messages = id.equals(chatId) ? session.messages() : chats.file(id).load();
         } catch (IOException e) {
             showNotice("Не удалось прочитать чат: " + e.getMessage());
             return null;
@@ -1308,21 +1138,11 @@ public class ChatView extends ViewPart {
     @Override
     public void init(IViewSite site, IMemento memento) throws PartInitException {
         super.init(site, memento);
-        String secondary = site.getSecondaryId();
-        if (secondary != null && secondary.startsWith(CHAT_PREFIX)) {
-            wantedChat = secondary.substring(CHAT_PREFIX.length());
-        } else if (secondary != null && secondary.startsWith("new:")) {
-            wantedChat = "";
-        }
         if (memento != null) {
             historyShown = Boolean.TRUE.equals(memento.getBoolean(MEMENTO_HISTORY));
             Integer left = memento.getInteger(MEMENTO_HISTORY_WIDTH);
             if (left != null && left > 5 && left < 95) {
                 historyWeights = new int[] { left, 100 - left };
-            }
-            String restored = memento.getString(MEMENTO_CHAT);
-            if (wantedChat == null && restored != null) {
-                wantedChat = restored;
             }
         }
     }
@@ -1331,9 +1151,6 @@ public class ChatView extends ViewPart {
     public void saveState(IMemento memento) {
         super.saveState(memento);
         memento.putBoolean(MEMENTO_HISTORY, historyShown);
-        if (chatId != null) {
-            memento.putString(MEMENTO_CHAT, chatId);
-        }
         if (sash != null && !sash.isDisposed() && historyShown) {
             int[] weights = sash.getWeights();
             memento.putInteger(MEMENTO_HISTORY_WIDTH, weights[0] * 100 / Math.max(1, weights[0] + weights[1]));
@@ -1548,8 +1365,7 @@ public class ChatView extends ViewPart {
         } catch (IOException e) {
             entries = List.of();
         }
-        if (entries.isEmpty() || entries.size() == 1 && entries.get(0).id().equals(chatId)
-                && (session == null || session.messages().isEmpty())) {
+        if (entries.isEmpty() || entries.size() == 1 && entries.get(0).id().equals(chatId) && session.messages().isEmpty()) {
             Action none = new Action("Сохранённых чатов нет") {
             };
             none.setEnabled(false);
@@ -1608,15 +1424,9 @@ public class ChatView extends ViewPart {
         } else if (event.keyCode == SWT.ESC && approvalBar.isShown()) {
             event.doit = false;
             approvalBar.deny();
-        } else if (event.keyCode == SWT.ESC && session != null && session.isBusy()) {
+        } else if (event.keyCode == SWT.ESC && session.isBusy()) {
             event.doit = false;
             session.cancel();
-        } else if ((event.stateMask & SWT.MOD1) != 0 && event.keyCode == 't') {
-            event.doit = false;
-            newChatView();
-        } else if ((event.stateMask & SWT.MOD1) != 0 && event.keyCode == 'w') {
-            event.doit = false;
-            getSite().getPage().hideView(this);
         } else if ((event.keyCode == SWT.ARROW_UP || event.keyCode == SWT.ARROW_DOWN) && event.stateMask == 0
                 && (input.getText().isEmpty() || recall >= 0)) {
             event.doit = !recallSent(event.keyCode == SWT.ARROW_UP ? -1 : 1);
@@ -1630,8 +1440,7 @@ public class ChatView extends ViewPart {
      * @return {@code true}, если поле изменилось
      */
     private boolean recallSent(int direction) {
-        List<String> sent = (session == null ? List.<ChatMessage>of() : session.messages()).stream()
-                .filter(message -> message.role() == ChatRole.USER).map(ChatMessage::text).toList();
+        List<String> sent = session.messages().stream().filter(message -> message.role() == ChatRole.USER).map(ChatMessage::text).toList();
         if (sent.isEmpty()) {
             return false;
         }
@@ -1685,7 +1494,7 @@ public class ChatView extends ViewPart {
 
     /** Кнопка у поля: идёт ответ и поле пусто — «Стоп», иначе отправить (или в очередь). */
     private void sendOrStop() {
-        if (session != null && session.isBusy() && input.getText().isBlank()) {
+        if (session.isBusy() && input.getText().isBlank()) {
             session.cancel();
         } else {
             send();
@@ -1745,7 +1554,6 @@ public class ChatView extends ViewPart {
             case EXPLAIN -> EXPLAIN_PROMPT;
             case TESTS -> TESTS_PROMPT;
             case SKILL -> SKILL_PROMPT;
-            case ANSWER, OPTIONS, RECOMMEND, PLAN -> command.dialoguePrompt();
             default -> null;
         };
     }
@@ -1770,8 +1578,6 @@ public class ChatView extends ViewPart {
             text = command.argument().isEmpty() ? prompt : prompt + "\n\n" + command.argument();
         }
         session.send(text, context, attachments);
-        saveChat(chatId, session.messages());
-        refreshHistoryPanel();
     }
 
     /**
@@ -1779,7 +1585,7 @@ public class ChatView extends ViewPart {
      * он оборвался — очередь возвращается в поле ввода: решать пользователю.
      */
     private void sendQueued() {
-        if (queueBar.isEmpty() || session == null || session.isBusy()) {
+        if (queueBar.isEmpty() || session.isBusy()) {
             return;
         }
         List<ChatMessage> messages = session.messages();
@@ -2071,7 +1877,7 @@ public class ChatView extends ViewPart {
 
     /** {@code /compact}: краткое содержание диалога вместо сообщений выше. */
     private void compact() {
-        if (session == null || session.isBusy()) {
+        if (session.isBusy()) {
             showNotice("Дождитесь ответа или остановите его");
             return;
         }
@@ -2148,7 +1954,6 @@ public class ChatView extends ViewPart {
             return;
         }
         modelsFor = key;
-        modelsRequested = key;
         modelsLoading = true;
         modelsError = null;
         background("EDT AI: список моделей", () -> {
@@ -2168,11 +1973,8 @@ public class ChatView extends ViewPart {
             String problem = error;
             inUi(() -> {
                 modelsLoading = false;
-                // Ответ пришёл для другого сервера — игнорируем: список уже не тот.
-                if (key.equals(modelsRequested)) {
-                    serverModels = loaded;
-                    modelsError = problem;
-                }
+                serverModels = loaded;
+                modelsError = problem;
                 runAfterModels();
             });
         });
@@ -2250,7 +2052,7 @@ public class ChatView extends ViewPart {
         preferences().put(RECENT_MODELS, ModelChoices.format(ModelChoices.remember(recent, model)));
         settings = SettingsStore.workspace().load();
         updateModelButton();
-        showNotice("Модель: " + model + (session != null && session.isBusy() ? " — со следующего вопроса" : ""));
+        showNotice("Модель: " + model + (session.isBusy() ? " — со следующего вопроса" : ""));
     }
 
     /** {@code /model}: без имени — меню, с именем — выбрать (точно или единственную подходящую). */
@@ -2285,13 +2087,12 @@ public class ChatView extends ViewPart {
             return;
         }
         McpHub.Health health = McpHub.health(mcp.lastStatus(SettingsStore.workspace().load().mcpServers()));
-        mcpButton.setText(health.text().split("\\n", 2)[0]);
         mcpButton.setImage(Icons.image(switch (health.state()) {
             case CONNECTED -> Icons.STATUS_OK;
             case FAILED, UNSUPPORTED -> Icons.STATUS_ERROR;
             case DISABLED, UNKNOWN -> Icons.STATUS_OFF;
         }));
-        mcpButton.setToolTipText(health.text() + "\nЩелчок — проверить MCP (/mcp)");
+        mcpButton.setToolTipText(health.text() + "\nЩелчок — проверить и показать инструменты (/mcp)");
         mcpButton.setData(health.state());
         composer.layout(true, true);
     }
@@ -2356,33 +2157,20 @@ public class ChatView extends ViewPart {
      * {@code false} от него — поля нет, текст остаётся в чате.
      */
     void requestCommitMessage(Predicate<String> target) {
-        if (session == null || session.isBusy()) {
+        if (session.isBusy()) {
             showNotice("Дождитесь ответа или остановите его, потом нажмите кнопку ещё раз");
             return;
         }
-        String id = "commit:" + System.nanoTime();
-        ChatSession job = newSession(id);
-        CompletableFuture<ChatMessage> answer = job.send(COMMIT_PROMPT);
-        answer.whenComplete((message, error) -> inUi(() -> {
-            try {
-                if (error == null && message != null && message.status() == Status.DONE) {
-                    String text = CommitMessage.extract(message.text());
-                    if (!text.isEmpty()) {
-                        target.test(text);
-                    }
-                }
-            } finally {
-                job.clear();
-                allowedInChat.remove(id);
-            }
-        }));
+        commitTarget = target;
+        commitAnswer = session.messages().size() + 1;
+        submit(COMMIT_PROMPT, List.of(), List.of());
     }
 
     /** Ответ на «Сообщение коммита» готов: текст — в окно коммита. */
     private void deliverCommitMessage() {
         Predicate<String> target = commitTarget;
         commitTarget = null;
-        List<ChatMessage> messages = session == null ? List.of() : session.messages();
+        List<ChatMessage> messages = session.messages();
         if (target == null || commitAnswer >= messages.size()) {
             return;
         }
@@ -2433,7 +2221,7 @@ public class ChatView extends ViewPart {
     }
 
     private void editMessage(int index) {
-        if (session == null || session.isBusy()) {
+        if (session.isBusy()) {
             showNotice("Дождитесь ответа или остановите его, чтобы изменить сообщение");
             return;
         }
@@ -2555,8 +2343,8 @@ public class ChatView extends ViewPart {
      * последнее).
      */
     void refresh() {
-        List<ChatMessage> messages = session == null ? List.of() : session.messages();
-        boolean idle = session == null || !session.isBusy();
+        List<ChatMessage> messages = session.messages();
+        boolean idle = !session.isBusy();
         List<Set<MessageRenderer.Action>> actions = new ArrayList<>();
         List<List<String>> files = new ArrayList<>();
         List<Set<String>> expanded = new ArrayList<>();
@@ -2681,30 +2469,19 @@ public class ChatView extends ViewPart {
 
     // ---- сохранение диалога ----
 
-    /** Открывает диалог: из secondaryId, из memento, иначе последний открытый. */
+    /** Открывает последний диалог; старый единственный {@code chat.json} становится первым в истории. */
     private void restoreHistory() {
-        String id = wantedChat;
-        List<ChatMessage> messages = List.of();
         try {
             chats.migrate(stateLocation.resolve(HISTORY_FILE));
-            if (id == null) {
-                id = chats.current().orElseGet(chats::newId);
-            } else if (id.isEmpty()) {
-                id = chats.newId();
-            }
-            if (!id.isEmpty()) {
-                messages = chats.file(id).load();
-            }
+            chatId = chats.current().orElseGet(chats::newId);
+            List<ChatMessage> messages = chats.file(chatId).load();
+            session.restore(messages);
+            saved = messages;
+            scrollToEnd = !messages.isEmpty();
         } catch (IOException e) {
-            Platform.getLog(getClass()).warn("Не удалось восстановить диалог EDT AI", e);
-            id = id != null ? id : chats.newId();
+            chatId = chats.newId();
+            Platform.getLog(getClass()).warn("Не удалось восстановить диалог EDT AI из " + chats.file(chatId).path().getParent(), e);
         }
-        if (openViews.containsKey(id) && openViews.get(id) != this) {
-            id = chats.newId();
-            messages = List.of();
-        }
-        switchChat(id, messages);
-        updatePartName();
     }
 
     private void saveIfChanged() {
@@ -2716,21 +2493,13 @@ public class ChatView extends ViewPart {
 
     /** Пустой диалог не хранится: файла нет, в истории его нет. */
     private void saveHistory(List<ChatMessage> messages) {
-        saveChat(chatId, messages);
-        saved = messages;
-    }
-
-    /** Записывает историю чата {@code id} в его файл; вызывается и фоновым листенером. */
-    private void saveChat(String id, List<ChatMessage> messages) {
-        ChatHistoryFile file = chats.file(id);
+        ChatHistoryFile file = chats.file(chatId);
         try {
             if (messages.isEmpty()) {
                 Files.deleteIfExists(file.path());
             } else {
                 file.save(messages);
-                if (id.equals(chatId)) {
-                    chats.setCurrent(id);
-                }
+                chats.setCurrent(chatId);
             }
         } catch (IOException e) {
             Platform.getLog(getClass()).warn("Не удалось сохранить диалог EDT AI в " + file.path(), e);
@@ -2756,7 +2525,7 @@ public class ChatView extends ViewPart {
             ((GridData) emptyLink.getLayoutData()).exclude = configured;
             emptyState.layout(true, true);
         }
-        Control shown = session == null || session.messages().isEmpty() ? emptyState : history;
+        Control shown = session.messages().isEmpty() ? emptyState : history;
         if (topLayout.topControl != shown) {
             topLayout.topControl = shown;
             top.layout(true);
@@ -2767,7 +2536,7 @@ public class ChatView extends ViewPart {
         if (sendButton.isDisposed()) {
             return;
         }
-        boolean busy = session != null && session.isBusy();
+        boolean busy = session.isBusy();
         boolean typed = !input.getText().isBlank();
         sendButton.setBusy(busy && !typed);
         sendButton.setQueue(busy && typed);
@@ -2787,8 +2556,8 @@ public class ChatView extends ViewPart {
             text = "Модель не настроена";
         } else {
             List<String> parts = new ArrayList<>(List.of(settings.model()));
-            ReplyActivity activity = session == null ? null : session.activity();
-            TokenUsage usage = session == null ? null : session.usage();
+            ReplyActivity activity = session.activity();
+            TokenUsage usage = session.usage();
             if (approvalBar != null && approvalBar.isShown()) {
                 parts.add("ждёт вашего решения");
             } else if (activity != null) {
@@ -2817,10 +2586,10 @@ public class ChatView extends ViewPart {
 
     /** Оценка занятого окна для чата без ответов в этом сеансе; считается заново, только когда изменилась история. */
     private long estimate() {
-        List<ChatMessage> messages = session == null ? List.of() : session.messages();
+        List<ChatMessage> messages = session.messages();
         if (!messages.equals(estimated)) {
             estimated = messages;
-            estimate = session == null ? 0 : session.estimateTokens();
+            estimate = session.estimateTokens();
         }
         return estimate;
     }
@@ -2849,7 +2618,7 @@ public class ChatView extends ViewPart {
 
     private void tick() {
         ticking = false;
-        if (!history.isDisposed() && session != null && session.isBusy()) {
+        if (!history.isDisposed() && session.isBusy()) {
             updateStatus();
             ticking = true;
             history.getDisplay().timerExec(TICK_MS, this::tick);
@@ -2908,19 +2677,15 @@ public class ChatView extends ViewPart {
         return toolActivity.track(tools, tool -> !builtIn.contains(tool.name()) || tool.modifies());
     }
 
-    /**
-     * Вопрос пользователю перед вызовом инструмента MCP-сервера — в виде,
-     * где открыт чат {@code id}; вопрос без ответа переживает переключение чатов.
-     */
-    private CompletableFuture<Decision> approve(String id, ToolUse use, String arguments) {
-        Set<String> allowed = allowedInChat.computeIfAbsent(id, key -> ConcurrentHashMap.newKeySet());
-        if (allowed.contains(use.name()) || isAutoApprove()) {
+    /** Вопрос пользователю перед вызовом инструмента MCP-сервера: панель над полем ввода. */
+    private CompletableFuture<Decision> approve(ToolUse use, String arguments) {
+        if (allowedInChat.contains(use.name()) || isAutoApprove()) {
             return CompletableFuture.completedFuture(Decision.ALLOW);
         }
         CompletableFuture<Decision> decision = new CompletableFuture<>();
         decision.thenAccept(value -> {
             if (value == Decision.ALLOW_IN_CHAT) {
-                allowed.add(use.name());
+                allowedInChat.add(use.name());
             } else if (value == Decision.ALWAYS) {
                 inUi(() -> setAutoApprove(true));
             }
@@ -2939,18 +2704,6 @@ public class ChatView extends ViewPart {
         return InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
     }
 
-    /** Подпись вкладки вида: название чата в подсказке. */
-    private void updatePartName() {
-        String title;
-        try {
-            title = session == null || session.messages().isEmpty() ? "Новый чат"
-                    : chats.title(chatId, session.messages());
-        } catch (RuntimeException e) {
-            title = "Чат";
-        }
-        setContentDescription(title);
-    }
-
     @Override
     public void setFocus() {
         input.setFocus();
@@ -2963,23 +2716,11 @@ public class ChatView extends ViewPart {
         if (renderer != null) {
             renderer.dispose();
         }
-        String id = chatId;
-        if (id != null) {
-            openViews.remove(id, this);
-        }
-        if (session != null) {
-            session.removeListener(chatListener);
-            saveChat(id, session.messages());
-            if (!session.isBusy() && !openViews.containsKey(id)) {
-                // Сессию, которую никто не показывает и которая свободна, забываем: иначе утечка.
-                sessions.remove(id);
-                allowedInChat.remove(id);
-            }
-            // Занятую сессию не трогаем: её файл допишет фоновый листенер,
-            // а вопросы в ней останутся до нового открытия чата.
-        }
+        session.removeListener(chatListener);
+        session.cancel();
         // Закрытие сессий MCP — запросы по сети, не в UI-потоке.
         background("EDT AI: закрытие MCP", mcp::close);
+        saveIfChanged();
         preferences().removePreferenceChangeListener(preferenceListener);
         ResourcesPlugin.getWorkspace().removeResourceChangeListener(resourceListener);
         super.dispose();
@@ -2989,41 +2730,6 @@ public class ChatView extends ViewPart {
 
     ChatSession session() {
         return session;
-    }
-
-    String chatIdForTest() {
-        return chatId;
-    }
-
-    /** Вид, где открыт чат {@code id}, для тестов и обработчиков. */
-    static ChatView viewOf(String id) {
-        return openViews.get(id);
-    }
-
-    /** Сбрасывает сессии всех чатов: тесты чистят состояние между прогонами. */
-    static void resetSessionsForTest() {
-        sessions.values().forEach(session -> {
-            session.cancel();
-            session.clear();
-        });
-        sessions.clear();
-        openViews.clear();
-        allowedInChat.clear();
-        titleRequested.clear();
-    }
-
-    /** Свободный вид чата на странице (не занятый ответом); {@code null} — все заняты или нет ни одного. */
-    static ChatView freeOnPage(IWorkbenchPage page) {
-        ChatView last = null;
-        for (IViewReference ref : page.getViewReferences()) {
-            if (ID.equals(ref.getId()) && ref.getPart(false) instanceof ChatView view) {
-                if (!view.session.isBusy()) {
-                    return view;
-                }
-                last = view;
-            }
-        }
-        return last;
     }
 
     ChatHistoryFile historyFile() {

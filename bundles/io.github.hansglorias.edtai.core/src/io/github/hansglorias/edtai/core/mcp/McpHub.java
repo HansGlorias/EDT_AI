@@ -265,8 +265,7 @@ public final class McpHub implements AutoCloseable {
         for (ServerStatus server : servers) {
             text.append(text.isEmpty() ? "" : "\n").append(server.server().name()).append(": ").append(server.summary());
         }
-        int connected = (int) enabled.stream().filter(server -> server.state() == State.CONNECTED).count();
-        return new Health(state, (connected + "/" + enabled.size() + " MCP") + "\n" + text);
+        return new Health(state, text.toString());
     }
 
     /** Нет серверов — что показать вместо списка. */
