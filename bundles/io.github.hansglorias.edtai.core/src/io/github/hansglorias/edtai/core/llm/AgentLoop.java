@@ -260,7 +260,7 @@ final class AgentLoop {
         Tool tool = tools.stream().filter(candidate -> candidate.name().equals(call.name())).findFirst().orElse(null);
         if (tool == null) {
             String error = "Инструмента «" + call.name() + "» нет";
-            onTool.accept(new ToolUse(call.id(), call.name(), call.name(), error, ToolUse.Status.FAILED));
+            onTool.accept(ToolUse.failed(call.id(), call.name(), call.name(), ToolUse.Problem.NO_TOOL, ""));
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
         Map<String, Object> input;
@@ -268,13 +268,13 @@ final class AgentLoop {
             input = call.input();
         } catch (JsonException e) {
             String error = "Аргументы вызова — не JSON-объект: " + e.getMessage();
-            onTool.accept(new ToolUse(call.id(), call.name(), tool.name(), error, ToolUse.Status.FAILED));
+            onTool.accept(ToolUse.failed(call.id(), call.name(), tool.name(), ToolUse.Problem.BAD_ARGUMENTS, e.getMessage()));
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
         String summary = tool.summary(input);
         String key = call.name() + " " + Json.write(input);
         if (seen.containsKey(key)) {
-            onTool.accept(new ToolUse(call.id(), call.name(), summary, "повтор того же вызова, не выполнен", ToolUse.Status.FAILED));
+            onTool.accept(ToolUse.failed(call.id(), call.name(), summary, ToolUse.Problem.REPEATED, ""));
             return new ProtocolAdapter.ToolResult(call, REPEATED, true);
         }
         if (tool.needsApproval()) {
@@ -282,7 +282,7 @@ final class AgentLoop {
             onTool.accept(waiting);
             ToolApprover.Decision decision = decide(waiting, call.arguments());
             if (decision == ToolApprover.Decision.DENY) {
-                onTool.accept(new ToolUse(call.id(), call.name(), summary, "отклонено", ToolUse.Status.FAILED));
+                onTool.accept(ToolUse.failed(call.id(), call.name(), summary, ToolUse.Problem.DENIED, ""));
                 return new ProtocolAdapter.ToolResult(call, "Пользователь отклонил вызов этого инструмента. Не вызывай его"
                         + " повторно с теми же аргументами; объясни, что хотел сделать, или ответь без него.", true);
             }
@@ -295,7 +295,8 @@ final class AgentLoop {
             return new ProtocolAdapter.ToolResult(call, output.text(), false);
         } catch (ToolException | RuntimeException e) {
             String error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            onTool.accept(new ToolUse(call.id(), call.name(), summary, error, ToolUse.Status.FAILED));
+            ToolUse.Problem problem = e instanceof ToolException failure ? failure.problem() : ToolUse.Problem.FAILED;
+            onTool.accept(ToolUse.failed(call.id(), call.name(), summary, problem, error));
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
     }

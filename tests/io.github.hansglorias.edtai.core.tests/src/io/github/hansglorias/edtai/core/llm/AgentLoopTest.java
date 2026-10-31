@@ -325,7 +325,8 @@ class AgentLoopTest {
 
         assertEquals(List.of("Читает модуль Общий {\"module\":\"Общий\"}"), asked);
         assertEquals(List.of(ToolUse.Status.AWAITING, ToolUse.Status.FAILED), uses.stream().map(ToolUse::status).toList());
-        assertEquals("отклонено", uses.get(1).outcome());
+        assertEquals(ToolUse.Problem.DENIED, uses.get(1).problem());
+        assertEquals("Читает модуль Общий — отклонено", uses.get(1).withUsage(null).label());
         String result = Json.stringAt(chat(Json.parseObject(server.requests().get(1).body())).get(2), "content");
         assertTrue(result.startsWith("Ошибка: Пользователь отклонил вызов"), result);
     }
@@ -461,8 +462,9 @@ class AgentLoopTest {
 
         assertEquals("Готово.", run(Protocol.OPENAI_COMPATIBLE));
 
-        assertEquals(new ToolUse("call_1", "read_module", "Читает модуль Общий", "повтор того же вызова, не выполнен",
-                ToolUse.Status.FAILED), uses.get(uses.size() - 1).withUsage(null));
+        assertEquals(ToolUse.failed("call_1", "read_module", "Читает модуль Общий", ToolUse.Problem.REPEATED, ""),
+                uses.get(uses.size() - 1).withUsage(null));
+        assertEquals("Читает модуль Общий — повтор, не выполнен", uses.get(uses.size() - 1).withUsage(null).label());
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(2).body()).get("messages"));
         assertEquals("Ошибка: " + AgentLoop.REPEATED, Json.stringAt(messages.get(messages.size() - 1), "content"));
         assertEquals("system", Json.stringAt(messages.get(0), "role"));

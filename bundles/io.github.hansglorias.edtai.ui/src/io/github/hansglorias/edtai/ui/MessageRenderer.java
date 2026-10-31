@@ -303,8 +303,13 @@ final class MessageRenderer {
         for (int i = 0; i < uses.size(); i++) {
             ToolUse use = uses.get(i);
             String line = TOOL + use.label();
-            styles.add(style(offset + text.length(), line.length(),
-                    use.status() == ToolUse.Status.FAILED ? errorColor() : metaColor(), SWT.NORMAL));
+            StyleRange range = style(offset + text.length(), line.length(),
+                    use.status() == ToolUse.Status.FAILED ? errorColor() : metaColor(), SWT.NORMAL);
+            String details = use.details();
+            if (details != null) {
+                range.data = new Hint(details);
+            }
+            styles.add(range);
             text.append(line);
             if (i < uses.size() - 1) {
                 text.append('\n');
@@ -494,6 +499,10 @@ final class MessageRenderer {
             range.data = run;
         }
         return range;
+    }
+
+    /** Подсказка над текстом ленты: полный текст ошибки вызова. */
+    record Hint(String text) {
     }
 
     private static StyleRange style(int start, int length, Color foreground, int fontStyle) {
