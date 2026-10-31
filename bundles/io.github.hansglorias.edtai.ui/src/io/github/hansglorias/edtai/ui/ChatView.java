@@ -257,6 +257,8 @@ public class ChatView extends ViewPart {
         }
     }
 
+    /** Чаты, ответившие в фоне и ещё не открытые: зелёная точка в списке. */
+    private final Set<String> unread = ConcurrentHashMap.newKeySet();
     /** Живые диалоги по id: открытый и отвечающие в фоне. */
     private final Map<String, Live> lives = new ConcurrentHashMap<>();
     private Live current;
@@ -299,6 +301,7 @@ public class ChatView extends ViewPart {
                     if (!busy) {
                         attachChanges(chat);
                         if (chat != current) {
+                            unread.add(chat.id);
                             chat.approval = null;
                             saveIfChanged(chat);
                             lives.remove(chat.id, chat);
@@ -1120,6 +1123,7 @@ public class ChatView extends ViewPart {
             chat.saved = messages;
         }
         lives.put(chat.id, chat);
+        unread.remove(chat.id);
         current = chat;
         session = chat.session;
         chatId = chat.id;
@@ -1269,9 +1273,9 @@ public class ChatView extends ViewPart {
             return;
         }
         try {
-            historyPanel.show(chats.search(historyPanel.query()), chatId, answering());
+            historyPanel.show(chats.search(historyPanel.query()), chatId, answering(), unread);
         } catch (IOException e) {
-            historyPanel.show(List.of(), chatId, Set.of());
+            historyPanel.show(List.of(), chatId, Set.of(), Set.of());
         }
     }
 
@@ -2053,7 +2057,12 @@ public class ChatView extends ViewPart {
 
     /** Модели для меню: текущая, недавние, с сервера. */
     List<String> modelChoices() {
-        return ModelChoices.merge(settings.model(), ModelChoices.parse(preferences().get(RECENT_MODELS, "")), serverModels);
+        return ModelChoices.merge(settings.model(), ModelChoices.parse(preferences().get(recentModelsKey(), "")), serverModels);
+    }
+
+    /** Недавние модели — у каждого сервера свои. */
+    private String recentModelsKey() {
+        return ModelChoices.recentKey(RECENT_MODELS, settings.baseUrl());
     }
 
     private String modelsKey() {
@@ -2226,8 +2235,8 @@ public class ChatView extends ViewPart {
             return;
         }
         // Прежняя — тоже в недавние: к ней обычно возвращаются.
-        List<String> recent = ModelChoices.remember(ModelChoices.parse(preferences().get(RECENT_MODELS, "")), settings.model());
-        preferences().put(RECENT_MODELS, ModelChoices.format(ModelChoices.remember(recent, model)));
+        List<String> recent = ModelChoices.remember(ModelChoices.parse(preferences().get(recentModelsKey(), "")), settings.model());
+        preferences().put(recentModelsKey(), ModelChoices.format(ModelChoices.remember(recent, model)));
         settings = SettingsStore.workspace().load();
         updateModelButton();
         showNotice("Модель: " + model + (session.isBusy() ? " — со следующего вопроса" : ""));
