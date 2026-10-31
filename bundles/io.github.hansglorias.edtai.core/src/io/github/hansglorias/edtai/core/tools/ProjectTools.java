@@ -44,7 +44,14 @@ public final class ProjectTools {
 
     // ---- инструменты ----
 
-    private final class ProjectInfo implements Tool {
+    private abstract class ReadingTool implements Tool {
+        @Override
+        public boolean repeatableRead() {
+            return true;
+        }
+    }
+
+    private final class ProjectInfo extends ReadingTool {
         @Override
         public String name() {
             return "project_info";
@@ -98,7 +105,7 @@ public final class ProjectTools {
         }
     }
 
-    private final class ListObjects implements Tool {
+    private final class ListObjects extends ReadingTool {
         @Override
         public String name() {
             return "list_objects";
@@ -149,7 +156,7 @@ public final class ProjectTools {
         }
     }
 
-    private final class ReadModule implements Tool {
+    private final class ReadModule extends ReadingTool {
         @Override
         public String name() {
             return "read_module";
@@ -218,7 +225,7 @@ public final class ProjectTools {
         }
     }
 
-    private final class SearchCode implements Tool {
+    private final class SearchCode extends ReadingTool {
         @Override
         public String name() {
             return "search_code";

@@ -85,6 +85,11 @@ public final class ToolActivity {
         }
 
         @Override
+        public boolean repeatableRead() {
+            return tool.repeatableRead();
+        }
+
+        @Override
         public String summary(Map<String, Object> input) {
             return tool.summary(input);
         }

@@ -36,6 +36,17 @@ public interface Tool {
         return false;
     }
 
+    /**
+     * Вызов только читает данные и безопасен для повторного выполнения.
+     * Это отдельный контракт: отсутствие {@link #modifies()} не означает
+     * отсутствие побочных эффектов (например, save_skill или report_review).
+     * Неизвестный инструмент повторно не выполняем. MCP должен явно
+     * объявить readOnlyHint, одного имени get/list недостаточно.
+     */
+    default boolean repeatableRead() {
+        return false;
+    }
+
     /** Что делается — для ленты, по-русски: «Читает модуль ОбщийМодуль.Х.Модуль». */
     String summary(Map<String, Object> input);
 
