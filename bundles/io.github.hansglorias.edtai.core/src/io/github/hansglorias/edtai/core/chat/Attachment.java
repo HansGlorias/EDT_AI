@@ -44,12 +44,19 @@ public record Attachment(String name, String mediaType, String data) {
 
     /** Тип вложения-скилла: инструкция, которую модель выполняет. */
     public static final String SKILL = "text/x-skill";
+    /** Тип вложения-режима: в каком виде нужен ответ ({@link DialogMode}). */
+    public static final String MODE = "text/x-mode";
     /** Текст, взятый из документа: сам файл модели не уходит. */
     public static final String DOCUMENT = "text/x-document";
 
     /** Инструкция скилла к вопросу: команда {@code /имя}. */
     public static Attachment skill(String name, String instructions) {
         return new Attachment(name, SKILL, instructions);
+    }
+
+    /** Режим вопроса: {@link DialogMode#attachment()}. */
+    public static Attachment mode(String label, String instruction) {
+        return new Attachment(label, MODE, instruction);
     }
 
     public boolean isImage() {
@@ -140,6 +147,9 @@ public record Attachment(String name, String mediaType, String data) {
         if (SKILL.equals(mediaType)) {
             return "скилл " + name;
         }
+        if (MODE.equals(mediaType)) {
+            return "режим «" + name + "»";
+        }
         if (isImage()) {
             return name + ", " + Math.max(1, imageBytes() / 1024) + " КБ";
         }
@@ -166,6 +176,9 @@ public record Attachment(String name, String mediaType, String data) {
     public String promptText() {
         if (isImage()) {
             return "[Приложено изображение: " + name + "]";
+        }
+        if (MODE.equals(mediaType)) {
+            return "Режим ответа «" + name + "»: " + data;
         }
         if (!isText()) {
             return "[Приложен файл: " + name + "]";

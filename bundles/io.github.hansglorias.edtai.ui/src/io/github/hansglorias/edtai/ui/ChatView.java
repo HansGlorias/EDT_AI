@@ -131,6 +131,7 @@ import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.chat.CommitMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.chat.DialogMode;
 import io.github.hansglorias.edtai.core.chat.ChatSession;
 import io.github.hansglorias.edtai.core.chat.ChatStore;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
@@ -369,6 +370,10 @@ public class ChatView extends ViewPart {
     private ToolItem mcpButton;
     /** Выбор модели справа в поле ввода, рядом с «Отправить». */
     private ToolItem modelButton;
+    /** Режим следующего вопроса: кнопка рядом с моделью. */
+    private ToolItem modeButton;
+    /** Режим следующего вопроса; {@code null} — обычный. Сбрасывается после отправки. */
+    private DialogMode mode;
     /** Модели с сервера ({@code /models}); пока не загружены — пусто. */
     private List<String> serverModels = List.of();
     /** Почему список не загрузился; {@code null} — загрузился или не загружали. */
@@ -848,6 +853,14 @@ public class ChatView extends ViewPart {
 
         ToolBar modelBar = new ToolBar(actions, SWT.FLAT | SWT.RIGHT);
         GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(modelBar);
+        modeButton = new ToolItem(modelBar, SWT.DROP_DOWN);
+        modeButton.addListener(SWT.Selection, event -> {
+            Menu menu = modeMenu();
+            Rectangle bounds = modeButton.getBounds();
+            menu.setLocation(modeButton.getParent().toDisplay(bounds.x, bounds.y + bounds.height));
+            menu.setVisible(true);
+        });
+        updateModeButton();
         modelButton = new ToolItem(modelBar, SWT.DROP_DOWN);
         modelButton.addListener(SWT.Selection, event -> showModelMenu());
         // Список — заранее, пока указатель над кнопкой: к щелчку он обычно уже есть.
@@ -1608,7 +1621,18 @@ public class ChatView extends ViewPart {
             return;
         }
         SlashCommand.Invocation command = SlashCommand.parse(text).orElse(null);
-        if (command != null && promptOf(command.command()) == null) {
+        if (command != null && command.command().mode() != null && command.argument().isEmpty()) {
+            input.setText("");
+            chooseMode(command.command().mode());
+            return;
+        }
+        if (command == null && mode != null) {
+            // Режим — командой перед текстом: так он доживёт и до очереди.
+            text = SlashCommand.of(mode).text() + " " + text;
+            command = SlashCommand.parse(text).orElse(null);
+            chooseMode(null);
+        }
+        if (command != null && command.command().mode() == null && promptOf(command.command()) == null) {
             input.setText("");
             if (command.command() == SlashCommand.MODEL) {
                 modelCommand(command.argument());
@@ -1666,7 +1690,10 @@ public class ChatView extends ViewPart {
             text = argument.isEmpty() ? "Выполни скилл «" + skill.name() + "»." : argument;
             attachments.add(Attachment.skill(skill.name(), skill.body()));
         }
-        if (command != null) {
+        if (command != null && command.command().mode() != null) {
+            text = command.argument();
+            attachments.add(command.command().mode().attachment());
+        } else if (command != null) {
             if (command.command() == SlashCommand.SKILL) {
                 skills.find("create-skill").ifPresent(guide -> attachments.add(Attachment.skill(guide.name(), guide.body())));
             }
@@ -2080,6 +2107,55 @@ public class ChatView extends ViewPart {
         List<Runnable> pending = List.copyOf(afterModels);
         afterModels.clear();
         pending.forEach(Runnable::run);
+    }
+
+    /** Меню режимов: обычный вопрос и {@link DialogMode}; выбранный отмечен. */
+    Menu modeMenu() {
+        Menu menu = new Menu(modeButton.getParent());
+        modeItem(menu, null, "Обычный вопрос");
+        new MenuItem(menu, SWT.SEPARATOR);
+        for (DialogMode each : DialogMode.values()) {
+            modeItem(menu, each, each.label() + "\t" + SlashCommand.of(each).text());
+        }
+        return menu;
+    }
+
+    private void modeItem(Menu menu, DialogMode value, String text) {
+        MenuItem item = new MenuItem(menu, SWT.RADIO);
+        item.setText(text);
+        item.setSelection(value == mode);
+        if (value != null) {
+            item.setToolTipText(value.instruction());
+        }
+        item.addListener(SWT.Selection, event -> {
+            if (item.getSelection()) {
+                chooseMode(value);
+            }
+        });
+    }
+
+    /** Режим следующего вопроса; {@code null} — обычный. */
+    void chooseMode(DialogMode value) {
+        mode = value;
+        updateModeButton();
+        updateStatus();
+        if (value != null) {
+            input.setFocus();
+        }
+    }
+
+    private void updateModeButton() {
+        if (modeButton == null || modeButton.isDisposed()) {
+            return;
+        }
+        String text = mode == null ? "Режим" : mode.label();
+        if (!text.equals(modeButton.getText())) {
+            modeButton.setText(text);
+            modeButton.getParent().getParent().layout(true, true);
+        }
+        modeButton.setToolTipText(mode == null
+                ? "Режим следующего вопроса: ответ, варианты, рекомендация или план. Сейчас — обычный вопрос"
+                : "Режим следующего вопроса «" + mode.label() + "»: " + mode.instruction() + " После отправки — снова обычный");
     }
 
     /** Меню выбора модели под кнопкой. */
@@ -2656,6 +2732,9 @@ public class ChatView extends ViewPart {
             text = "Модель не настроена";
         } else {
             List<String> parts = new ArrayList<>(List.of(settings.model()));
+            if (mode != null) {
+                parts.add("режим «" + mode.label() + "»");
+            }
             ReplyActivity activity = session.activity();
             TokenUsage usage = session.usage();
             if (approvalBar != null && approvalBar.isShown()) {
@@ -2900,6 +2979,10 @@ public class ChatView extends ViewPart {
 
     ToolItem mcpButton() {
         return mcpButton;
+    }
+
+    ToolItem modeButton() {
+        return modeButton;
     }
 
     ToolItem modelButton() {
