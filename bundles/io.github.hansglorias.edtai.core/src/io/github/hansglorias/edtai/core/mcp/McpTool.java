@@ -91,7 +91,7 @@ final class McpTool implements Tool {
     public Result call(Map<String, Object> input) throws ToolException {
         McpCallResult result = hub.call(server, info.name(), input);
         // EDT-MCP не меняет метаданные, пока EDT собирает проект, и просит повторить: ждём сами, а не гоняем модель.
-        for (int attempt = 0; attempt < BUILD_RETRIES && result.error() && isBuilding(result.text()); attempt++) {
+        for (int attempt = 0; attempt < BUILD_RETRIES && result.error() && isBuilding(result.retryText()); attempt++) {
             try {
                 Thread.sleep(hub.buildRetryDelay.toMillis());
             } catch (InterruptedException e) {
