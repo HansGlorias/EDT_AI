@@ -48,6 +48,23 @@ class UiIconsTest extends AbstractChatTest {
     }
 
     @Test
+    void reviewSymbolsFitTwelvePixelRulerCell() {
+        for (String name : List.of("review_error", "review_warning", "review_info")) {
+            for (int zoom : new int[] { 100, 200 }) {
+                ImageData data = Icons.descriptor(name).getImageData(zoom);
+                int margin = 2 * zoom / 100;
+                for (int y = 0; y < data.height; y++) {
+                    for (int x = 0; x < data.width; x++) {
+                        if (x < margin || y < margin || x >= data.width - margin || y >= data.height - margin) {
+                            assertEquals(0, data.getAlpha(x, y), name + " не обрезается в узкой линейке, zoom=" + zoom);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void headerHasThreeActionsAndKeepsPreviousChat() throws Exception {
         answering(List.of("Готово."));
         ChatView view = showView();

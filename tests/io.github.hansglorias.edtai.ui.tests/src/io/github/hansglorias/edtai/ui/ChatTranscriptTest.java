@@ -22,6 +22,7 @@ import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.ide.IDE;
@@ -110,14 +111,32 @@ class ChatTranscriptTest extends AbstractChatTest {
                 + "ТекущаяДата() на клиенте? ".repeat(6) + "Напиши пример.";
         ask(view, question);
         assertBubble(view, question);
+        Screenshots.render(view.history(), "message-padding-long");
 
         page.getWorkbenchWindow().getShell().setSize(420, 780);
         settle();
         assertBubble(view, question);
+        Screenshots.render(view.history(), "message-padding-narrow");
+        page.getWorkbenchWindow().getShell().setSize(720, 780);
+        settle();
+        assertBubble(view, question);
+    }
+
+    @Test
+    void shortAndMultilineQuestionsHavePadding() throws Exception {
+        answering(List.of("Ответ с отступом от края."));
+        ChatView view = showView();
+        for (String question : List.of("Привет", "Первая строка\n\nВторая строка")) {
+            view.newChatForTest();
+            ask(view, question);
+            assertBubblePadding(view, question);
+            Screenshots.render(view.history(), question.contains("\n") ? "message-padding-multiline" : "message-padding-short");
+        }
     }
 
     /** Вопрос сдвинут вправо целиком, вместе с перенесёнными строками, и переносится. */
     private static void assertBubble(ChatView view, String question) {
+        assertBubblePadding(view, question);
         StyledText history = view.history();
         int indent = view.lineIndent(0);
         assertTrue(indent > 0, "вопрос — пузырём справа");
@@ -127,6 +146,33 @@ class ChatTranscriptTest extends AbstractChatTest {
             assertTrue(x >= left - 1, "символ " + i + " левее пузыря: " + x + " < " + left);
         }
         assertTrue(history.getLocationAtOffset(question.length() - 1).y > history.getLocationAtOffset(0).y, "длинный вопрос переносится");
+    }
+
+    private static void assertBubblePadding(ChatView view, String question) {
+        StyledText history = view.history();
+        // Многострочный Text на Windows отдаёт CRLF; проверяем смещения сохранённого текста.
+        assertEquals(question.replace("\r\n", "\n"), view.session().messages().get(0).text().replace("\r\n", "\n"));
+        question = view.session().messages().get(0).text();
+        assertTrue(history.getText().startsWith(question));
+        settle();
+        history.setTopPixel(0);
+        Rectangle bubble = view.bubbleBounds(0);
+        assertNotNull(bubble);
+        assertTrue(bubble.y >= 12, "сверху от первого пузыря есть внешнее поле: " + bubble);
+        assertTrue(bubble.x >= 16, "слева от пузыря есть внешнее поле: " + bubble);
+        assertTrue(bubble.x + bubble.width <= history.getClientArea().width - 16,
+                "справа от пузыря есть внешнее поле: " + bubble);
+        for (int i = 0; i < question.length(); i++) {
+            if (question.charAt(i) == '\n' || question.charAt(i) == '\r') continue;
+            Rectangle glyph = history.getTextBounds(i, i);
+            assertTrue(glyph.x >= bubble.x + 12, "слева внутри пузыря есть поле: " + glyph);
+            assertTrue(glyph.x + glyph.width <= bubble.x + bubble.width - 12, "справа внутри пузыря есть поле: " + glyph);
+            assertTrue(glyph.y >= bubble.y + 8, "сверху внутри пузыря есть поле: " + glyph);
+            assertTrue(glyph.y + glyph.height <= bubble.y + bubble.height - 8, "снизу внутри пузыря есть поле: " + glyph);
+        }
+        int footerY = history.getLocationAtOffset(question.length() + 1).y;
+        assertTrue(footerY >= bubble.y + bubble.height + 4, "время и действия отделены от пузыря");
+        assertTrue(history.getLocationAtOffset(question.length() + 1).x >= 16, "строка действий внутри внешних полей");
     }
 
     @Test

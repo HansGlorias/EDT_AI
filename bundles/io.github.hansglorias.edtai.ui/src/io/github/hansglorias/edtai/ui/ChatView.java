@@ -411,13 +411,13 @@ public class ChatView extends ViewPart {
     /** Пузырь вопроса не шире этой доли ленты. */
     private static final double BUBBLE_SHARE = 0.8;
     /** Поля пузыря вокруг текста. */
-    private static final int BUBBLE_PAD_X = 8;
-    private static final int BUBBLE_PAD_Y = 5;
-    private static final int BUBBLE_RADIUS = 14;
+    private static final int BUBBLE_PAD_X = 14;
+    private static final int BUBBLE_PAD_Y = 10;
+    private static final int BUBBLE_RADIUS = 16;
     /** Непрозрачность цвета выделения в пузыре: светлый оттенок, текст читается и в тёмной теме. */
     private static final int BUBBLE_ALPHA = 36;
     /** Отступ строки с временем и действиями от сообщения. */
-    private static final int FOOTER_GAP = 4;
+    private static final int FOOTER_GAP = 8;
     /** Ширина ленты, под которую разложены пузыри. */
     private int bubblesWidth = -1;
 
@@ -636,7 +636,8 @@ public class ChatView extends ViewPart {
     private void createHistory(Composite parent) {
         // Без системной полосы прокрутки: своя, узкая (ThinScrollBar).
         history = new StyledText(parent, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY);
-        history.setMargins(12, 10, 12, 10);
+        // Справа есть место и под внутреннее поле пузыря, и до края ленты.
+        history.setMargins(24, 24, 36, 24);
         history.setLineSpacing(2);
         scrollBar = new ThinScrollBar(history);
         renderer = new MessageRenderer(history, new MessageRenderer.Callbacks() {
@@ -2753,27 +2754,31 @@ public class ChatView extends ViewPart {
 
     /** Рисует пузыри вопросов, попавшие в полосу {@code [top, bottom)}. */
     private void paintBubbles(GC gc, int top, int bottom) {
-        Rectangle area = history.getClientArea();
-        int right = Math.min(area.width - history.getRightMargin() + BUBBLE_PAD_X, area.width - 2);
         for (Rendered item : rendered) {
             MessageRenderer.Placement placement = item.placement();
             if (!placement.bubble()) {
                 continue;
             }
-            int first = history.getLineAtOffset(placement.bubbleStart());
-            int last = history.getLineAtOffset(placement.bubbleEnd());
-            int y = history.getLinePixel(first) - BUBBLE_PAD_Y;
-            int height = history.getLinePixel(last + 1) + BUBBLE_PAD_Y - y;
-            if (y >= bottom || y + height <= top) {
+            Rectangle bounds = bubbleBounds(placement);
+            if (bounds.y >= bottom || bounds.y + bounds.height <= top) {
                 continue;
             }
-            int x = history.getLeftMargin() + history.getLineIndent(first) - BUBBLE_PAD_X;
             gc.setAntialias(SWT.ON);
             gc.setAlpha(BUBBLE_ALPHA);
             gc.setBackground(renderer.bubbleColor());
-            gc.fillRoundRectangle(x, y, right - x, height, BUBBLE_RADIUS, BUBBLE_RADIUS);
+            gc.fillRoundRectangle(bounds.x, bounds.y, bounds.width, bounds.height, BUBBLE_RADIUS, BUBBLE_RADIUS);
             gc.setAlpha(255);
         }
+    }
+
+    /** Фон вокруг самого текста: отступ строки с временем в высоту пузыря не входит. */
+    private Rectangle bubbleBounds(MessageRenderer.Placement placement) {
+        int first = history.getLineAtOffset(placement.bubbleStart());
+        int y = history.getLocationAtOffset(placement.bubbleStart()).y - BUBBLE_PAD_Y;
+        int bottom = history.getLocationAtOffset(placement.bubbleEnd()).y + history.getLineHeight(placement.bubbleEnd()) + BUBBLE_PAD_Y;
+        int x = history.getLeftMargin() + history.getLineIndent(first) - BUBBLE_PAD_X;
+        int right = history.getClientArea().width - history.getRightMargin() + BUBBLE_PAD_X;
+        return new Rectangle(x, y, Math.max(0, right - x), bottom - y);
     }
 
     private Runnable actionAt(int x, int y) {
@@ -3175,6 +3180,17 @@ public class ChatView extends ViewPart {
     /** Отступ слева строки ленты, где стоит {@code offset}: у вопроса — сдвиг пузыря вправо. */
     int lineIndent(int offset) {
         return history.getLineIndent(history.getLineAtOffset(offset));
+    }
+
+    /** Границы нарисованного пузыря вопроса, содержащего {@code offset}. */
+    Rectangle bubbleBounds(int offset) {
+        for (Rendered item : rendered) {
+            var placement = item.placement();
+            if (placement.bubble() && offset >= placement.bubbleStart() && offset <= placement.bubbleEnd()) {
+                return bubbleBounds(placement);
+            }
+        }
+        return null;
     }
 
     /** Выравнивание строки ленты, где стоит {@code offset}. */
