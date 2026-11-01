@@ -154,4 +154,46 @@
       <super type="org.eclipse.core.resources.textmarker"/>
       <persistent value="true"/>
    </extension>
+   <!-- Своя форма значка отличает ревью модели от диагностики EDT.
+        Тип и severity маркеров сохранены: работают и старые ревью. -->
+   <extension point="org.eclipse.ui.ide.markerImageProviders">
+      <imageprovider
+            id="io.github.hansglorias.edtai.ui.reviewImage"
+            markertype="io.github.hansglorias.edtai.ui.review"
+            icon="icons/review.png"/>
+   </extension>
+   <extension point="org.eclipse.ui.editors.annotationTypes">
+      <type name="io.github.hansglorias.edtai.ui.review.error"
+            super="org.eclipse.ui.workbench.texteditor.error"
+            markerType="io.github.hansglorias.edtai.ui.review" markerSeverity="2"/>
+      <type name="io.github.hansglorias.edtai.ui.review.warning"
+            super="org.eclipse.ui.workbench.texteditor.warning"
+            markerType="io.github.hansglorias.edtai.ui.review" markerSeverity="1"/>
+      <type name="io.github.hansglorias.edtai.ui.review.info"
+            super="org.eclipse.ui.workbench.texteditor.info"
+            markerType="io.github.hansglorias.edtai.ui.review" markerSeverity="0"/>
+   </extension>
+   <extension point="org.eclipse.ui.editors.markerAnnotationSpecification">
+      <specification annotationType="io.github.hansglorias.edtai.ui.review.error"
+            label="EDT AI: ошибка ревью" icon="icons/review_error.png"
+            colorPreferenceKey="edtai.review.error.color" colorPreferenceValue="217,87,99"
+            verticalRulerPreferenceKey="edtai.review.error.ruler" verticalRulerPreferenceValue="true"
+            overviewRulerPreferenceKey="edtai.review.error.overview" overviewRulerPreferenceValue="true"
+            textPreferenceKey="edtai.review.error.text" textPreferenceValue="false"
+            presentationLayer="3"/>
+      <specification annotationType="io.github.hansglorias.edtai.ui.review.warning"
+            label="EDT AI: предупреждение ревью" icon="icons/review_warning.png"
+            colorPreferenceKey="edtai.review.warning.color" colorPreferenceValue="189,134,31"
+            verticalRulerPreferenceKey="edtai.review.warning.ruler" verticalRulerPreferenceValue="true"
+            overviewRulerPreferenceKey="edtai.review.warning.overview" overviewRulerPreferenceValue="true"
+            textPreferenceKey="edtai.review.warning.text" textPreferenceValue="false"
+            presentationLayer="3"/>
+      <specification annotationType="io.github.hansglorias.edtai.ui.review.info"
+            label="EDT AI: информация ревью" icon="icons/review_info.png"
+            colorPreferenceKey="edtai.review.info.color" colorPreferenceValue="81,141,206"
+            verticalRulerPreferenceKey="edtai.review.info.ruler" verticalRulerPreferenceValue="true"
+            overviewRulerPreferenceKey="edtai.review.info.overview" overviewRulerPreferenceValue="true"
+            textPreferenceKey="edtai.review.info.text" textPreferenceValue="false"
+            presentationLayer="3"/>
+   </extension>
 </plugin>

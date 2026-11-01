@@ -19,7 +19,6 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Shell;
-import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.dialogs.FilteredItemsSelectionDialog;
 import org.eclipse.ui.dialogs.SearchPattern;
@@ -48,7 +47,7 @@ final class ModuleSelectionDialog extends FilteredItemsSelectionDialog {
 
             @Override
             public Image getImage(Object element) {
-                return PlatformUI.getWorkbench().getSharedImages().getImage(ISharedImages.IMG_OBJ_FILE);
+                return Icons.image(Icons.FILE);
             }
         });
         setDetailsLabelProvider(new LabelProvider() {

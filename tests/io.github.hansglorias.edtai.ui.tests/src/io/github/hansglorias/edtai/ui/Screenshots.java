@@ -24,6 +24,26 @@ final class Screenshots {
     private Screenshots() {
     }
 
+    /** Отрисовка самих виджетов: не захватывает перекрывающие окна других приложений. */
+    static Path render(Control control, String name) throws IOException {
+        flush(control.getDisplay());
+        Point size = control.getSize();
+        Image image = new Image(control.getDisplay(), size.x, size.y);
+        try {
+            GC gc = new GC(image);
+            try {
+                if (!control.print(gc)) {
+                    throw new IOException("SWT не смог отрисовать " + name);
+                }
+            } finally {
+                gc.dispose();
+            }
+            return save(image, name);
+        } finally {
+            image.dispose();
+        }
+    }
+
     /** Снимает область экрана, которую занимает {@code control}, в {@code <name>.png}. */
     static Path capture(Control control, String name) throws IOException {
         Display display = control.getDisplay();
@@ -42,16 +62,20 @@ final class Screenshots {
             } finally {
                 gc.dispose();
             }
-            Path dir = Path.of(System.getProperty("edtai.screenshots", "screenshots"));
-            Files.createDirectories(dir);
-            Path file = dir.resolve(name + ".png");
-            ImageLoader loader = new ImageLoader();
-            loader.data = new ImageData[] { image.getImageData() };
-            loader.save(file.toString(), SWT.IMAGE_PNG);
-            return file;
+            return save(image, name);
         } finally {
             image.dispose();
         }
+    }
+
+    private static Path save(Image image, String name) throws IOException {
+        Path dir = Path.of(System.getProperty("edtai.screenshots", "screenshots"));
+        Files.createDirectories(dir);
+        Path file = dir.resolve(name + ".png");
+        ImageLoader loader = new ImageLoader();
+        loader.data = new ImageData[] { image.getImageData() };
+        loader.save(file.toString(), SWT.IMAGE_PNG);
+        return file;
     }
 
     private static void flush(Display display) {
