@@ -51,8 +51,7 @@ public record McpCallResult(String text, boolean error, String retryText) {
         String content = String.join("\n\n", pieces);
         String retryText = content.isEmpty() && structured != null ? Json.write(structured) : content;
         if (structured != null) {
-            String report = Json.stringAt(structured, "report");
-            pieces.removeIf(piece -> piece.equals(report) || sameJson(piece, structured));
+            pieces.removeIf(piece -> sameReport(piece, structured) || sameJson(piece, structured));
             // Длинный report не должен оттеснять jobId, статус и ошибки
             // за границу обрезки. Значения и остальные поля не меняем.
             Map<String, Object> fields = Json.asObject(structured);
@@ -66,6 +65,27 @@ public record McpCallResult(String text, boolean error, String retryText) {
             }
         }
         return new McpCallResult(String.join("\n\n", pieces), Boolean.TRUE.equals(Json.at(result, "isError")), retryText);
+    }
+
+    /** report может лежать внутри обёртки сервера; сравниваем только целые строки. */
+    private static boolean sameReport(String text, Object value) {
+        if (value instanceof Map<?, ?> fields) {
+            if (text.equals(fields.get("report"))) {
+                return true;
+            }
+            for (Object child : fields.values()) {
+                if (sameReport(text, child)) {
+                    return true;
+                }
+            }
+        } else if (value instanceof List<?> items) {
+            for (Object child : items) {
+                if (sameReport(text, child)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Удаляем только целый блок, дублирующий JSON; частичные совпадения оставляем. */

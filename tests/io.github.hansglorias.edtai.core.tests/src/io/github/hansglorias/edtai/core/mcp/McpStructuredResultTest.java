@@ -97,6 +97,17 @@ class McpStructuredResultTest {
     }
 
     @Test
+    void nestedReportIsNotRepeatedAndUnknownFieldsRemainIntact() throws Exception {
+        String report = "Отчёт";
+        Map<String, Object> structured = Json.object("data", List.of(Json.object("report", report,
+                "details", Json.object("unknown", List.of(false, "значение")))), "jobId", "job-1");
+        server.tool("nested", "Отчёт", arguments -> Json.object("content",
+                List.of(text(report), resource(report), text(report + ": дополнение")), "structuredContent", structured));
+
+        assertEquals(Json.write(structured) + "\n\nОтчёт: дополнение", tool("nested").call(Map.of()).text());
+    }
+
+    @Test
     void nestedErrorsAreKeptAndOnlyOuterIsErrorFailsTheCall() throws Exception {
         Map<String, Object> nested = Json.object("success", false, "result", Json.object("isError", true,
                 "error", Json.object("message", "Нет проекта", "details", List.of("Диагностика"))));
