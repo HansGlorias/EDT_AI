@@ -15,7 +15,8 @@ import javax.imageio.ImageIO;
 /** Run from the repository root: java tools/GenerateIcons.java. JDK 17 only. */
 class GenerateIcons {
     private static final Color INK = new Color(0x788596);
-    private static final Color BRAND = new Color(0x278F95);
+    private static final Color BRAND = new Color(0x5B7BD5);
+    private static final Color SUCCESS = new Color(0x278F95);
     private static final Color ERROR = new Color(0xD95763);
     private static final Color WARNING = new Color(0xBD861F);
     private static final Color INFO = new Color(0x518DCE);
@@ -30,8 +31,14 @@ class GenerateIcons {
                 ImageIO.write(icon(name, scale), "png", directory.resolve(name + (scale == 2 ? "@2x" : "") + ".png").toFile());
             }
         }
+        Files.createDirectories(Path.of("target"));
+        preview(NAMES, "icon-preview");
+        preview(List.of("edtai", "review", "review_error", "review_warning", "review_info"), "brand-preview");
+    }
+
+    private static void preview(List<String> names, String file) throws Exception {
         // Contact sheet: actual size plus 2x, on both light and dark backgrounds.
-        BufferedImage sheet = new BufferedImage(720, 80 + NAMES.size() * 46, BufferedImage.TYPE_INT_RGB);
+        BufferedImage sheet = new BufferedImage(720, 80 + names.size() * 46, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = sheet.createGraphics();
         g.setColor(new Color(0xF7F9FC));
         g.fillRect(0, 0, 360, sheet.getHeight());
@@ -41,17 +48,16 @@ class GenerateIcons {
         for (int column = 0; column < 2; column++) {
             g.setColor(column == 0 ? new Color(0x303946) : new Color(0xE2E7EE));
             g.drawString("EDT AI / 16 px + 32 px", column * 360 + 24, 38);
-            for (int i = 0; i < NAMES.size(); i++) {
+            for (int i = 0; i < names.size(); i++) {
                 int x = column * 360 + 24;
                 int y = 64 + i * 46;
-                g.drawImage(icon(NAMES.get(i), 1), x, y + 8, null);
-                g.drawImage(icon(NAMES.get(i), 2), x + 40, y, null);
-                g.drawString(NAMES.get(i), x + 94, y + 21);
+                g.drawImage(icon(names.get(i), 1), x, y + 8, null);
+                g.drawImage(icon(names.get(i), 2), x + 40, y, null);
+                g.drawString(names.get(i), x + 94, y + 21);
             }
         }
         g.dispose();
-        Files.createDirectories(Path.of("target"));
-        ImageIO.write(sheet, "png", Path.of("target/icon-preview.png").toFile());
+        ImageIO.write(sheet, "png", Path.of("target/" + file + ".png").toFile());
     }
 
     private static BufferedImage icon(String name, int scale) {
@@ -66,9 +72,11 @@ class GenerateIcons {
         switch (name) {
             case "edtai" -> {
                 g.setColor(BRAND);
-                chat(g);
-                path(g, 6.4, 5.1, 4.5, 7, 6.4, 8.9);
-                path(g, 9.6, 5.1, 11.5, 7, 9.6, 8.9);
+                frame(g);
+                Path2D core = new Path2D.Double();
+                core.moveTo(8, 4.5); core.lineTo(11.5, 8); core.lineTo(8, 11.5);
+                core.lineTo(4.5, 8); core.closePath();
+                g.fill(core);
             }
             case "history" -> {
                 g.draw(new RoundRectangle2D.Double(1.8, 2, 12.4, 12, 2.6, 2.6));
@@ -116,7 +124,7 @@ class GenerateIcons {
                 path(g, 8, 10, 8, 11.5);
             }
             case "status_ok" -> {
-                g.setColor(BRAND); circle(g, 8, 8, 5.6); path(g, 5, 8, 7, 10, 11.2, 5.8);
+                g.setColor(SUCCESS); circle(g, 8, 8, 5.6); path(g, 5, 8, 7, 10, 11.2, 5.8);
             }
             case "status_error" -> {
                 g.setColor(ERROR); circle(g, 8, 8, 5.6); path(g, 6, 6, 10, 10); path(g, 10, 6, 6, 10);
@@ -125,15 +133,15 @@ class GenerateIcons {
             case "review", "review_error", "review_warning", "review_info" -> {
                 g.setColor(switch (name) { case "review_error" -> ERROR; case "review_warning" -> WARNING;
                     case "review_info" -> INFO; default -> BRAND; });
-                chat(g);
+                frame(g);
                 if (name.equals("review")) {
-                    path(g, 4.8, 7, 7, 9, 11.2, 4.8);
+                    path(g, 4.8, 8, 7, 10, 11.2, 5.8);
                 } else if (name.equals("review_error")) {
-                    path(g, 5.8, 4.8, 10.2, 9.2); path(g, 10.2, 4.8, 5.8, 9.2);
+                    path(g, 6, 6, 10, 10); path(g, 10, 6, 6, 10);
                 } else if (name.equals("review_warning")) {
-                    path(g, 8, 4.5, 8, 7.3); dot(g, 8, 9.5);
+                    path(g, 8, 5, 8, 8.4); dot(g, 8, 11);
                 } else {
-                    dot(g, 8, 4.6); path(g, 8, 7, 8, 9.5);
+                    dot(g, 8, 5); path(g, 8, 7.5, 8, 11.5);
                 }
             }
             default -> throw new IllegalArgumentException(name);
@@ -147,11 +155,11 @@ class GenerateIcons {
         return result;
     }
 
-    private static void chat(Graphics2D g) {
-        Path2D p = new Path2D.Double();
-        p.moveTo(4, 1.8); p.lineTo(12, 1.8); p.quadTo(14.2, 1.8, 14.2, 4);
-        p.lineTo(14.2, 10); p.quadTo(14.2, 12.2, 12, 12.2); p.lineTo(6, 12.2);
-        p.lineTo(2, 14.2); p.lineTo(2, 4); p.quadTo(2, 1.8, 4, 1.8); g.draw(p);
+    private static void frame(Graphics2D g) {
+        path(g, 5.3, 1.9, 1.9, 1.9, 1.9, 5.3);
+        path(g, 10.7, 1.9, 14.1, 1.9, 14.1, 5.3);
+        path(g, 1.9, 10.7, 1.9, 14.1, 5.3, 14.1);
+        path(g, 10.7, 14.1, 14.1, 14.1, 14.1, 10.7);
     }
 
     private static void path(Graphics2D g, double... points) {
