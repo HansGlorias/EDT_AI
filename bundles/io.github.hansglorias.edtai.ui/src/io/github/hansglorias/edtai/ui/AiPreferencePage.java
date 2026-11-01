@@ -66,6 +66,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Text systemPrompt;
     private Text contextLimit;
     private Text modelWindow;
+    private Label windowState;
     private Button toolsEnabled;
     private Text token;
     private Label tokenState;
@@ -114,6 +115,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
             protocol.add(value.label());
         }
         GridDataFactory.fillDefaults().span(2, 1).applyTo(protocol);
+        protocol.addListener(SWT.Selection, event -> updateWindowState());
 
         label(group, "Адрес:");
         baseUrl = new Text(group, SWT.BORDER);
@@ -146,6 +148,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
         label(group, "Модель:");
         model = new Text(group, SWT.BORDER);
+        model.addModifyListener(event -> updateWindowState());
         GridDataFactory.fillDefaults().grab(true, false).applyTo(model);
         listModels = new Button(group, SWT.PUSH);
         listModels.setText("Список…");
@@ -155,7 +158,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         label(group, "Макс. токенов ответа:");
         maxTokens = new Text(group, SWT.BORDER);
         maxTokens.setMessage("по умолчанию");
-        maxTokens.setToolTipText("Пусто — по умолчанию: для Anthropic " + 8192 + ", для OpenAI-совместимого не передаётся.");
+        maxTokens.setToolTipText("Максимум выходных токенов одного запроса к модели, а не всего ответа с шагами инструментов."
+                + " Пусто (0 в сохранённых настройках): OpenAI-совместимый — max_tokens не передаётся,"
+                + " Anthropic — " + ModelConnection.ANTHROPIC_DEFAULT_MAX_TOKENS + ". Для автоматического значения очистите поле.");
         GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(maxTokens);
         maxTokens.addModifyListener(event -> validate());
 
@@ -167,23 +172,37 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, systemPrompt.getLineHeight() * 4)
                 .applyTo(systemPrompt);
 
-        label(group, "Лимит контекста, символов:");
+        label(group, "Лимит кода, символов:");
         contextLimit = new Text(group, SWT.BORDER);
         contextLimit.setMessage(String.valueOf(AiSettings.DEFAULT_CONTEXT_LIMIT));
-        contextLimit.setToolTipText("Сколько символов кода из EDT прикреплять к одному сообщению. Что не влезло —"
-                + " обрезается по строкам. Пусто — " + AiSettings.DEFAULT_CONTEXT_LIMIT + ".");
+        contextLimit.setToolTipText("Лимит приложенного к сообщению кода из EDT, а не всего запроса. Пусто — "
+                + AiSettings.DEFAULT_CONTEXT_LIMIT + " символов; лишнее обрезается по строкам."
+                + " Вопрос, история, инструкции и описания инструментов сюда не входят."
+                + " Размер страниц результатов MCP определяется отдельно. Символы нельзя точно перевести в токены.");
         GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(contextLimit);
         contextLimit.addModifyListener(event -> validate());
 
         label(group, "Окно модели, токенов:");
         modelWindow = new Text(group, SWT.BORDER);
-        modelWindow.setMessage("по модели");
-        modelWindow.setToolTipText("Сколько токенов модель принимает за раз вместе с ответом (max_model_len, num_ctx)."
-                + " Пусто — по имени модели: Claude — 200 тыс., GPT-4o/4.1/5 и Gemini — 128 тыс., DeepSeek — 64 тыс.,"
-                + " остальные — " + AiSettings.DEFAULT_MODEL_WINDOW + ". Если сервер ответит «не помещается», запрос"
-                + " повторится с урезанной историей.");
+        modelWindow.setMessage("предположение по имени");
+        modelWindow.setToolTipText("Общее окно входа и выхода одного запроса: инструкции, история, код, инструменты и ответ."
+                + " Пусто (0 в сохранённых настройках) — предположение по имени/протоколу, не сведения сервера;"
+                + " В OpenAI-совместимом протоколе Qwen и неизвестная модель — " + AiSettings.DEFAULT_MODEL_WINDOW + "."
+                + " Укажите окно из конфигурации локального сервера (max_model_len, num_ctx),"
+                + " а не максимальное окно семейства модели. Большое окно не говорит о качестве модели."
+                + " Для автоматического значения очистите поле.");
         GridDataFactory.fillDefaults().hint(100, SWT.DEFAULT).span(2, 1).applyTo(modelWindow);
-        modelWindow.addModifyListener(event -> validate());
+        modelWindow.addModifyListener(event -> {
+            updateWindowState();
+            validate();
+        });
+
+        new Label(group, SWT.NONE);
+        windowState = new Label(group, SWT.WRAP);
+        windowState.setToolTipText("Это окно, выбранное плагином для расчёта бюджета запроса. Сервер не опрашивается."
+                + " Знак ≈ у токенов в чате означает оценку по длине текста, когда сервер не прислал usage;"
+                + " это не точная токенизация. Размер окна и оценка занятого места — разные величины.");
+        GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, SWT.DEFAULT).applyTo(windowState);
 
         new Label(group, SWT.NONE);
         toolsEnabled = new Button(group, SWT.CHECK);
@@ -199,6 +218,23 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         checkButton.addListener(SWT.Selection, event -> checkConnection());
         checkResult = new Label(group, SWT.WRAP);
         GridDataFactory.fillDefaults().grab(true, false).hint(300, SWT.DEFAULT).span(2, 1).applyTo(checkResult);
+    }
+
+    /** Предпросмотр по текущим полям; не читает токен и не обращается к серверу. */
+    private void updateWindowState() {
+        if (windowState == null) {
+            return;
+        }
+        int value = number(modelWindow);
+        if (value < 0 || value > 0 && (value < AiSettings.MIN_MODEL_WINDOW || value > AiSettings.MAX_MODEL_WINDOW)) {
+            windowState.setText("Для расчёта: исправьте значение окна модели");
+        } else {
+            ModelConnection connection = new ModelConnection(Protocol.values()[Math.max(0, protocol.getSelectionIndex())],
+                    "", model.getText(), "", 0, "", TrustSettings.from(AiSettings.defaults()), value);
+            windowState.setText("Для расчёта: " + connection.window() + " токенов · "
+                    + (value > 0 ? "настройка" : "предположение по имени/протоколу"));
+        }
+        windowState.getParent().layout(true);
     }
 
     /** Список моделей сервера с текущими значениями полей; выбранная попадает в поле «Модель». */
@@ -655,6 +691,18 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     Text contextLimitField() {
         return contextLimit;
+    }
+
+    Text modelWindowField() {
+        return modelWindow;
+    }
+
+    Combo protocolField() {
+        return protocol;
+    }
+
+    Label windowState() {
+        return windowState;
     }
 
     Button checkServerButton() {
