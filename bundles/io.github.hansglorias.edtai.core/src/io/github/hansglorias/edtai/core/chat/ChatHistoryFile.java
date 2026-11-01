@@ -62,6 +62,9 @@ public final class ChatHistoryFile {
     static String encode(List<ChatMessage> messages) {
         List<Object> items = new ArrayList<>();
         for (ChatMessage message : messages) {
+            if (message.isEmptyAnswer()) {
+                continue;
+            }
             Map<String, Object> item = new LinkedHashMap<>(Json.object("role", message.role().name(), "status",
                     message.status().name(), "time", message.time().toString(), "text", message.text()));
             if (!message.context().isEmpty()) {

@@ -4,8 +4,8 @@ import java.time.Duration;
 import java.time.Instant;
 
 /**
- * Что сейчас происходит с ответом: модель думает, пишет текст или
- * выполняется инструмент — для строки состояния.
+ * Что сейчас происходит с ответом: подготовка запроса, ожидание модели,
+ * текст или инструмент — для ленты и строки состояния.
  *
  * @param detail  для {@link Phase#TOOL}: что делает инструмент
  * @param started когда начался ответ
@@ -13,7 +13,9 @@ import java.time.Instant;
 public record ReplyActivity(Phase phase, String detail, Instant started) {
 
     public enum Phase {
-        /** Запрос ушёл, модель ещё ничего не написала: думает или читает длинный запрос. */
+        /** Подготовка истории перед обращением к провайдеру. */
+        PREPARING,
+        /** Провайдер готовит или выполняет запрос; видимого текста пока нет. */
         THINKING,
         /** Модель пишет текст ответа. */
         WRITING,
@@ -25,10 +27,11 @@ public record ReplyActivity(Phase phase, String detail, Instant started) {
         return new ReplyActivity(newPhase, newDetail, started);
     }
 
-    /** «думает… 12 с», «пишет ответ… 3 с», «Читает модуль X… 1 мин 5 с». */
+    /** «ожидает модель… 12 с», «пишет ответ… 3 с», «Читает модуль X… 1 мин 5 с». */
     public String describe(Instant now) {
         String what = switch (phase) {
-            case THINKING -> "думает";
+            case PREPARING -> "готовит запрос";
+            case THINKING -> "ожидает модель";
             case WRITING -> "пишет ответ";
             case TOOL -> detail == null || detail.isBlank() ? "вызывает инструмент" : detail;
         };
