@@ -1,0 +1,40 @@
+  # Update site на GitHub Pages: после каждого слияния в main EDT ставит и
+  # обновляет плагин по адресу https://hansglorias.github.io/EDT_AI/
+  # (Справка → Установить новое ПО → Добавить). Нужен один раз включённый
+  # Pages: Settings → Pages → Source: GitHub Actions.
+  pages:
+    name: update site на GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: edtai-update-site
+          path: site
+
+      - name: Страница для браузера
+        run: |
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="ru"><head><meta charset="utf-8"><title>EDT AI — update site</title></head>
+          <body style="font-family: sans-serif; max-width: 40em; margin: 3em auto">
+          <h1>EDT AI</h1>
+          <p>Это update site плагина для 1C:EDT. В EDT: <b>Справка → Установить новое ПО… → Добавить</b>,
+          адрес — эта страница. Обновления: <b>Справка → Проверить наличие обновлений</b>.</p>
+          <p>Исходники: <a href="https://github.com/HansGlorias/EDT_AI">github.com/HansGlorias/EDT_AI</a></p>
+          </body></html>
+          HTML
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
