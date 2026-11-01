@@ -169,9 +169,16 @@ class ChatViewTest extends AbstractChatTest {
         waitUntil(() -> !view.session().isBusy() && view.history().getText().contains("её лучше не использовать."));
         waitUntil(() -> ChatView.SEND.equals(view.sendButton().getText()));
         String text = view.history().getText();
-        assertTrue(text.startsWith("Вы  "), text);
-        assertTrue(text.contains(QUESTION));
-        assertTrue(text.contains("Ассистент  "));
+        assertTrue(text.startsWith(QUESTION + "\n"), "без подписи «Вы»: " + text);
+        assertFalse(text.contains("Ассистент"), text);
+        assertTrue(view.lineIndent(0) > 0, "вопрос — пузырём справа");
+        assertEquals(SWT.RIGHT, view.lineAlignment(QUESTION.length() + 1), "время и «Изменить» — под пузырём справа");
+        int answer = text.indexOf("На сервере");
+        assertEquals(0, view.lineIndent(answer), "ответ — слева во всю ширину");
+        assertEquals(SWT.LEFT, view.lineAlignment(answer));
+        assertNotNull(view.linkAction(MessageRenderer.COPY), "«Копировать» — значком под ответом");
+        assertNotNull(view.linkAction(MessageRenderer.RETRY), "«Повторить» — значком под ответом");
+        assertFalse(text.contains("   " + MessageRenderer.RETRY), "подписи действий не текстом: " + text);
         assertTrue(text.contains("На сервере используйте ТекущаяДатаСеанса() — она учитывает часовой пояс сеанса.\n\n"
                 + "bsl   Копировать   Вставить в редактор\nДата = ТекущаяДатаСеанса();\n\nТекущаяДата() возвращает"), text);
         assertFalse(text.contains("пишет…"));
@@ -317,7 +324,7 @@ class ChatViewTest extends AbstractChatTest {
         view.send();
         waitUntil(() -> view.history().getText().contains("HTTP 401") && view.linkAction(ChatView.RETRY) != null,
                 () -> view.history().getText());
-        assertTrue(view.history().getText().contains("Ошибка  "), view.history().getText());
+        assertTrue(view.history().getText().contains("HTTP 401"), view.history().getText());
         Screenshots.capture(view.control(), "chat-error");
 
         view.linkAction(ChatView.RETRY).run();

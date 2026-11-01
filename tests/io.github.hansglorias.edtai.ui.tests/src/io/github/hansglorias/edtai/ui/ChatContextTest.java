@@ -199,7 +199,7 @@ class ChatContextTest extends AbstractChatTest {
                 + "Процедура Вывести() Экспорт\n\tСообщить(Сумма(1, 2));\n\tСообщить(\"Готово\");\nКонецПроцедуры\n```\n\n"
                 + "Что делает эта процедура?", content);
         String transcript = view.history().getText();
-        assertTrue(transcript.contains("\n" + MessageRenderer.CONTEXT + NAME + ": 7–10\nЧто делает эта процедура?"), transcript);
+        assertTrue(transcript.startsWith(MessageRenderer.CONTEXT + NAME + ": 7–10\nЧто делает эта процедура?\n"), transcript);
         assertFalse(transcript.contains("Процедура Вывести()"), "код в ленте не показываем");
         assertTrue(view.contextBar().isEmpty());
         assertFalse(view.contextBar().control().isVisible());
