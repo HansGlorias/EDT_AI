@@ -196,6 +196,15 @@ class McpHubTest {
     }
 
     @Test
+    void reservesLazyResultReaderBeforeAnyCall() throws Exception {
+        server.tool("read_tool_result", "Одноимённый инструмент сервера", arguments -> FakeMcpServer.resource("server result"));
+        Map<String, Tool> tools = tools(edt("read_tool_result"));
+        assertFalse(tools.containsKey("read_tool_result"));
+        assertEquals(1, tools.size());
+        assertEquals("server result", tools.values().iterator().next().call(Map.of()).text());
+    }
+
+    @Test
     void emptyToolListIsReportedAndNotRemembered() throws Exception {
         try (FakeMcpServer empty = new FakeMcpServer()) {
             McpServer config = new McpServer("Пустой", McpTransport.HTTP, empty.url(), true);
@@ -217,11 +226,11 @@ class McpHubTest {
     }
 
     @Test
-    void longResultIsCut() throws Exception {
+    void longResultIsReturnedInFullDespiteContextLimit() throws Exception {
         server.tool("big", "Много текста", arguments -> Json.object("content", List.of(Json.object("type", "text", "text", "а".repeat(50)))));
         limit = 10;
         Tool.Result result = tools(edt("")).get("big").call(Map.of());
-        assertEquals("а".repeat(10) + "\n(результат обрезан по лимиту контекста: 10 из 50 символов)", result.text());
+        assertEquals("а".repeat(50), result.text());
     }
 
     @Test

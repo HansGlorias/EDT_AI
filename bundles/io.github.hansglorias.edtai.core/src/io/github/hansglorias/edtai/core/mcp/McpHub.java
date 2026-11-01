@@ -66,12 +66,14 @@ public final class McpHub implements AutoCloseable {
      * строка в {@code problems}, остальные работают.
      *
      * @param reserved имена, уже занятые встроенными инструментами
-     * @param limit    сколько символов результата отдавать модели
+     * @param limit    прежний лимит результата (совместимость API); страницы формирует AgentLoop
      */
     public List<Tool> tools(List<McpServer> servers, TrustSettings trust, Set<String> reserved, IntSupplier limit,
             Consumer<ToolUse> problems) {
         List<Tool> tools = new ArrayList<>();
         Set<String> taken = new HashSet<>(reserved);
+        // Этот встроенный инструмент появится лениво, после первого большого результата.
+        taken.add("read_tool_result");
         for (McpServer server : servers) {
             if (!server.enabled()) {
                 continue;

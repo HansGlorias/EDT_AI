@@ -2,11 +2,13 @@ package io.github.hansglorias.edtai.core.llm;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
- * Полные шаги текущего ответа и их проекция в запрос модели. Уменьшение
+ * Шаги текущего ответа с ограниченными результатами и их проекция в запрос модели. Уменьшение
  * проекции не меняет факты выполнения в ToolExecutionLedger и не удаляет
- * исходные результаты. Пары вызов/результат остаются целыми в обоих протоколах.
+ * ссылки на снимки ToolResultStore. Пары вызов/результат остаются целыми в обоих протоколах.
  */
 final class AgentTranscript {
 
@@ -15,9 +17,16 @@ final class AgentTranscript {
     static final String OMITTED_ERROR = "(подробности ошибки не переданы: не помещаются в окно модели;"
             + " этот вызов НЕ завершился успешно)";
 
-    private record Step(ModelReply reply, List<ProtocolAdapter.ToolResult> results) { }
+    private record Step(ModelReply reply, List<ProtocolAdapter.ToolResult> results, Map<String, String> references) { }
 
     private final List<Step> steps = new ArrayList<>();
+    private final Map<String, String> references = new HashMap<>();
+
+    void remember(String callId, String reference) {
+        if (!reference.isEmpty()) {
+            references.put(callId, reference);
+        }
+    }
 
     int size() {
         return steps.size();
@@ -28,7 +37,8 @@ final class AgentTranscript {
     }
 
     void add(ModelReply reply, List<ProtocolAdapter.ToolResult> results) {
-        steps.add(new Step(reply, List.copyOf(results)));
+        steps.add(new Step(reply, List.copyOf(results), Map.copyOf(references)));
+        references.clear();
     }
 
     List<Object> project(ProtocolAdapter adapter, int omitted) {
@@ -39,7 +49,8 @@ final class AgentTranscript {
             List<ProtocolAdapter.ToolResult> results = step.results();
             if (i < omitted) {
                 results = results.stream().map(result -> new ProtocolAdapter.ToolResult(result.call(),
-                        result.error() ? OMITTED_ERROR : OMITTED, result.error())).toList();
+                        step.references().getOrDefault(result.call().id(), result.error() ? OMITTED_ERROR : OMITTED),
+                        result.error())).toList();
             }
             extra.addAll(adapter.toolResults(results));
         }

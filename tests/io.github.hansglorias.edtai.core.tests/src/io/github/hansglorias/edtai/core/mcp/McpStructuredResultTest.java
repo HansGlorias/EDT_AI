@@ -137,31 +137,35 @@ class McpStructuredResultTest {
     }
 
     @Test
-    void longReportIsCutAfterJobMetadataEvenWhenReportWasFirst() throws Exception {
-        Map<String, Object> structured = Json.object("report", "я".repeat(1000), "jobId", "job-1", "status", "running",
-                "completed", false);
+    void longReportAndTrailingStructuredFieldsAreReturnedInFullDespiteContextLimit() throws Exception {
+        String report = "я".repeat(1000) + "конец отчёта";
+        Map<String, Object> structured = Json.object("data", Json.object("report", report, "tail", "последнее поле"),
+                "jobId", "job-1", "status", "running", "completed", false);
         server.tool("large_job", "Отчёт", arguments -> Json.object("content", List.of(text("OK - keys: report, jobId")),
                 "structuredContent", structured));
-        limit = 120;
+        limit = 1;
 
         Tool.Result result = tool("large_job").call(Map.of());
-        assertTrue(result.text().startsWith("{\"jobId\":\"job-1\",\"status\":\"running\",\"completed\":false,\"report\":\""), result.text());
-        assertEquals(limit, result.text().indexOf('\n'), "содержательная часть ограничена лимитом");
-        assertTrue(result.text().contains("результат обрезан по лимиту контекста: 120 из "), result.text());
-        assertFalse(result.text().contains("OK - keys"), "структура важнее заглушки");
-        assertTrue(result.text().length() < 220, "полный отчёт не дописывается за лимитом");
+        assertEquals(Json.write(structured) + "\n\nOK - keys: report, jobId", result.text());
+        Object parsed = Json.parse(result.text().split("\n\n", 2)[0]);
+        assertEquals(report, Json.stringAt(parsed, "data", "report"));
+        assertEquals("последнее поле", Json.stringAt(parsed, "data", "tail"));
+        assertEquals(false, Json.at(parsed, "completed"));
     }
 
     @Test
-    void longErrorRetainsNestedDiagnosticsAheadOfReport() throws Exception {
-        server.tool("large_error", "Ошибка", arguments -> Json.object("isError", true, "structuredContent",
-                Json.object("report", "я".repeat(1000), "result", Json.object("error", Json.object("message", "Нет проекта")))));
-        limit = 100;
+    void longErrorRetainsFullReportAndDiagnosticTailDespiteContextLimit() throws Exception {
+        Map<String, Object> structured = Json.object("report", "я".repeat(1000) + "конец отчёта", "result",
+                Json.object("error", Json.object("message", "Нет проекта")));
+        String diagnostic = "диагностика ".repeat(100) + "последняя причина ошибки";
+        server.tool("large_error", "Ошибка", arguments -> Json.object("isError", true,
+                "content", List.of(text(diagnostic)), "structuredContent", structured));
+        limit = 1;
 
         ToolException error = assertThrows(ToolException.class, () -> tool("large_error").call(Map.of()));
-        assertTrue(error.getMessage().startsWith("{\"result\":{\"error\":{\"message\":\"Нет проекта\"}}"), error.getMessage());
-        assertEquals(limit, error.getMessage().indexOf('\n'));
-        assertTrue(error.getMessage().contains("результат обрезан по лимиту контекста"), error.getMessage());
+        assertEquals(Json.write(Json.object("result", structured.get("result"), "report", structured.get("report")))
+                + "\n\n" + diagnostic, error.getMessage());
+        assertTrue(error.getMessage().endsWith("последняя причина ошибки"), error.getMessage());
     }
 
     @Test
