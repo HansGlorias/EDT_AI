@@ -1,0 +1,1 @@
+run_id,logical_call_id,model_request_id,tool_name,arguments_sha256,execution_index,transport_attempt_index,start_utc,duration_ms,status,effect_status,result_artifact

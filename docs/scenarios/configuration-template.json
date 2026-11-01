@@ -1,0 +1,73 @@
+{
+  "configuration_id": null,
+  "plugin_commit": null,
+  "fixture_commit": null,
+  "os": null,
+  "edt_version": null,
+  "eclipse_version": "4.30",
+  "java_version": null,
+  "platform_version": null,
+  "edt_mcp_version": null,
+  "model": {
+    "id": null,
+    "revision": null,
+    "weight_sha256": null,
+    "parameter_count": null,
+    "quantization": null,
+    "tokenizer_revision": null
+  },
+  "server": {
+    "name": null,
+    "version": null,
+    "launch_arguments": null,
+    "chat_template": null,
+    "chat_template_sha256": null,
+    "tool_call_parser": null
+  },
+  "generation": {
+    "client_window_tokens": null,
+    "server_context_tokens": null,
+    "max_output_tokens": 2048,
+    "reasoning": null,
+    "reasoning_budget": null,
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "seeds": [
+      101,
+      102,
+      103,
+      104,
+      105
+    ],
+    "seed_supported": null
+  },
+  "hardware": {
+    "cpu": null,
+    "ram_gb": null,
+    "gpu": null,
+    "gpu_count": null,
+    "vram_gb": null,
+    "driver": null,
+    "offload": null,
+    "threads": null,
+    "concurrent_requests": 1
+  },
+  "plugin": {
+    "system_prompt": "Ты помощник разработчика 1С. Отвечай по-русски, проверяй исходники инструментами. Меняй код только по просьбе пользователя.",
+    "mode": "Агент",
+    "generate_chat_titles": true,
+    "context_limit_characters": 40000,
+    "skills": [],
+    "mcp_tools_by_scenario": null
+  },
+  "measurement": {
+    "request_capture": null,
+    "usage_coverage": "unknown",
+    "clock": null,
+    "timeout_seconds": 600,
+    "human_timeout_seconds": 120,
+    "warmup": "отдельно, без включения в успешность",
+    "cache_policy": null
+  }
+}
