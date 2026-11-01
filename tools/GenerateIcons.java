@@ -131,6 +131,11 @@ class GenerateIcons {
             }
             case "status_off" -> { circle(g, 8, 8, 5.6); path(g, 5.5, 8, 10.5, 8); }
             case "review", "review_error", "review_warning", "review_info" -> {
+                // Линейка редактора бывает уже и ниже 16 px: рисунок помещается в 12 px.
+                if (!name.equals("review")) {
+                    g.translate(2, 2);
+                    g.scale(0.75, 0.75);
+                }
                 g.setColor(switch (name) { case "review_error" -> ERROR; case "review_warning" -> WARNING;
                     case "review_info" -> INFO; default -> BRAND; });
                 frame(g);
