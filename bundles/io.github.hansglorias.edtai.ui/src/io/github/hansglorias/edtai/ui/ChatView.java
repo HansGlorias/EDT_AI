@@ -108,7 +108,6 @@ import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IMemento;
 import org.eclipse.ui.IViewSite;
-import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.actions.ActionFactory;
@@ -986,7 +985,6 @@ public class ChatView extends ViewPart {
     }
 
     private void createActions() {
-        ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
         IToolBarManager toolBar = getViewSite().getActionBars().getToolBarManager();
 
         historyAction = new Action("История чатов", IAction.AS_CHECK_BOX) {
@@ -996,8 +994,9 @@ public class ChatView extends ViewPart {
             }
         };
         historyAction.setImageDescriptor(Icons.descriptor(Icons.HISTORY));
+        historyAction.setId("edtai.history");
+        historyAction.setToolTipText("Показать или скрыть список чатов");
         historyAction.setChecked(historyShown);
-        toolBar.add(historyAction);
 
         Action newChat = new Action("Новый чат") {
             @Override
@@ -1007,17 +1006,10 @@ public class ChatView extends ViewPart {
             }
         };
         newChat.setImageDescriptor(Icons.descriptor(Icons.NEW_CHAT));
+        newChat.setId("edtai.newChat");
+        newChat.setToolTipText("Новый чат — текущий останется в истории");
         toolBar.add(newChat);
-
-        Action attachModule = new Action("Прикрепить модуль…") {
-            @Override
-            public void run() {
-                attachModule();
-            }
-        };
-        attachModule.setToolTipText("Прикрепить к вопросу модуль целиком: поиск по имени объекта или пути");
-        attachModule.setImageDescriptor(images.getImageDescriptor(ISharedImages.IMG_OBJ_FILE));
-        toolBar.add(attachModule);
+        toolBar.add(historyAction);
 
         Action preferencesAction = new Action("Настройки EDT AI") {
             @Override
@@ -1026,7 +1018,8 @@ public class ChatView extends ViewPart {
             }
         };
         preferencesAction.setImageDescriptor(Icons.descriptor(Icons.SETTINGS));
-
+        preferencesAction.setId("edtai.settings");
+        preferencesAction.setToolTipText("Настройки EDT AI: модель, подключение, MCP");
         toolBar.add(preferencesAction);
 
         getViewSite().getActionBars().setGlobalActionHandler(ActionFactory.PASTE.getId(), new Action() {

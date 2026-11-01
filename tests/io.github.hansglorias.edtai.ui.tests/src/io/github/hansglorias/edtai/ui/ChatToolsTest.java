@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.Json;
+import io.github.hansglorias.edtai.core.review.Finding;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
@@ -119,6 +120,52 @@ class ChatToolsTest extends AbstractChatTest {
         } catch (org.eclipse.core.runtime.CoreException e) {
             return new org.eclipse.core.resources.IMarker[0];
         }
+    }
+
+    @Test
+    void reviewUsesOwnAnnotationsForAllSeverities() throws Exception {
+        IFile file = project.getFile("src/CommonModules/Тест/Module.bsl");
+        ReviewMarkers.show(List.of(
+                new Finding(PROJECT, file.getProjectRelativePath().toString(), "ОбщийМодуль.Тест", 1,
+                        Finding.Severity.ERROR, "Ошибка ревью", ""),
+                new Finding(PROJECT, file.getProjectRelativePath().toString(), "ОбщийМодуль.Тест", 2,
+                        Finding.Severity.WARNING, "Предупреждение ревью", ""),
+                new Finding(PROJECT, file.getProjectRelativePath().toString(), "ОбщийМодуль.Тест", 3,
+                        Finding.Severity.INFO, "Совет ревью", "")));
+        waitUntil(() -> reviewMarkers(file).length == 3);
+        var lookup = org.eclipse.ui.editors.text.EditorsUI.getAnnotationTypeLookup();
+        var preferences = org.eclipse.ui.editors.text.EditorsUI.getAnnotationPreferenceLookup();
+        for (var marker : reviewMarkers(file)) {
+            int severity = marker.getAttribute(org.eclipse.core.resources.IMarker.SEVERITY, -1);
+            String suffix = switch (severity) { case 2 -> "error"; case 1 -> "warning"; default -> "info"; };
+            String type = ReviewMarkers.TYPE + "." + suffix;
+            assertEquals(type, lookup.getAnnotationType(marker));
+            var preference = preferences.getAnnotationPreference(type);
+            assertNotNull(preference);
+            assertEquals(Icons.descriptor("review_" + suffix), preference.getImageDescriptor());
+            assertTrue(preference.getVerticalRulerPreferenceValue());
+            assertTrue(preference.getOverviewRulerPreferenceValue());
+            assertFalse(preference.getTextPreferenceValue(), "ревью не подчёркивает код как ошибка компилятора");
+        }
+        // Обычная диагностика Eclipse по-прежнему использует стандартный тип.
+        assertEquals("org.eclipse.ui.workbench.texteditor.error",
+                lookup.getAnnotationType(org.eclipse.core.resources.IMarker.PROBLEM, 2));
+
+        IDE.setDefaultEditor(file, "org.eclipse.ui.DefaultTextEditor");
+        var editor = (org.eclipse.ui.texteditor.ITextEditor) IDE.openEditor(page, file);
+        var model = editor.getDocumentProvider().getAnnotationModel(editor.getEditorInput());
+        waitUntil(() -> {
+            int[] count = { 0 };
+            model.getAnnotationIterator().forEachRemaining(annotation -> {
+                if (annotation.getType().startsWith(ReviewMarkers.TYPE + ".")) count[0]++;
+            });
+            return count[0] == 3;
+        });
+        page.setPartState(page.getReference(editor), org.eclipse.ui.IWorkbenchPage.STATE_MAXIMIZED);
+        settle();
+        Screenshots.render(page.getWorkbenchWindow().getShell().getChildren()[0], "review-own-markers");
+        ReviewMarkers.clear();
+        waitUntil(() -> reviewMarkers(file).length == 0);
     }
 
     @Test

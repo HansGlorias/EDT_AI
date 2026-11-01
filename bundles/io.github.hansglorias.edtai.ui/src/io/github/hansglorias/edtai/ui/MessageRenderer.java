@@ -6,7 +6,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -26,7 +25,6 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.RGB;
-import org.eclipse.swt.program.Program;
 
 import io.github.hansglorias.edtai.core.chat.AnswerParts;
 import io.github.hansglorias.edtai.core.chat.Attachment;
@@ -172,8 +170,6 @@ final class MessageRenderer {
     private static final int ICON = 16;
     /** Промежуток после значка действия. */
     private static final int ICON_GAP = 8;
-    /** Значки по расширению, созданные из значков программ системы: их освобождаем сами. */
-    private final Map<String, Image> fileIcons = new HashMap<>();
 
     /** Предел миниатюры: крупнее — уменьшается с сохранением пропорций. */
     static final int THUMB_WIDTH = 240;
@@ -396,7 +392,7 @@ final class MessageRenderer {
             place.start = start;
             place.length = 1;
             place.metrics = new GlyphMetrics(ICON - 3, 3, ICON + 6);
-            place.data = new FileIcon(fileIcon(file.name()), open);
+            place.data = new FileIcon(Icons.image(Icons.FILE), open);
             styles.add(place);
             text.append(OBJECT);
             StyleRange name = new StyleRange(offset + text.length(), file.name().length(), linkColor(), null, SWT.BOLD);
@@ -468,27 +464,6 @@ final class MessageRenderer {
         link.data = run;
         styles.add(link);
         text.append(label);
-    }
-
-    /** Значок файла: значок программы системы для его расширения, иначе свой. */
-    private Image fileIcon(String name) {
-        int dot = name.lastIndexOf('.');
-        String extension = dot < 0 ? "" : name.substring(dot).toLowerCase(Locale.ROOT);
-        Image cached = fileIcons.get(extension);
-        if (cached != null && !cached.isDisposed()) {
-            return cached;
-        }
-        Program program = extension.isEmpty() ? null : Program.findProgram(extension);
-        ImageData data = program == null ? null : program.getImageData();
-        if (data == null) {
-            return Icons.image(Icons.FILE);
-        }
-        if (data.width != ICON || data.height != ICON) {
-            data = data.scaledTo(ICON, ICON);
-        }
-        Image image = new Image(history.getDisplay(), data);
-        fileIcons.put(extension, image);
-        return image;
     }
 
     /** Имя файла с каталогом над ним: «ФормаСписка/Form.form». */
@@ -649,8 +624,6 @@ final class MessageRenderer {
     void dispose() {
         thumbnails.values().forEach(thumbnail -> thumbnail.image().dispose());
         thumbnails.clear();
-        fileIcons.values().forEach(Image::dispose);
-        fileIcons.clear();
     }
 
     private static Font monospace(boolean bold, boolean italic) {
