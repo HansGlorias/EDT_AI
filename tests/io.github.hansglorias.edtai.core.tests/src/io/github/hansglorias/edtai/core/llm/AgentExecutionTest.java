@@ -113,9 +113,9 @@ class AgentExecutionTest {
             Tool read = tool("read", true, () -> new Tool.Result("other-" + "ю".repeat(7000), "прочитано"));
             FakeModelServer server = script(protocol, List.of(calls(call("a", "write")), calls(call("b", "read")),
                     calls(call("c", "write")), ModelReply.text("done")));
-            run(protocol, server, List.of(write, read), 4096, ToolApprover.ALLOW_ALL, uses::add).get(10, TimeUnit.SECONDS);
+            run(protocol, server, List.of(write, read), 1000, ToolApprover.ALLOW_ALL, uses::add).get(10, TimeUnit.SECONDS);
             assertEquals(1, writes.get(), protocol.name());
-            assertTrue(server.requests().get(2).body().contains(AgentTranscript.OMITTED));
+            assertTrue(server.requests().get(2).body().contains("result_id"));
             assertFalse(server.requests().get(2).body().contains("receipt-"));
             assertTrue(server.requests().get(3).body().contains("receipt-"), "исходный результат не уничтожен");
             assertTrue(server.requests().get(3).body().contains("не проверка текущего состояния"));
@@ -148,12 +148,12 @@ class AgentExecutionTest {
             if (attempt == 2) {
                 throw new ToolException(ToolUse.Problem.SERVER, "temporary");
             }
-            return new Tool.Result("read-attempt=" + attempt + "я".repeat(7000), "прочитано");
+            return new Tool.Result("read-attempt=" + attempt + "я".repeat(200), "прочитано");
         });
         Tool other = tool("other", true, () -> new Tool.Result("ю".repeat(7000), "прочитано"));
         FakeModelServer server = script(Protocol.OPENAI_COMPATIBLE, List.of(calls(call("a", "read")),
                 calls(call("b", "other")), calls(call("c", "read")), calls(call("d", "read")), ModelReply.text("done")));
-        run(Protocol.OPENAI_COMPATIBLE, server, List.of(read, other), 4096, ToolApprover.ALLOW_ALL, use -> { })
+        run(Protocol.OPENAI_COMPATIBLE, server, List.of(read, other), 1000, ToolApprover.ALLOW_ALL, use -> { })
                 .get(10, TimeUnit.SECONDS);
         assertTrue(server.requests().get(2).body().contains(AgentTranscript.OMITTED));
         assertEquals(3, reads.get(), "успешное прежнее чтение не расходует лимит восстановления после нового сбоя");

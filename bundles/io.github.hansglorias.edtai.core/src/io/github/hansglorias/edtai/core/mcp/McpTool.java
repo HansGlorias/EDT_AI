@@ -22,14 +22,13 @@ final class McpTool implements Tool {
     private final McpServer server;
     private final McpToolInfo info;
     private final String name;
-    private final IntSupplier limit;
 
+    /** limit оставлен для совместимости; полный результат ограничивает цикл агента после сохранения. */
     McpTool(McpHub hub, McpServer server, McpToolInfo info, String name, IntSupplier limit) {
         this.hub = hub;
         this.server = server;
         this.info = info;
         this.name = name;
-        this.limit = limit;
     }
 
     @Override
@@ -101,11 +100,6 @@ final class McpTool implements Tool {
             result = hub.call(server, info.name(), input);
         }
         String text = result.text();
-        int max = limit.getAsInt();
-        if (text.length() > max) {
-            text = text.substring(0, max) + "\n(результат обрезан по лимиту контекста: " + max + " из " + result.text().length()
-                    + " символов)";
-        }
         if (result.error()) {
             throw new ToolException(text.isBlank() ? "инструмент вернул ошибку без описания" : text);
         }

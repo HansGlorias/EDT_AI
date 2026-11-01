@@ -3,6 +3,7 @@ package io.github.hansglorias.edtai.core.llm;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -36,7 +37,7 @@ final class AgentLoop {
     /** Вместо результата старого шага, когда запрос не помещается в окно модели. */
     static final String OMITTED = AgentTranscript.OMITTED;
 
-    static final String REPEATED = "Этот вызов с теми же аргументами уже был в этом ответе, его результат выше. Не повторяй его:"
+    static final String REPEATED = "Этот вызов с теми же аргументами уже был в этом ответе, его результат или ссылка для дочитывания выше. Не повторяй его:"
             + " используй полученный результат или вызови с другими аргументами.";
 
     /** Сколько раз урезать запрос после ответа «не помещается». */
@@ -65,6 +66,9 @@ final class AgentLoop {
     /** Шаги этого ответа: вызовы модели и их результаты. */
     private final AgentTranscript transcript = new AgentTranscript();
     private final ToolExecutionLedger ledger = new ToolExecutionLedger();
+    private final ToolResultStore resultStore;
+    private final Tool resultReader;
+    private final Map<ToolExecutionLedger.Key, String> resultReferences = new HashMap<>();
     /** Первый шаг, результат которого передаётся модели в последнем запросе. */
     private int firstVisibleStep;
     /** Что последним сообщили в ленту про обрезку истории. */
@@ -97,6 +101,8 @@ final class AgentLoop {
         this.onTool = onTool;
         this.onUsage = onUsage;
         this.adapter = ProtocolAdapter.of(connection.protocol());
+        this.resultStore = new ToolResultStore(Math.max(512, Math.min(6000, RequestBudget.chars(connection) / 8)), 1_000_000);
+        this.resultReader = resultStore.tool();
     }
 
     boolean toolsRejected() {
@@ -133,6 +139,9 @@ final class AgentLoop {
         } catch (RuntimeException e) {
             onTool.accept(new ToolUse("tools", "tools", "Инструменты", "не удалось получить список: " + e.getMessage(),
                     ToolUse.Status.FAILED));
+        }
+        if (tools.stream().anyMatch(tool -> tool.name().equals(resultReader.name()))) {
+            throw new IllegalStateException("Имя read_tool_result зарезервировано для чтения результатов");
         }
         for (int step = 1;; step++) {
             checkCancelled();
@@ -186,6 +195,10 @@ final class AgentLoop {
      * схема одного из них), потом совсем без инструментов.
      */
     private ModelReply request() throws Exception {
+        if (resultStore.hasResults() && !tools.contains(resultReader)) {
+            tools = new ArrayList<>(tools);
+            tools.add(resultReader);
+        }
         while (true) {
             checkCancelled();
             try {
@@ -256,8 +269,11 @@ final class AgentLoop {
         }
         String summary = tool.summary(input);
         ToolExecutionLedger.Key key = ToolExecutionLedger.key(call.name(), input);
-        ToolExecutionLedger.Decision decision = ledger.decide(key, firstVisibleStep);
+        // Ссылка на снимок остаётся даже в сокращённой истории: повтор источника не нужен.
+        int visibleFrom = resultReferences.getOrDefault(key, "").isEmpty() ? firstVisibleStep : 0;
+        ToolExecutionLedger.Decision decision = ledger.decide(key, visibleFrom);
         if (decision.action() != ToolExecutionLedger.Action.RUN) {
+            transcript.remember(call.id(), resultReferences.getOrDefault(key, ""));
             return previous(call, summary, decision, onTool);
         }
         checkCancelled();
@@ -278,16 +294,25 @@ final class AgentLoop {
         ledger.started(key, tool, transcript.size());
         try {
             Tool.Result output = tool.call(input);
-            ledger.succeeded(key, output.text());
+            String projected = tool == resultReader ? output.text() : capture(call, key, output.text(), false);
+            ledger.succeeded(key, projected);
             onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));
-            return new ProtocolAdapter.ToolResult(call, output.text(), false);
+            return new ProtocolAdapter.ToolResult(call, projected, false);
         } catch (ToolException | RuntimeException e) {
             String error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             ToolUse.Problem problem = e instanceof ToolException failure ? failure.problem() : ToolUse.Problem.FAILED;
+            error = capture(call, key, error, true);
             ledger.failed(key, error, problem);
             onTool.accept(ToolUse.failed(call.id(), call.name(), summary, problem, error));
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
+    }
+
+    private String capture(ToolCall call, ToolExecutionLedger.Key key, String text, boolean error) {
+        ToolResultStore.Captured captured = resultStore.captureResult(text, error);
+        resultReferences.put(key, captured.reference());
+        transcript.remember(call.id(), captured.reference());
+        return captured.text();
     }
 
     /** Повтор показывает подтверждённый результат, но не воспроизводит побочные эффекты и вложения. */

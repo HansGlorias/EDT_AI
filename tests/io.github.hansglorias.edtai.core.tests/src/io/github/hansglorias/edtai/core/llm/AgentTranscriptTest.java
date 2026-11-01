@@ -39,4 +39,41 @@ class AgentTranscriptTest {
             assertTrue(Json.write(transcript.project(adapter, 0)).contains("original failure"));
         }
     }
+
+    @Test
+    void omissionKeepsSnapshotReferenceAndOriginalFailure() {
+        ToolCall call = new ToolCall("failed-call", "write", "{}");
+        AgentTranscript transcript = new AgentTranscript();
+        String reference = "result_id: saved-error\noriginal_error: true";
+        transcript.remember(call.id(), reference);
+        transcript.add(new ModelReply("", List.of(call)),
+                List.of(new ProtocolAdapter.ToolResult(call, "large failure preview", true)));
+        for (Protocol protocol : Protocol.values()) {
+            List<Object> omitted = transcript.project(ProtocolAdapter.of(protocol), 1);
+            assertTrue(Json.write(omitted).contains("saved-error"));
+            assertFalse(Json.write(omitted).contains("large failure preview"));
+            if (protocol == Protocol.OPENAI_COMPATIBLE) {
+                assertTrue(Json.stringAt(omitted.get(1), "content").startsWith("Ошибка:"));
+            } else {
+                assertEquals(true, Json.at(omitted.get(1), "content", 0, "is_error"));
+            }
+        }
+    }
+
+    @Test
+    void reusedCallIdInLaterStepDoesNotReplaceEarlierSnapshot() {
+        ToolCall call = new ToolCall("same-id", "read", "{}");
+        AgentTranscript transcript = new AgentTranscript();
+        for (String reference : List.of("snapshot-one", "snapshot-two")) {
+            transcript.remember(call.id(), reference);
+            transcript.add(new ModelReply("", List.of(call)),
+                    List.of(new ProtocolAdapter.ToolResult(call, "preview", false)));
+        }
+        for (Protocol protocol : Protocol.values()) {
+            List<Object> omitted = transcript.project(ProtocolAdapter.of(protocol), 2);
+            assertTrue(Json.write(omitted.get(1)).contains("snapshot-one"));
+            assertFalse(Json.write(omitted.get(1)).contains("snapshot-two"));
+            assertTrue(Json.write(omitted.get(3)).contains("snapshot-two"));
+        }
+    }
 }

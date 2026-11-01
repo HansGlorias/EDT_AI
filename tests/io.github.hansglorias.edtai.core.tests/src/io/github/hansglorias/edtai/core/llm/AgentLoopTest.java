@@ -515,7 +515,7 @@ class AgentLoopTest {
                     ? toolCalls("{\"index\":0,\"id\":\"call_" + results + "\",\"function\":{\"name\":\"big\",\"arguments\":\"{\\\"part\\\":" + results + "}\"}}")
                     : "data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
         });
-        // Окно 1000 токенов — бюджет 2250 символов: два результата по 1500 не помещаются.
+        // Малое окно: старые страницы заменяются ссылками, последний результат ограничен страницей.
         ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
                 new TrustSettings(false, Optional.empty()), 1000);
         ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(big),
@@ -524,8 +524,10 @@ class AgentLoopTest {
         assertEquals("Готово.", provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS));
 
         List<Object> messages = chat(Json.parseObject(server.requests().get(2).body()));
-        assertEquals(AgentLoop.OMITTED, Json.stringAt(messages.get(2), "content"));
-        assertEquals("я".repeat(1500), Json.stringAt(messages.get(4), "content"));
+        assertTrue(Json.stringAt(messages.get(2), "content").contains("result_id"));
+        assertFalse(Json.stringAt(messages.get(2), "content").contains("яя"));
+        assertTrue(Json.stringAt(messages.get(4), "content").contains("next_offset"));
+        assertFalse(Json.stringAt(messages.get(4), "content").contains("я".repeat(1500)));
     }
 
     /** Вызовы без токенов шага: для сравнения с ожидаемыми. */
