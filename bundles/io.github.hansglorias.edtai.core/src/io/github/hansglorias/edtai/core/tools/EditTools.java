@@ -88,9 +88,18 @@ public final class EditTools {
 
         @Override
         public Result call(Map<String, Object> input) throws ToolException {
+            ToolArguments args = new ToolArguments(input);
+            String module = args.nonBlankString("module");
+            // Текст — как прислала модель, без strip: отступы и переводы строк важны.
+            String oldText = args.string("old_text");
+            if (oldText.isEmpty()) {
+                throw args.error("old_text", "не должно быть пустым: укажи точный фрагмент модуля");
+            }
+            String newText = args.string("new_text");
+            args.optionalString("project");
             String project = ProjectTools.project(files, input);
             Path root = files.root(project).orElseThrow(() -> new ToolException("Каталог проекта «" + project + "» не найден"));
-            String path = ProjectTools.modulePath(project, text(input, "module"));
+            String path = ProjectTools.modulePath(project, module);
             Path file = root.resolve(path).normalize();
             if (!file.startsWith(root) || !path.toLowerCase(Locale.ROOT).endsWith(".bsl")) {
                 throw new ToolException("Менять можно только модули .bsl проекта: " + path);
@@ -98,11 +107,7 @@ public final class EditTools {
             if (!Files.isRegularFile(file)) {
                 throw new ToolException("Модуля " + path + " нет. Новые модули создаются в EDT вместе с объектом метаданных.");
             }
-            // Текст — как прислала модель, без strip: отступы и переводы строк важны.
-            Object oldText = input.get("old_text");
-            Object newText = input.get("new_text");
-            WorkspaceFiles.Edit edit = files.edit(project, path,
-                    TextChange.replace(oldText == null ? "" : String.valueOf(oldText), newText == null ? "" : String.valueOf(newText)));
+            WorkspaceFiles.Edit edit = files.edit(project, path, TextChange.replace(oldText, newText));
             changes.accept(new Change(project, path, edit.before(), edit.text()));
             int first = line(edit.text(), edit.replacement().offset());
             int last = line(edit.text(), edit.replacement().offset() + Math.max(0, edit.replacement().text().length() - 1));

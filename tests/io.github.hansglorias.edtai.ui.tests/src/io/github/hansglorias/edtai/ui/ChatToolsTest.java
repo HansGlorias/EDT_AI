@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
@@ -23,6 +24,7 @@ import org.eclipse.jface.action.IContributionItem;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.ui.ide.IDE;
+import org.eclipse.ui.texteditor.ITextEditor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +35,10 @@ import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
+import io.github.hansglorias.edtai.core.tools.EditTools;
+import io.github.hansglorias.edtai.core.tools.ReviewTools;
+import io.github.hansglorias.edtai.core.tools.Tool;
+import io.github.hansglorias.edtai.core.tools.ToolException;
 
 /**
  * Инструменты, этап 5 (MVP): модель вызывает инструмент чтения проекта,
@@ -112,6 +118,65 @@ class ChatToolsTest extends AbstractChatTest {
             return file.findMarkers(ReviewMarkers.TYPE, false, 0);
         } catch (org.eclipse.core.runtime.CoreException e) {
             return new org.eclipse.core.resources.IMarker[0];
+        }
+    }
+
+    @Test
+    void missingReplacementPreservesDirtyEditorAndSavedFile() throws Exception {
+        IFile file = project.getFile("src/CommonModules/Тест/Module.bsl");
+        ITextEditor editor = (ITextEditor) IDE.openEditor(page, file, "org.eclipse.ui.DefaultTextEditor");
+        try {
+            var document = editor.getDocumentProvider().getDocument(editor.getEditorInput());
+            document.set(CODE + "// правка пользователя\n");
+            String before = document.get();
+            List<EditTools.Change> changes = new ArrayList<>();
+            Tool edit = EditTools.create(EclipseWorkspaceFiles.current(), changes::add).get(0);
+
+            ToolException error = assertThrows(ToolException.class, () -> edit.call(Map.of("project", PROJECT,
+                    "module", "ОбщийМодуль.Тест", "old_text", "\tСообщить(\"Тест\");")));
+
+            assertEquals(ToolUse.Problem.BAD_ARGUMENTS, error.problem());
+            assertTrue(error.getMessage().contains("new_text"), error.getMessage());
+            assertEquals(before, document.get());
+            assertTrue(editor.isDirty());
+            assertTrue(changes.isEmpty());
+            try (var in = file.getContents()) {
+                assertEquals(CODE, new String(in.readAllBytes(), StandardCharsets.UTF_8));
+            }
+        } finally {
+            page.closeEditor(editor, false);
+        }
+    }
+
+    @Test
+    void reviewLineValidationUsesDirtyEclipseBufferAndErrorsKeepMarkers() throws Exception {
+        IFile file = project.getFile("src/CommonModules/Тест/Module.bsl");
+        ITextEditor editor = (ITextEditor) IDE.openEditor(page, file, "org.eclipse.ui.DefaultTextEditor");
+        try {
+            var document = editor.getDocumentProvider().getDocument(editor.getEditorInput());
+            document.set(CODE + "// четвёртая строка только в редакторе\n");
+            Tool review = ReviewTools.create(EclipseWorkspaceFiles.current(), ReviewMarkers::show).get(0);
+            Map<String, Object> finding = Map.of("module", "ОбщийМодуль.Тест", "line", 4, "severity", "info", "title", "Проверить");
+            Map<String, Object> input = Map.of("project", PROJECT, "findings", List.of(finding));
+            review.call(input);
+            waitUntil(() -> reviewMarkers(file).length == 1);
+            var marker = reviewMarkers(file)[0];
+            assertEquals(4, marker.getAttribute(org.eclipse.core.resources.IMarker.LINE_NUMBER, 0));
+
+            ToolException malformed = assertThrows(ToolException.class,
+                    () -> review.call(Map.of("project", PROJECT, "findings", List.of(finding, Map.of()))));
+            assertEquals(ToolUse.Problem.BAD_ARGUMENTS, malformed.problem());
+            document.set("// осталась одна строка\n");
+            ToolException unresolved = assertThrows(ToolException.class, () -> review.call(input));
+            assertEquals(ToolUse.Problem.FAILED, unresolved.problem());
+            assertTrue(unresolved.getMessage().contains("строки 4 нет"), unresolved.getMessage());
+            assertEquals(List.of(marker), List.of(reviewMarkers(file)));
+            assertTrue(editor.isDirty());
+            try (var in = file.getContents()) {
+                assertEquals(CODE, new String(in.readAllBytes(), StandardCharsets.UTF_8));
+            }
+        } finally {
+            page.closeEditor(editor, false);
         }
     }
 

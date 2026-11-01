@@ -2,12 +2,15 @@ package io.github.hansglorias.edtai.core.tools;
 
 import static io.github.hansglorias.edtai.core.tools.ProjectTools.PROJECT;
 import static io.github.hansglorias.edtai.core.tools.ProjectTools.schema;
-import static io.github.hansglorias.edtai.core.tools.ProjectTools.text;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -50,7 +53,8 @@ public final class ReviewTools {
             Map<String, Object> finding = Json.object("type", "object", "properties", Json.object(
                     "module", Json.object("type", "string", "description", "Модуль в нотации 1С (ОбщийМодуль.Цены,"
                             + " Справочник.Номенклатура.МодульОбъекта) или путь в проекте"),
-                    "line", Json.object("type", "integer", "description", "Строка в модуле, с 1"),
+                    "line", Json.object("type", "integer", "minimum", 1, "maximum", Integer.MAX_VALUE,
+                            "description", "Строка в модуле, с 1"),
                     "severity", Json.object("type", "string", "enum", List.of("error", "warning", "info"), "description",
                             "error — ошибка (неверный результат, падение, потеря данных), warning — нарушение стандарта или"
                                     + " риск, info — совет по стилю"),
@@ -68,31 +72,41 @@ public final class ReviewTools {
 
         @Override
         public Result call(Map<String, Object> input) throws ToolException {
+            // Сначала проверяем форму всего списка: ошибка даже в последнем
+            // элементе не должна публиковать неполное ревью.
+            List<Draft> drafts = parse(input);
             String project = ProjectTools.project(files, input);
-            Path root = files.root(project).orElseThrow(() -> new ToolException("Каталог проекта «" + project + "» не найден"));
+            Path root = files.root(project).orElseThrow(() -> new ToolException("Каталог проекта «" + project + "» не найден"))
+                    .toAbsolutePath().normalize();
             List<Finding> findings = new ArrayList<>();
             List<String> skipped = new ArrayList<>();
-            for (Object item : Json.asList(input.get("findings"))) {
-                String module = Json.stringAt(item, "module");
-                String title = Json.stringAt(item, "title");
-                if (module == null || title == null || title.isBlank()) {
-                    skipped.add(String.valueOf(module) + ": нет модуля или сути");
-                    continue;
-                }
-                String path;
+            for (Draft draft : drafts) {
                 try {
-                    path = ProjectTools.modulePath(project, module);
+                    String path = ProjectTools.modulePath(project, draft.module());
+                    Path file = root.resolve(path).normalize();
+                    if (!file.startsWith(root) || !path.toLowerCase(Locale.ROOT).endsWith(".bsl")) {
+                        throw new ToolException("нужен модуль .bsl внутри проекта");
+                    }
+                    if (!Files.isRegularFile(file)) {
+                        throw new ToolException("модуля нет в проекте");
+                    }
+                    path = root.relativize(file).toString().replace('\\', '/');
+                    int total = lineCount(currentText(files, project, path, file));
+                    if (draft.line() > total) {
+                        throw new ToolException("строки " + draft.line() + " нет, в модуле строк: " + total);
+                    }
+                    findings.add(new Finding(project, path, BslModulePath.metadataName(path).orElse(path), draft.line(),
+                            draft.severity(), draft.title(), draft.fix()));
                 } catch (ToolException e) {
-                    skipped.add(module + ": " + e.getMessage());
-                    continue;
+                    skipped.add(draft.module() + ": " + e.getMessage());
+                } catch (InvalidPathException e) {
+                    skipped.add(draft.module() + ": некорректный путь модуля");
+                } catch (IOException e) {
+                    skipped.add(draft.module() + ": не удалось прочитать модуль");
                 }
-                if (!Files.isRegularFile(root.resolve(path).normalize())) {
-                    skipped.add(module + ": модуля нет в проекте");
-                    continue;
-                }
-                int line = Json.at(item, "line") instanceof Number number ? number.intValue() : 1;
-                findings.add(new Finding(project, path, BslModulePath.metadataName(path).orElse(path), line,
-                        Finding.Severity.of(Json.stringAt(item, "severity")), title, text(asMap(item), "fix")));
+            }
+            if (!drafts.isEmpty() && findings.isEmpty()) {
+                throw new ToolException("Не принято ни одной находки ревью: " + String.join("; ", skipped));
             }
             List<Finding> shown = Finding.sorted(findings);
             markers.accept(shown);
@@ -103,9 +117,46 @@ public final class ReviewTools {
             return new Result(text, summary, Attachment.review(Finding.toJson(shown)));
         }
 
-        @SuppressWarnings("unchecked")
-        private static Map<String, Object> asMap(Object item) {
-            return item instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+        private static List<Draft> parse(Map<String, Object> input) throws ToolException {
+            ToolArguments args = new ToolArguments(input);
+            if (!input.containsKey("findings")) {
+                throw args.error("findings", "обязательно");
+            }
+            if (!(input.get("findings") instanceof List<?> items)) {
+                throw args.error("findings", "должно быть массивом объектов");
+            }
+            args.optionalString("project");
+            List<Draft> drafts = new ArrayList<>();
+            for (int i = 0; i < items.size(); i++) {
+                String field = "findings[" + i + "]";
+                if (!(items.get(i) instanceof Map<?, ?> item)) {
+                    throw args.error(field, "должно быть объектом");
+                }
+                ToolArguments finding = new ToolArguments(item, field + ".");
+                String module = finding.nonBlankString("module");
+                int line = finding.positiveInteger("line");
+                String severity = finding.string("severity");
+                if (!List.of("error", "warning", "info").contains(severity)) {
+                    throw finding.error("severity", "должно быть одним из: error, warning, info");
+                }
+                drafts.add(new Draft(module, line, Finding.Severity.of(severity), finding.nonBlankString("title"),
+                        finding.optionalString("fix")));
+            }
+            return drafts;
         }
+    }
+
+    private record Draft(String module, int line, Finding.Severity severity, String title, String fix) {
+    }
+
+    private static String currentText(WorkspaceFiles files, String project, String path, Path file) throws IOException {
+        var unsaved = files.unsavedText(project, path);
+        return unsaved.isPresent() ? unsaved.get() : Files.readString(file, StandardCharsets.UTF_8);
+    }
+
+    /** Как в read_module: завершающий перенос не добавляет пустую строку. */
+    private static int lineCount(String text) {
+        String[] lines = text.split("\r\n|\r|\n", -1);
+        return lines.length > 1 && lines[lines.length - 1].isEmpty() ? lines.length - 1 : lines.length;
     }
 }
