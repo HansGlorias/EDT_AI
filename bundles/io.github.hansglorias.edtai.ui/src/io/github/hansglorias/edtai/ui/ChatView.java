@@ -230,7 +230,7 @@ public class ChatView extends ViewPart {
     private final Set<String> titleRequested = ConcurrentHashMap.newKeySet();
     /**
      * Живой диалог: сессия и всё, что относится к её ответу. Открыт в виде
-     * один ({@link #current}), остальные живы, пока отвечают в фоне.
+     * один ({@link #current}), остальные живы, пока отвечают в фоне или хранят черновик.
      */
     private final class Live {
         final String id;
@@ -251,6 +251,13 @@ public class ChatView extends ViewPart {
         volatile List<ChatMessage> saved = List.of();
         /** Вопрос о разрешении инструмента, пока чат в фоне: задаётся, когда чат откроют. */
         Runnable approval;
+        /** Ввод припаркованного чата; правка никогда не меняет историю до отправки. */
+        Draft draft = Draft.empty();
+        MessageEdit edit;
+
+        boolean hasDraft() {
+            return edit != null || !draft.text().isEmpty() || !draft.context().isEmpty() || !draft.files().isEmpty();
+        }
 
         Live(String id) {
             this.id = id;
@@ -261,7 +268,7 @@ public class ChatView extends ViewPart {
 
     /** Чаты, ответившие в фоне и ещё не открытые: зелёная точка в списке. */
     private final Set<String> unread = ConcurrentHashMap.newKeySet();
-    /** Живые диалоги по id: открытый и отвечающие в фоне. */
+    /** Живые диалоги по id: открытый, отвечающие в фоне и хранящие черновик. */
     private final Map<String, Live> lives = new ConcurrentHashMap<>();
     private Live current;
     /** Сессия открытого диалога. */
@@ -288,7 +295,7 @@ public class ChatView extends ViewPart {
 
     /**
      * Ответ любого живого диалога, открытого или фонового: правки — к ответу,
-     * история — в файл, название; фоновый, закончив, больше не живой.
+     * история — в файл, название; фоновый без черновика, закончив, больше не живой.
      */
     private ChatListener liveListener(Live chat) {
         return new ChatListener() {
@@ -306,7 +313,9 @@ public class ChatView extends ViewPart {
                             unread.add(chat.id);
                             chat.approval = null;
                             saveIfChanged(chat);
-                            lives.remove(chat.id, chat);
+                            if (!chat.hasDraft()) {
+                                lives.remove(chat.id, chat);
+                            }
                         }
                         generateTitle(chat);
                         deliverCommitMessage(chat);
@@ -368,6 +377,22 @@ public class ChatView extends ViewPart {
     /** Чат, в котором просили сообщение коммита. */
     private Live commitChat;
     private Text input;
+    private Composite editBar;
+    private Button cancelEdit;
+
+    /** Сохраняем сами ссылки на фрагменты: отмена возвращает и отслеживаемые строки редактора. */
+    private record Draft(String text, Point selection, List<AttachedContext> context, List<Attachment> files) {
+        static Draft empty() {
+            return new Draft("", new Point(0, 0), List.of(), List.of());
+        }
+
+        void dispose() {
+            context.forEach(AttachedContext::dispose);
+        }
+    }
+
+    private record MessageEdit(int index, ChatMessage original, Draft before) {
+    }
     private SendButton sendButton;
     private Label status;
     private Cursor handCursor;
@@ -422,6 +447,8 @@ public class ChatView extends ViewPart {
     private int bubblesWidth = -1;
 
     private final List<Rendered> rendered = new ArrayList<>();
+    /** Windows может вызвать Paint прямо из replaceTextRange, пока новые смещения ещё не применены. */
+    private boolean updatingHistory;
     private boolean refreshScheduled;
     private String notice;
 
@@ -577,8 +604,21 @@ public class ChatView extends ViewPart {
                 if (id.equals(chatId)) {
                     deleteChat();
                 } else {
+                    Live deleted = lives.get(id);
+                    if (deleted != null) {
+                        deleted.session.cancel();
+                    }
                     try {
                         chats.delete(id);
+                        if (deleted != null) {
+                            deleted.session.clear();
+                            deleted.saved = List.of();
+                            lives.remove(id, deleted);
+                            deleted.draft.dispose();
+                            if (deleted.edit != null) {
+                                deleted.edit.before().dispose();
+                            }
+                        }
                     } catch (IOException e) {
                         showNotice("Не удалось удалить чат: " + e.getMessage());
                     }
@@ -653,14 +693,23 @@ public class ChatView extends ViewPart {
 
             @Override
             public void retry() {
+                if (current.edit != null) {
+                    showNotice("Сначала отправьте или отмените правку сообщения");
+                    return;
+                }
                 if (session.canRetry()) {
                     session.retry();
                 }
             }
 
             @Override
-            public void edit(int index) {
-                editMessage(index);
+            public Runnable editAction(int index, ChatMessage message) {
+                Live owner = current;
+                return () -> {
+                    if (current == owner) {
+                        editMessage(index, message);
+                    }
+                };
             }
 
             @Override
@@ -845,6 +894,19 @@ public class ChatView extends ViewPart {
         GridDataFactory.fillDefaults().grab(true, false).applyTo(composer);
         GridLayoutFactory.fillDefaults().margins(COMPOSER_MARGIN, COMPOSER_MARGIN - 3).spacing(0, 5).applyTo(composer);
         composer.addListener(SWT.Paint, this::paintComposer);
+
+        editBar = new Composite(composer, SWT.NONE);
+        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(editBar);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(editBar);
+        Label editLabel = new Label(editBar, SWT.WRAP);
+        editLabel.setText("Редактирование сообщения · отправка заменит ответы после него");
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(editLabel);
+        cancelEdit = new Button(editBar, SWT.PUSH);
+        cancelEdit.setText("Отменить правку");
+        cancelEdit.setToolTipText("Вернуть прежний ввод и вложения (Esc). История останется прежней");
+        cancelEdit.addListener(SWT.Selection, event -> cancelMessageEdit());
+        editBar.setVisible(false);
+        ((GridData) editBar.getLayoutData()).exclude = true;
 
         input = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         input.setMessage("Сообщение (Enter — отправить, Shift+Enter — новая строка)");
@@ -1079,6 +1141,10 @@ public class ChatView extends ViewPart {
         return new Action(title) {
             @Override
             public void run() {
+                if (current.edit != null) {
+                    showNotice("Сначала отправьте или отмените правку сообщения");
+                    return;
+                }
                 if (session.isBusy()) {
                     queueBar.add(new QueueBar.Queued(text, contextBar.items(), contextBar.attachments()));
                     contextBar.detach();
@@ -1131,7 +1197,7 @@ public class ChatView extends ViewPart {
 
     /**
      * Показывает диалог в виде. Прежний, если отвечает, остаётся живым в
-     * фоне, иначе — сохраняется и отпускается. {@code messages} — история
+     * фоне, иначе — сохраняется и отпускается, если нет черновика. {@code messages} — история
      * нового живого диалога из файла; {@code null} — диалог уже живой.
      */
     private void show(Live chat, List<ChatMessage> messages) {
@@ -1143,9 +1209,12 @@ public class ChatView extends ViewPart {
                 queueBar.drain().forEach(this::returnToInput);
                 showNotice("Сообщения из очереди вернулись в поле ввода");
             }
+            previous.draft = takeDraft();
             if (!previous.session.isBusy()) {
                 saveIfChanged(previous);
-                lives.remove(previous.id, previous);
+                if (!previous.hasDraft()) {
+                    lives.remove(previous.id, previous);
+                }
             }
         }
         if (messages != null) {
@@ -1157,13 +1226,21 @@ public class ChatView extends ViewPart {
         current = chat;
         session = chat.session;
         chatId = chat.id;
+        if (input != null) {
+            restoreDraft(chat.draft);
+            chat.draft = Draft.empty();
+            updateEditBar();
+        }
         session.addListener(chatListener);
         expandedCalls.clear();
         recall = -1;
         scrollToEnd = !session.messages().isEmpty();
         if (previous != null) {
             markBusy(session.isBusy());
-            scheduleRefresh();
+            // Действия ленты принадлежат Live, даже если сообщения двух чатов совпадают.
+            rendered.clear();
+            history.setText("");
+            refresh();
             Runnable approval = chat.approval;
             chat.approval = null;
             if (approval != null) {
@@ -1184,6 +1261,14 @@ public class ChatView extends ViewPart {
         }
         deleted.session.clear();
         deleted.saved = List.of();
+        deleted.draft.dispose();
+        deleted.draft = Draft.empty();
+        if (deleted.edit != null) {
+            deleted.edit.before().dispose();
+            deleted.edit = null;
+        }
+        contextBar.clear();
+        input.setText("");
         show(new Live(freshId()), List.of());
         refreshHistoryPanel();
     }
@@ -1303,10 +1388,26 @@ public class ChatView extends ViewPart {
             return;
         }
         try {
-            historyPanel.show(chats.search(historyPanel.query()), chatId, answering(), unread);
+            historyPanel.show(chatEntries(historyPanel.query()), chatId, answering(), unread);
         } catch (IOException e) {
             historyPanel.show(List.of(), chatId, Set.of(), Set.of());
         }
+    }
+
+    /** Ввод ещё пустого чата тоже можно снова открыть: на диск черновик не пишем. */
+    private List<ChatStore.Entry> chatEntries(String query) throws IOException {
+        List<ChatStore.Entry> entries = new ArrayList<>(chats.search(query));
+        for (Live chat : lives.values()) {
+            if (chat.hasDraft() && chat.session.messages().isEmpty()
+                    && entries.stream().noneMatch(entry -> entry.id().equals(chat.id))) {
+                String text = chat.draft.text().strip().replaceAll("\\s+", " ");
+                String title = (text.isEmpty() ? "Новый чат" : text.substring(0, Math.min(60, text.length()))) + " (черновик)";
+                if (query.isBlank() || title.toLowerCase(java.util.Locale.ROOT).contains(query.toLowerCase(java.util.Locale.ROOT))) {
+                    entries.add(0, new ChatStore.Entry(chat.id, title, Instant.now()));
+                }
+            }
+        }
+        return entries;
     }
 
     /** Чаты, которые сейчас отвечают. */
@@ -1510,7 +1611,7 @@ public class ChatView extends ViewPart {
     private void fillHistory(IMenuManager menu) {
         List<ChatStore.Entry> entries;
         try {
-            entries = chats.list();
+            entries = chatEntries("");
         } catch (IOException e) {
             entries = List.of();
         }
@@ -1570,6 +1671,9 @@ public class ChatView extends ViewPart {
         if (enter && (event.stateMask & SWT.SHIFT) == 0) {
             event.doit = false;
             send();
+        } else if (event.keyCode == SWT.ESC && current.edit != null) {
+            event.doit = false;
+            cancelMessageEdit();
         } else if (event.keyCode == SWT.ESC && approvalBar.isShown()) {
             event.doit = false;
             approvalBar.deny();
@@ -1577,7 +1681,7 @@ public class ChatView extends ViewPart {
             event.doit = false;
             session.cancel();
         } else if ((event.keyCode == SWT.ARROW_UP || event.keyCode == SWT.ARROW_DOWN) && event.stateMask == 0
-                && (input.getText().isEmpty() || recall >= 0)) {
+                && current.edit == null && (input.getText().isEmpty() || recall >= 0)) {
             event.doit = !recallSent(event.keyCode == SWT.ARROW_UP ? -1 : 1);
         }
     }
@@ -1658,6 +1762,10 @@ public class ChatView extends ViewPart {
     void send() {
         String text = input.getText();
         if (text.isBlank()) {
+            return;
+        }
+        if (current.edit != null) {
+            confirmMessageEdit(text);
             return;
         }
         SlashCommand.Invocation command = SlashCommand.parse(text).orElse(null);
@@ -1751,7 +1859,7 @@ public class ChatView extends ViewPart {
      * он оборвался — очередь возвращается в поле ввода: решать пользователю.
      */
     private void sendQueued() {
-        if (queueBar.isEmpty() || session.isBusy()) {
+        if (queueBar.isEmpty() || session.isBusy() || current.edit != null) {
             return;
         }
         List<ChatMessage> messages = session.messages();
@@ -2376,6 +2484,10 @@ public class ChatView extends ViewPart {
      * {@code false} от него — поля нет, текст остаётся в чате.
      */
     void requestCommitMessage(Predicate<String> target) {
+        if (current.edit != null) {
+            showNotice("Сначала отправьте или отмените правку сообщения");
+            return;
+        }
         if (session.isBusy()) {
             showNotice("Дождитесь ответа или остановите его, потом нажмите кнопку ещё раз");
             return;
@@ -2414,6 +2526,11 @@ public class ChatView extends ViewPart {
      * в очередь.
      */
     void askAboutCode(AttachedContext context, String prompt) {
+        if (current.edit != null) {
+            context.dispose();
+            showNotice("Сначала отправьте или отмените правку сообщения");
+            return;
+        }
         contextBar.add(context);
         if (session.isBusy()) {
             queueBar.add(new QueueBar.Queued(prompt, contextBar.items(), contextBar.attachments()));
@@ -2456,18 +2573,86 @@ public class ChatView extends ViewPart {
         }
     }
 
-    private void editMessage(int index) {
+    private void editMessage(int index, ChatMessage expected) {
         if (session.isBusy()) {
             showNotice("Дождитесь ответа или остановите его, чтобы изменить сообщение");
             return;
         }
-        ChatMessage message = session.editFrom(index);
+        List<ChatMessage> messages = session.messages();
+        if (index < 0 || index >= messages.size() || messages.get(index).role() != ChatRole.USER
+                || !messages.get(index).equals(expected)) {
+            showNotice("Исходное сообщение изменилось — начните правку заново");
+            return;
+        }
+        ChatMessage message = messages.get(index);
+        Draft before;
+        if (current.edit == null) {
+            before = takeDraft();
+        } else {
+            before = current.edit.before();
+            contextBar.clear();
+        }
+        current.edit = new MessageEdit(index, message, before);
         input.setText(message.text());
         input.setSelection(message.text().length());
         contextBar.clear();
         message.context().forEach(item -> contextBar.add(AttachedContext.fromItem(item)));
         message.attachments().forEach(contextBar::add);
+        updateEditBar();
         input.setFocus();
+    }
+
+    private Draft takeDraft() {
+        Draft draft = new Draft(input.getText(), input.getSelection(), contextBar.items(), contextBar.attachments());
+        contextBar.detach();
+        input.setText("");
+        return draft;
+    }
+
+    private void restoreDraft(Draft draft) {
+        input.setText(draft.text());
+        input.setSelection(draft.selection());
+        draft.context().forEach(contextBar::add);
+        draft.files().forEach(contextBar::add);
+    }
+
+    private void cancelMessageEdit() {
+        MessageEdit edit = current.edit;
+        if (edit == null) {
+            return;
+        }
+        current.edit = null;
+        contextBar.clear();
+        restoreDraft(edit.before());
+        updateEditBar();
+        input.setFocus();
+    }
+
+    /** Текст правки уже является сообщением, а не новой slash-командой. */
+    private void confirmMessageEdit(String text) {
+        Live chat = current;
+        MessageEdit edit = chat.edit;
+        try {
+            chat.session.editAndSend(edit.index(), edit.original(), text, contextBar.snapshot(), contextBar.attachments());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            showNotice(e.getMessage());
+            return;
+        }
+        saveIfChanged(chat);
+        chat.edit = null;
+        contextBar.clear();
+        restoreDraft(edit.before());
+        updateEditBar();
+    }
+
+    private void updateEditBar() {
+        boolean editing = current.edit != null;
+        editBar.setVisible(editing);
+        ((GridData) editBar.getLayoutData()).exclude = !editing;
+        input.setMessage(editing ? "Изменённое сообщение (Enter — отправить, Esc — отменить правку)"
+                : "Сообщение (Enter — отправить, Shift+Enter — новая строка)");
+        updateSendButton();
+        root.layout(true, true);
     }
 
     // ---- действия в ленте ----
@@ -2475,7 +2660,7 @@ public class ChatView extends ViewPart {
     private void copyToClipboard(String text) {
         Clipboard clipboard = new Clipboard(history.getDisplay());
         try {
-            clipboard.setContents(new Object[] { text }, new Transfer[] { TextTransfer.getInstance() });
+            clipboard.setContents(new Object[] { text.replace("\uFFFC", "") }, new Transfer[] { TextTransfer.getInstance() });
         } finally {
             clipboard.dispose();
         }
@@ -2613,16 +2798,21 @@ public class ChatView extends ViewPart {
 
             StringBuilder text = new StringBuilder();
             List<StyleRange> styles = new ArrayList<>();
-            for (int i = first; i < messages.size(); i++) {
-                List<int[]> codeRanges = new ArrayList<>();
-                int from = start + text.length();
-                MessageRenderer.Placement placement = renderer.render(messages.get(i), i, i > 0, actions.get(i), start, text, styles,
-                        codeRanges, pending(messages.get(i), pending));
-                rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), expanded.get(i), from, codeRanges, placement,
-                        pending(messages.get(i), pending)));
+            updatingHistory = true;
+            try {
+                for (int i = first; i < messages.size(); i++) {
+                    List<int[]> codeRanges = new ArrayList<>();
+                    int from = start + text.length();
+                    MessageRenderer.Placement placement = renderer.render(messages.get(i), i, i > 0, actions.get(i), start, text, styles,
+                            codeRanges, pending(messages.get(i), pending));
+                    rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), expanded.get(i), from, codeRanges, placement,
+                            pending(messages.get(i), pending)));
+                }
+                history.replaceTextRange(start, history.getCharCount() - start, text.toString());
+                history.replaceStyleRanges(start, text.length(), styles.toArray(StyleRange[]::new));
+            } finally {
+                updatingHistory = false;
             }
-            history.replaceTextRange(start, history.getCharCount() - start, text.toString());
-            history.replaceStyleRanges(start, text.length(), styles.toArray(StyleRange[]::new));
             layoutMessages(first);
             history.redraw();
             if (atBottom || scrollToEnd) {
@@ -2658,7 +2848,10 @@ public class ChatView extends ViewPart {
         Set<MessageRenderer.Action> actions = EnumSet.noneOf(MessageRenderer.Action.class);
         switch (message.role()) {
             // «Изменить» видно всегда: иначе каждая отправка перерисовывала бы всю ленту.
-            case USER -> actions.add(MessageRenderer.Action.EDIT);
+            case USER -> {
+                actions.add(MessageRenderer.Action.COPY);
+                actions.add(MessageRenderer.Action.EDIT);
+            }
             case ASSISTANT -> {
                 if (!message.text().isEmpty() && message.status() != Status.STREAMING) {
                     actions.add(MessageRenderer.Action.COPY);
@@ -2763,6 +2956,9 @@ public class ChatView extends ViewPart {
 
     /** Рисует пузыри вопросов, попавшие в полосу {@code [top, bottom)}. */
     private void paintBubbles(GC gc, int top, int bottom) {
+        if (updatingHistory) {
+            return;
+        }
         for (Rendered item : rendered) {
             MessageRenderer.Placement placement = item.placement();
             if (!placement.bubble()) {
@@ -2887,6 +3083,7 @@ public class ChatView extends ViewPart {
         }
         boolean busy = session.isBusy();
         boolean typed = !input.getText().isBlank();
+        sendButton.setEditing(current != null && current.edit != null);
         sendButton.setBusy(busy && !typed);
         sendButton.setQueue(busy && typed);
         sendButton.setEnabled(busy || typed);
@@ -3073,6 +3270,12 @@ public class ChatView extends ViewPart {
     public void dispose() {
         markTabBusy(false);
         contextBar.clear();
+        lives.values().forEach(chat -> {
+            chat.draft.dispose();
+            if (chat.edit != null) {
+                chat.edit.before().dispose();
+            }
+        });
         if (renderer != null) {
             renderer.dispose();
         }
@@ -3090,6 +3293,10 @@ public class ChatView extends ViewPart {
 
     ChatSession session() {
         return session;
+    }
+
+    Button cancelEditButton() {
+        return cancelEdit;
     }
 
     ChatHistoryFile historyFile() {

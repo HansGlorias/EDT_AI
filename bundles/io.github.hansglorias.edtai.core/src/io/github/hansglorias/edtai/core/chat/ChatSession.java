@@ -40,7 +40,9 @@ public final class ChatSession {
     }
 
     public List<ChatMessage> messages() {
-        return List.copyOf(messages);
+        synchronized (lock) {
+            return List.copyOf(messages);
+        }
     }
 
     public boolean isBusy() {
@@ -250,6 +252,31 @@ public final class ChatSession {
         }
         listeners.forEach(ChatListener::historyChanged);
         return message;
+    }
+
+    /**
+     * Подтверждает черновик правки и запрашивает новый ответ. До всех проверок
+     * история не меняется; слушатели не видят промежуточную обрезанную ветвь.
+     * {@code expected} — исходное сообщение, для которого начали правку.
+     */
+    public CompletableFuture<ChatMessage> editAndSend(int index, ChatMessage expected, String text,
+            List<ContextItem> context, List<Attachment> attachments) {
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("Пустое сообщение");
+        }
+        ChatMessage replacement = new ChatMessage(ChatRole.USER, text.strip(), Instant.now(), Status.DONE,
+                context, List.of(), attachments);
+        synchronized (lock) {
+            checkIdle();
+            if (index < 0 || index >= messages.size() || expected == null || expected.role() != ChatRole.USER
+                    || !expected.equals(messages.get(index))) {
+                throw new IllegalArgumentException("Исходное сообщение изменилось — начните правку заново");
+            }
+            messages.subList(index, messages.size()).clear();
+            messages.add(replacement);
+            listeners.forEach(ChatListener::historyChanged);
+            return request();
+        }
     }
 
     /**

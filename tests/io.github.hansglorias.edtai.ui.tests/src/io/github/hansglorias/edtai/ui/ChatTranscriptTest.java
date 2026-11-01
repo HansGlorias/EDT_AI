@@ -93,13 +93,13 @@ class ChatTranscriptTest extends AbstractChatTest {
         ask(view, "Пример?");
 
         List<Runnable> copies = view.linkActions(MessageRenderer.COPY);
-        assertEquals(2, copies.size(), "у блока кода и значок под ответом");
+        assertEquals(3, copies.size(), "у вопроса, блока кода и ответа");
 
-        copies.get(0).run();
+        copies.get(1).run();
         assertEquals(CODE, clipboard());
         assertEquals("Скопировано в буфер обмена", view.status().getText());
 
-        copies.get(1).run();
+        copies.get(2).run();
         assertEquals(ANSWER, clipboard());
     }
 
@@ -249,13 +249,14 @@ class ChatTranscriptTest extends AbstractChatTest {
         settle();
 
         assertEquals("второй вопрос", view.input().getText());
-        assertEquals(List.of(ChatRole.USER, ChatRole.ASSISTANT), view.session().messages().stream().map(m -> m.role()).toList());
-        assertFalse(view.history().getText().contains("второй вопрос"));
+        assertEquals(4, view.session().messages().size());
+        assertTrue(view.history().getText().contains("второй вопрос"));
 
         view.linkActions(MessageRenderer.EDIT).get(0).run();
         settle();
         assertEquals("первый вопрос", view.input().getText());
-        assertTrue(view.isEmptyStateShown());
+        assertFalse(view.isEmptyStateShown());
+        assertEquals(4, view.session().messages().size());
     }
 
     @Test

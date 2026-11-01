@@ -10,6 +10,7 @@ final class SendButton extends Chip {
 
     private boolean busy;
     private boolean queue;
+    private boolean editing;
 
     SendButton(Composite parent) {
         super(parent, false);
@@ -37,6 +38,13 @@ final class SendButton extends Chip {
         }
     }
 
+    void setEditing(boolean value) {
+        if (editing != value) {
+            editing = value;
+            updateTooltip();
+        }
+    }
+
     /** Что делает кнопка сейчас: «Отправить» или «Стоп». */
     String getText() {
         return busy ? ChatView.STOP : ChatView.SEND;
@@ -52,7 +60,7 @@ final class SendButton extends Chip {
 
     private void updateTooltip() {
         setToolTipText(busy ? "Остановить ответ (Esc)" : queue ? "В очередь: уйдёт после ответа (Enter). Остановить ответ — Esc"
-                : "Отправить (Enter)");
+                : editing ? "Изменить сообщение и отправить заново (Enter)" : "Отправить (Enter)");
     }
 
     @Override
