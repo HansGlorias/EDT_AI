@@ -15,7 +15,7 @@ import io.github.hansglorias.edtai.core.context.ContextItem;
 /**
  * История одного диалога и отправка сообщений провайдеру. Одновременно
  * обрабатывается не больше одного запроса. Ответ ассистента появляется в
- * истории с первой полученной частью и растёт по мере генерации.
+ * истории сразу после отправки и растёт по мере генерации.
  */
 public final class ChatSession {
 
@@ -264,6 +264,9 @@ public final class ChatSession {
             messages.clear();
             usage = null;
             for (ChatMessage message : saved) {
+                if (message.isEmptyAnswer()) {
+                    continue;
+                }
                 ChatMessage restored = message.status() == Status.STREAMING ? message.with(message.text(), Status.STOPPED) : message;
                 messages.add(restored.withTools(restored.tools().stream().map(ChatSession::interrupted).toList()));
             }
@@ -283,7 +286,7 @@ public final class ChatSession {
      */
     private List<ChatMessage> history() {
         List<ChatMessage> history = messages.stream()
-                .filter(message -> message.role() != ChatRole.ERROR && !message.text().isEmpty())
+                .filter(message -> message.role() != ChatRole.ERROR && !message.text().isBlank())
                 .toList();
         for (int i = history.size() - 1; i >= 0; i--) {
             if (history.get(i).role() == ChatRole.SUMMARY) {
@@ -298,6 +301,7 @@ public final class ChatSession {
         List<ChatMessage> history = history();
         Request request = new Request();
         current = request;
+        put(request, "", Status.STREAMING);
         listeners.forEach(listener -> listener.busyChanged(true));
 
         CompletableFuture<String> reply;
@@ -312,6 +316,7 @@ public final class ChatSession {
     }
 
     private CompletableFuture<String> reply(Request request, List<ChatMessage> history) {
+        request.activity = request.activity.next(ReplyActivity.Phase.THINKING, "");
         CompletableFuture<String> reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use),
                 tokens -> onUsage(request, tokens));
         request.inner = reply;
@@ -426,11 +431,17 @@ public final class ChatSession {
             } else if (cause instanceof CancellationException) {
                 result = put(request, partial, Status.STOPPED);
             } else {
-                if (request.index >= 0) {
+                if (!partial.isBlank() || !request.tools.isEmpty() || !request.files.isEmpty()) {
                     put(request, partial, Status.STOPPED);
+                    result = ChatMessage.of(ChatRole.ERROR, describe(cause));
+                    add(result);
+                } else {
+                    ChatMessage pending = messages.get(request.index);
+                    result = new ChatMessage(ChatRole.ERROR, describe(cause), pending.time(), Status.DONE);
+                    messages.set(request.index, result);
+                    ChatMessage failure = result;
+                    listeners.forEach(listener -> listener.messageUpdated(request.index, failure));
                 }
-                result = ChatMessage.of(ChatRole.ERROR, describe(cause));
-                add(result);
             }
             if (current == request) {
                 current = null;
@@ -494,6 +505,6 @@ public final class ChatSession {
         /** Запрос, который идёт сейчас: сжатие истории или сам ответ. */
         volatile CompletableFuture<String> inner;
         /** Под {@link ChatSession#lock}. */
-        ReplyActivity activity = new ReplyActivity(ReplyActivity.Phase.THINKING, "", Instant.now());
+        ReplyActivity activity = new ReplyActivity(ReplyActivity.Phase.PREPARING, "", Instant.now());
     }
 }

@@ -62,6 +62,11 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         return new ChatMessage(role, text, time, status, context, newTools, attachments);
     }
 
+    /** Только место для ответа в живой ленте; сохранять и передавать модели нечего. */
+    public boolean isEmptyAnswer() {
+        return role == ChatRole.ASSISTANT && text.isBlank() && tools.isEmpty() && attachments.isEmpty();
+    }
+
     /** Начало следа инструментов в ответе, каким его видит модель. */
     public static final String TRACE = "[Вызванные инструменты: ";
 

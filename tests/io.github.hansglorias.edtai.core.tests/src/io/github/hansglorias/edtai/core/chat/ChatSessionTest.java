@@ -43,7 +43,9 @@ class ChatSessionTest {
 
         assertFalse(reply.isDone());
         assertTrue(session.isBusy());
-        assertEquals(1, session.messages().size());
+        assertEquals(2, session.messages().size());
+        assertTrue(last(session).isEmptyAnswer());
+        assertEquals(Status.STREAMING, last(session).status());
         reply.get(TIMEOUT, TimeUnit.SECONDS);
         assertFalse(session.isBusy());
     }
@@ -69,9 +71,13 @@ class ChatSessionTest {
         List<String> events = record(session);
 
         CompletableFuture<ChatMessage> reply = session.send("вопрос");
-        assertEquals(List.of(ChatRole.USER), roles(session));
+        assertEquals(List.of(ChatRole.USER, ChatRole.ASSISTANT), roles(session));
+        ChatMessage pending = last(session);
+        assertTrue(pending.isEmptyAnswer());
+        assertEquals(List.of(ChatRole.USER), provider.history.stream().map(ChatMessage::role).toList());
 
         provider.part("При");
+        assertEquals(pending.time(), last(session).time(), "первый текст заполняет ту же запись");
         assertEquals(new ChatMessage(ChatRole.ASSISTANT, "При", last(session).time(), Status.STREAMING), last(session));
         provider.part("");
         provider.part("вет");
@@ -80,7 +86,7 @@ class ChatSessionTest {
         provider.complete("Привет");
 
         assertEquals(new ChatMessage(ChatRole.ASSISTANT, "Привет", last(session).time(), Status.DONE), reply.get(TIMEOUT, TimeUnit.SECONDS));
-        assertEquals(List.of("added:USER", "busy:true", "added:ASSISTANT/STREAMING:При", "updated:1/STREAMING:Привет",
+        assertEquals(List.of("added:USER", "added:ASSISTANT/STREAMING:", "busy:true", "updated:1/STREAMING:При", "updated:1/STREAMING:Привет",
                 "updated:1/DONE:Привет", "busy:false"), events);
     }
 
@@ -160,10 +166,104 @@ class ChatSessionTest {
         session.send("раз");
         session.cancel();
         assertEquals(new ChatMessage(ChatRole.ASSISTANT, "", last(session).time(), Status.STOPPED), last(session));
+        assertFalse(session.isBusy());
+        assertNull(session.activity());
+        provider.part("поздний текст");
+        assertTrue(last(session).isEmptyAnswer());
 
         session.send("два");
         // Пустой ответ в модель не уходит.
         assertEquals(List.of("USER:раз", "USER:два"), texts(provider.history));
+    }
+
+    @Test
+    void emptyFinalHasTerminalStateAndIsNotRestored() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> reply = session.send("вопрос");
+        provider.complete("");
+        assertEquals(Status.DONE, reply.get(TIMEOUT, TimeUnit.SECONDS).status());
+        assertFalse(session.isBusy());
+        assertNull(session.activity());
+
+        ChatSession reopened = new ChatSession(new ManualProvider());
+        reopened.restore(session.messages());
+        assertEquals(List.of(ChatRole.USER), roles(reopened));
+        assertTrue(reopened.canRetry());
+        assertFalse(reopened.canCompact());
+    }
+
+    @Test
+    void toolOnlyAnswerUpdatesPendingEntryAndSurvivesRestore() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> reply = session.send("вопрос");
+        var time = last(session).time();
+        provider.onTool.accept(new ToolUse("1", "read_module", "Читает модуль", "", ToolUse.Status.RUNNING));
+        assertEquals(ReplyActivity.Phase.TOOL, session.activity().phase());
+        assertEquals(time, last(session).time());
+        assertEquals(2, session.messages().size());
+        provider.onTool.accept(new ToolUse("1", "read_module", "Читает модуль", "10 строк", ToolUse.Status.DONE));
+        assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase());
+        provider.complete("");
+        assertEquals(Status.DONE, reply.get(TIMEOUT, TimeUnit.SECONDS).status());
+        assertNull(session.activity());
+
+        ChatSession reopened = new ChatSession(new ManualProvider());
+        reopened.restore(session.messages());
+        assertEquals(session.messages(), reopened.messages(), "результаты инструментов не теряются без текста");
+    }
+
+    @Test
+    void failureBeforeTextReplacesPendingEntry() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> reply = session.send("вопрос");
+        var time = last(session).time();
+        provider.fail(new IllegalStateException("сервер недоступен"));
+        assertEquals(ChatRole.ERROR, reply.get(TIMEOUT, TimeUnit.SECONDS).role());
+        assertEquals(List.of(ChatRole.USER, ChatRole.ERROR), roles(session));
+        assertEquals(time, last(session).time());
+        assertFalse(session.isBusy());
+        assertNull(session.activity());
+        provider.part("поздний текст");
+        assertEquals("сервер недоступен", last(session).text());
+    }
+
+    @Test
+    void pendingAnswerIsExcludedFromAutomaticSummaryAndFollowUp() throws Exception {
+        List<List<ChatMessage>> summaries = new ArrayList<>();
+        ManualProvider delegate = new ManualProvider();
+        ChatProvider provider = new ChatProvider() {
+            @Override
+            public String name() { return "сжатие"; }
+
+            @Override
+            public int compactCount(List<ChatMessage> history) {
+                assertFalse(history.stream().anyMatch(ChatMessage::isEmptyAnswer));
+                return history.size() > 2 ? 2 : 0;
+            }
+
+            @Override
+            public CompletableFuture<String> summarize(List<ChatMessage> history) {
+                summaries.add(history);
+                return CompletableFuture.completedFuture("кратко");
+            }
+
+            @Override
+            public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> text) {
+                return delegate.reply(history, text);
+            }
+        };
+        ChatSession session = new ChatSession(provider);
+        session.send("один");
+        delegate.complete("ответ");
+        session.send("два");
+        assertEquals(2, summaries.get(0).size());
+        assertEquals(List.of(ChatRole.SUMMARY, ChatRole.USER), delegate.history.stream().map(ChatMessage::role).toList());
+        assertEquals(1, session.messages().stream().filter(message -> message.status() == Status.STREAMING).count());
+        session.cancel();
+        assertNull(session.activity());
     }
 
     @Test
@@ -221,7 +321,7 @@ class ChatSessionTest {
         first.get(TIMEOUT, TimeUnit.SECONDS);
         session.send("два");
 
-        assertEquals(List.of(ChatRole.USER, ChatRole.ERROR, ChatRole.USER), roles(session));
+        assertEquals(List.of(ChatRole.USER, ChatRole.ERROR, ChatRole.USER, ChatRole.ASSISTANT), roles(session));
         assertEquals(List.of(ChatRole.USER, ChatRole.USER), provider.history.stream().map(ChatMessage::role).toList());
     }
 
@@ -406,7 +506,7 @@ class ChatSessionTest {
         session.send("x").get(TIMEOUT, TimeUnit.SECONDS);
         session.clear();
 
-        assertEquals(List.of("added:USER", "busy:true", "added:ASSISTANT/STREAMING:Эхо: ", "updated:1/STREAMING:Эхо: x",
+        assertEquals(List.of("added:USER", "added:ASSISTANT/STREAMING:", "busy:true", "updated:1/STREAMING:Эхо: ", "updated:1/STREAMING:Эхо: x",
                 "updated:1/DONE:Эхо: x", "busy:false", "history"), events);
         assertTrue(session.messages().isEmpty());
     }

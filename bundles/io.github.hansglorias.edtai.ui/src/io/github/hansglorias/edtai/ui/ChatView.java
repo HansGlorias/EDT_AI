@@ -405,7 +405,7 @@ public class ChatView extends ViewPart {
      * строка под сообщением.
      */
     private record Rendered(ChatMessage message, Set<MessageRenderer.Action> actions, List<String> files, Set<String> expanded,
-            int start, List<int[]> codeRanges, MessageRenderer.Placement placement) {
+            int start, List<int[]> codeRanges, MessageRenderer.Placement placement, String pending) {
     }
 
     /** Пузырь вопроса не шире этой доли ленты. */
@@ -2345,7 +2345,7 @@ public class ChatView extends ViewPart {
      */
     private void generateTitle(Live chat) {
         String id = chat.id;
-        List<ChatMessage> messages = chat.session.messages();
+        List<ChatMessage> messages = chat.session.messages().stream().filter(message -> !message.isEmptyAnswer()).toList();
         boolean answered = messages.stream().anyMatch(message -> message.role() == ChatRole.ASSISTANT
                 && message.status() == Status.DONE && !message.text().isBlank());
         if (!preferences().getBoolean(GENERATE_TITLES, true) || !answered || chats.customTitle(id).isPresent()
@@ -2581,6 +2581,8 @@ public class ChatView extends ViewPart {
     void refresh() {
         List<ChatMessage> messages = session.messages();
         boolean idle = !session.isBusy();
+        ReplyActivity activity = session.activity();
+        String pending = activity == null ? "" : activity.describe(Instant.now());
         List<Set<MessageRenderer.Action>> actions = new ArrayList<>();
         List<List<String>> files = new ArrayList<>();
         List<Set<String>> expanded = new ArrayList<>();
@@ -2600,7 +2602,8 @@ public class ChatView extends ViewPart {
                 && rendered.get(first).message().equals(messages.get(first))
                 && rendered.get(first).actions().equals(actions.get(first))
                 && rendered.get(first).files().equals(files.get(first))
-                && rendered.get(first).expanded().equals(expanded.get(first))) {
+                && rendered.get(first).expanded().equals(expanded.get(first))
+                && rendered.get(first).pending().equals(pending(messages.get(first), pending))) {
             first++;
         }
         if (first < rendered.size() || first < messages.size()) {
@@ -2614,8 +2617,9 @@ public class ChatView extends ViewPart {
                 List<int[]> codeRanges = new ArrayList<>();
                 int from = start + text.length();
                 MessageRenderer.Placement placement = renderer.render(messages.get(i), i, i > 0, actions.get(i), start, text, styles,
-                        codeRanges);
-                rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), expanded.get(i), from, codeRanges, placement));
+                        codeRanges, pending(messages.get(i), pending));
+                rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), expanded.get(i), from, codeRanges, placement,
+                        pending(messages.get(i), pending)));
             }
             history.replaceTextRange(start, history.getCharCount() - start, text.toString());
             history.replaceStyleRanges(start, text.length(), styles.toArray(StyleRange[]::new));
@@ -2641,6 +2645,11 @@ public class ChatView extends ViewPart {
         updateEmptyState();
         updateSendButton();
         updateStatus();
+    }
+
+    private static String pending(ChatMessage message, String activity) {
+        return message.role() == ChatRole.ASSISTANT && message.status() == Status.STREAMING && message.text().isBlank()
+                ? activity : "";
     }
 
     private static Set<MessageRenderer.Action> actions(List<ChatMessage> messages, int index, boolean idle) {
@@ -2959,7 +2968,7 @@ public class ChatView extends ViewPart {
     private void tick() {
         ticking = false;
         if (!history.isDisposed() && session.isBusy()) {
-            updateStatus();
+            refresh();
             ticking = true;
             history.getDisplay().timerExec(TICK_MS, this::tick);
         }

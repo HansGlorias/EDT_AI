@@ -304,7 +304,7 @@ class ChatCommandsTest extends AbstractChatTest {
 
         view.input().setText("Считай");
         view.send();
-        waitUntil(() -> view.status().getText().matches("test-model · (думает|пишет ответ)… \\d+ с"), () -> view.status().getText());
+        waitUntil(() -> view.status().getText().matches("test-model · (ожидает модель|пишет ответ)… \\d+ с"), () -> view.status().getText());
         // Новый чат — в истории сразу, пока ответ ещё идёт.
         waitUntil(() -> {
             try {

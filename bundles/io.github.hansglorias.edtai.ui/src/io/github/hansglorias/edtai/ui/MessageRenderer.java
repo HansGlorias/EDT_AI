@@ -196,7 +196,7 @@ final class MessageRenderer {
      * ленте начинается {@code text}.
      */
     Placement render(ChatMessage message, int index, boolean separator, Set<Action> actions, int offset, StringBuilder text,
-            List<StyleRange> styles, List<int[]> codeRanges) {
+            List<StyleRange> styles, List<int[]> codeRanges, String pending) {
         if (separator) {
             text.append("\n\n");
         }
@@ -212,7 +212,7 @@ final class MessageRenderer {
         String body = message.text();
         if (message.role() == ChatRole.ASSISTANT) {
             // Текст и вызовы по порядку, как шёл ответ: видно, что модель делает между абзацами.
-            List<AnswerParts.Part> parts = AnswerParts.split(body, message.tools());
+            List<AnswerParts.Part> parts = AnswerParts.split(body.isBlank() ? "" : body, message.tools());
             boolean afterTools = false;
             int group = 0;
             for (int i = 0; i < parts.size(); i++) {
@@ -231,7 +231,7 @@ final class MessageRenderer {
             }
             if (parts.stream().noneMatch(AnswerParts.Part::isText)) {
                 String placeholder = switch (message.status()) {
-                    case STREAMING -> "…";
+                    case STREAMING -> pending;
                     case STOPPED -> "(ответ не получен)";
                     case DONE -> "(пустой ответ)";
                 };
@@ -266,7 +266,7 @@ final class MessageRenderer {
      */
     private void footer(ChatMessage message, int index, Set<Action> actions, int offset, StringBuilder text, List<StyleRange> styles) {
         String meta = TIME.format(message.time()) + switch (message.status()) {
-            case STREAMING -> " · пишет…";
+            case STREAMING -> message.text().isBlank() ? "" : " · пишет…";
             case STOPPED -> message.role() == ChatRole.ASSISTANT ? " · остановлено" : "";
             case DONE -> "";
         };

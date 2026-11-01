@@ -23,6 +23,21 @@ class ChatHistoryFileTest {
     Path temp;
 
     @Test
+    void emptyAnswersAreNeverSavedButToolResultsAre() throws Exception {
+        ChatHistoryFile file = new ChatHistoryFile(temp.resolve("chat.json"));
+        ChatMessage user = ChatMessage.of(ChatRole.USER, "вопрос");
+        for (Status status : Status.values()) {
+            ChatMessage empty = new ChatMessage(ChatRole.ASSISTANT, "", Instant.EPOCH, status);
+            file.save(List.of(user, empty));
+            assertEquals(List.of(user), file.load());
+        }
+        ChatMessage toolOnly = new ChatMessage(ChatRole.ASSISTANT, "", Instant.EPOCH, Status.DONE,
+                List.of(), List.of(new ToolUse("1", "read_module", "Читает модуль", "10 строк", ToolUse.Status.DONE)));
+        file.save(List.of(user, toolOnly));
+        assertEquals(List.of(user, toolOnly), file.load());
+    }
+
+    @Test
     void savesAndLoads() throws Exception {
         List<ChatMessage> messages = List.of(
                 new ChatMessage(ChatRole.USER, "вопрос \"в кавычках\"\nи вторая строка", Instant.parse("2026-10-28T09:00:00Z"), Status.DONE),
