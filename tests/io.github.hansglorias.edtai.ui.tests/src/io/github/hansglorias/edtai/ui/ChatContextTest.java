@@ -254,13 +254,19 @@ class ChatContextTest extends AbstractChatTest {
         List<TriggerSequence> active = Arrays.asList(bindings.getActiveBindingsFor(AskAboutSelectionHandler.COMMAND_ID));
         assertTrue(active.contains(KeySequence.getInstance("M1+M3+A")), active.toString());
 
+        assertEditorMenu("#TextEditorContext", "io.github.hansglorias.edtai.ui.editorMenu");
+        // У BSL-редактора EDT своё контекстное меню: без этого вклада в модуле пункта нет.
+        assertEditorMenu("#BslEditorContext", "io.github.hansglorias.edtai.ui.bslEditorMenu");
+    }
+
+    private static void assertEditorMenu(String menuId, String submenuId) {
         MenuManager menu = new MenuManager();
         menu.add(new Separator(IWorkbenchActionConstants.MB_ADDITIONS));
         IMenuService menus = PlatformUI.getWorkbench().getService(IMenuService.class);
-        menus.populateContributionManager(menu, "popup:#TextEditorContext");
+        menus.populateContributionManager(menu, "popup:" + menuId);
         try {
             // Подменю «EDT AI»; в E4 пункт — HandledContributionItem с id команды.
-            IContributionItem group = menu.find("io.github.hansglorias.edtai.ui.editorMenu");
+            IContributionItem group = menu.find(submenuId);
             MenuManager submenu = assertInstanceOf(MenuManager.class, group, String.valueOf(group));
             assertEquals("EDT AI", submenu.getMenuText());
             List<String> ids = Arrays.stream(submenu.getItems()).map(IContributionItem::getId).filter(id -> id != null).toList();
