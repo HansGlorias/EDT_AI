@@ -316,7 +316,7 @@ public final class ModelClient {
                     if (!result.isDone()) {
                         onText.accept(notice);
                     }
-                    answer = new ModelReply(answer.text() + notice, answer.calls(), true, answer.usage());
+                    answer = new ModelReply(answer.text() + notice, answer.calls(), true, answer.usage(), answer.reasoning());
                 }
                 result.complete(answer);
             } catch (Throwable e) {

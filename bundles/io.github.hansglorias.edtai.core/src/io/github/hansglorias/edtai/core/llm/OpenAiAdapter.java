@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
@@ -63,6 +64,7 @@ final class OpenAiAdapter extends ProtocolAdapter {
         Object usage = Json.at(json, "usage");
         state.usage(tokens(usage, new Object[] { "prompt_tokens" }), tokens(usage, new Object[] { "completion_tokens" }));
         Object delta = Json.at(json, "choices", 0, "delta");
+        reasoning(delta, state::reasoning);
         state.text(Json.stringAt(delta, "content"));
         List<Object> calls = Json.asList(Json.at(delta, "tool_calls"));
         for (int i = 0; i < calls.size(); i++) {
@@ -94,9 +96,22 @@ final class OpenAiAdapter extends ProtocolAdapter {
         Object usage = Json.at(json, "usage");
         long input = tokens(usage, new Object[] { "prompt_tokens" });
         long output = tokens(usage, new Object[] { "completion_tokens" });
+        String[] thought = { "", "" };
+        reasoning(message, (field, part) -> {
+            thought[0] = field;
+            thought[1] = part;
+        });
+        if (thought[0].isEmpty() && text != null) {
+            ThinkFilter tags = new ThinkFilter();
+            tags.feed(text);
+            tags.finish();
+            thought[0] = ModelReply.Reasoning.TAGS;
+            thought[1] = tags.thought();
+        }
         return new ModelReply(ThinkFilter.strip(text != null ? text : ""), result,
                 "length".equals(Json.stringAt(json, "choices", 0, "finish_reason")),
-                input < 0 && output < 0 ? null : TokenUsage.serverStep(input, output));
+                input < 0 && output < 0 ? null : TokenUsage.serverStep(input, output),
+                new ModelReply.Reasoning(thought[0], thought[1]));
     }
 
     @Override
@@ -107,11 +122,36 @@ final class OpenAiAdapter extends ProtocolAdapter {
                     Json.object("name", call.name(), "arguments", call.arguments())));
         }
         Map<String, Object> message = mutable("role", "assistant");
-        if (!reply.text().isEmpty()) {
-            message.put("content", reply.text());
+        ModelReply.Reasoning reasoning = reply.reasoning();
+        String content = reply.text();
+        if (!reasoning.isEmpty()) {
+            // DeepSeek и Kimi в режиме рассуждений отвечают 400, если в шаге с вызовами инструментов
+            // нет reasoning_content; MiniMax и Qwen хуже продолжают без своего <think>. Возвращаем
+            // рассуждение тем же способом, каким его прислал сервер, — значит, сервер его понимает.
+            if (ModelReply.Reasoning.TAGS.equals(reasoning.field())) {
+                content = ThinkFilter.OPEN + reasoning.text() + ThinkFilter.CLOSE + (content.isEmpty() ? "" : "\n\n" + content);
+            } else {
+                message.put(reasoning.field(), reasoning.text());
+            }
+        }
+        if (!content.isEmpty()) {
+            message.put("content", content);
         }
         message.put("tool_calls", calls);
         return message;
+    }
+
+    /** Рассуждение в отдельном поле: {@code reasoning_content} (DeepSeek, Kimi, Qwen) или {@code reasoning} (vLLM, OpenRouter). */
+    private static void reasoning(Object delta, BiConsumer<String, String> sink) {
+        String content = Json.stringAt(delta, ModelReply.Reasoning.CONTENT_FIELD);
+        if (content != null && !content.isEmpty()) {
+            sink.accept(ModelReply.Reasoning.CONTENT_FIELD, content);
+            return;
+        }
+        String reasoning = Json.stringAt(delta, ModelReply.Reasoning.FIELD);
+        if (reasoning != null && !reasoning.isEmpty()) {
+            sink.accept(ModelReply.Reasoning.FIELD, reasoning);
+        }
     }
 
     @Override

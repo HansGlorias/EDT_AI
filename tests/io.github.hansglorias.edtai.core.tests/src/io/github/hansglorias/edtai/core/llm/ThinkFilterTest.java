@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
 
@@ -27,10 +28,26 @@ class ThinkFilterTest {
         }
         shown.append(filter.finish());
         assertEquals("Ответ: 3 <b> и </think> не тег", shown.toString());
+        assertEquals("Надо посчитать.", filter.thought(), "скрытое рассуждение сохраняется для следующего шага");
 
         ThinkFilter unfinished = new ThinkFilter();
         assertEquals("Текст ", unfinished.feed("Текст <thi"));
         assertEquals("<thi", unfinished.finish(), "незакрытое начало тега в конце — это текст");
+    }
+
+    @Test
+    void fullResponseKeepsReasoningOutOfText() throws Exception {
+        ProtocolAdapter openAi = ProtocolAdapter.of(Protocol.OPENAI_COMPATIBLE);
+        ModelReply field = openAi.fullResponse(Json.parse("{\"choices\":[{\"message\":{\"content\":\"Ответ.\","
+                + "\"reasoning_content\":\"Думаю.\"}}]}"));
+        assertEquals("Ответ.", field.text());
+        assertEquals(new ModelReply.Reasoning("reasoning_content", "Думаю."), field.reasoning());
+
+        ModelReply tags = openAi.fullResponse(Json.parse("{\"choices\":[{\"message\":{\"content\":\"<think>Думаю.</think>Ответ.\"}}]}"));
+        assertEquals("Ответ.", tags.text());
+        assertEquals(new ModelReply.Reasoning("<think>", "Думаю."), tags.reasoning());
+
+        assertTrue(openAi.fullResponse(Json.parse("{\"choices\":[{\"message\":{\"content\":\"Ответ.\"}}]}")).reasoning().isEmpty());
     }
 
     @Test

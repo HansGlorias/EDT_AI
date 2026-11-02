@@ -120,6 +120,103 @@ class AgentLoopTest {
                 messages.get(2));
     }
 
+    /**
+     * DeepSeek и Kimi в режиме рассуждений: reasoning_content шага с вызовом инструмента
+     * обязателен в следующем запросе, иначе 400. В ленту рассуждение не попадает.
+     */
+    @Test
+    void openAiReturnsReasoningContentWithToolCall() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of(
+                        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":\"Надо \"}}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{\"content\":null,\"reasoning_content\":\"прочитать модуль.\"}}]}\n\n",
+                        toolCalls("{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_module\","
+                                + "\"arguments\":\"{\\\"module\\\":\\\"Общий\\\"}\"}}"),
+                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n", "data: [DONE]\n\n"), 0);
+            } else if (!request.body().contains("\"reasoning_content\":\"Надо прочитать модуль.\"")) {
+                response.send(400, "application/json", "{\"error\":{\"message\":\"Missing `reasoning_content` field in the assistant"
+                        + " message at message index 1\",\"type\":\"invalid_request_error\"}}");
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Всё ясно.\"}}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"В нём процедура А.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        String answer = run(Protocol.OPENAI_COMPATIBLE);
+
+        assertEquals("В нём процедура А.", answer);
+        assertEquals(String.join("", parts), answer);
+        List<Object> messages = chat(Json.parseObject(server.requests().get(1).body()));
+        assertEquals("Надо прочитать модуль.", Json.stringAt(messages.get(1), "reasoning_content"));
+        assertNull(Json.at(messages.get(1), "content"), "рассуждение не подмешивается в текст");
+        assertEquals("call_1", Json.stringAt(messages.get(1), "tool_calls", 0, "id"));
+    }
+
+    /** vLLM и OpenRouter присылают поле reasoning: возвращаем его под тем же именем. */
+    @Test
+    void openAiReturnsReasoningFieldUnderSameName() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"reasoning\":\"Читаю.\"}}]}\n\n",
+                        toolCalls("{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_module\","
+                                + "\"arguments\":\"{}\"}}"),
+                        "data: [DONE]\n\n"), 0);
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        assertEquals("Готово.", run(Protocol.OPENAI_COMPATIBLE));
+
+        Object assistant = chat(Json.parseObject(server.requests().get(1).body())).get(1);
+        assertEquals("Читаю.", Json.stringAt(assistant, "reasoning"));
+        assertNull(Json.at(assistant, "reasoning_content"));
+    }
+
+    /** MiniMax и Qwen без reasoning-parser: рассуждение в тегах think в тексте; модели возвращаем как было. */
+    @Test
+    void openAiReturnsThinkTagsWithToolCall() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"<thi\"}}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"nk>Нужен модуль.</think>\\n\\nСмотрю.\"}}]}\n\n",
+                        toolCalls("{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_module\","
+                                + "\"arguments\":\"{}\"}}"),
+                        "data: [DONE]\n\n"), 0);
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"<think>Ясно.</think>Готово.\"}}]}\n\n",
+                        "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        String answer = run(Protocol.OPENAI_COMPATIBLE);
+
+        assertEquals("Смотрю.\n\nГотово.", answer);
+        assertEquals(String.join("", parts), answer);
+        Object assistant = chat(Json.parseObject(server.requests().get(1).body())).get(1);
+        assertEquals("<think>Нужен модуль.</think>\n\nСмотрю.", Json.stringAt(assistant, "content"));
+    }
+
+    /** Без рассуждения в ответе — запрос прежний: лишних полей нет. */
+    @Test
+    void openAiSendsNoReasoningFieldsWithoutReasoning() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (!request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of(toolCalls("{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_module\","
+                        + "\"arguments\":\"{}\"}}"), "data: [DONE]\n\n"), 0);
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        assertEquals("Готово.", run(Protocol.OPENAI_COMPATIBLE));
+
+        String second = server.requests().get(1).body();
+        assertFalse(second.contains("reasoning"), second);
+        assertFalse(second.contains("<think>"), second);
+    }
+
     @Test
     void anthropicCallsToolAndSendsResultBack() throws Exception {
         server = FakeModelServer.http().handler((request, response) -> {
