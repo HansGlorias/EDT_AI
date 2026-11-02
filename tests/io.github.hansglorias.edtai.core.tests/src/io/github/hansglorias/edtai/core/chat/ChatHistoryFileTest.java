@@ -38,6 +38,52 @@ class ChatHistoryFileTest {
     }
 
     @Test
+    void invalidSourcesRemainUnknownAndInvalidNumbersDoNotLoseHistory() throws Exception {
+        ChatHistoryFile history = new ChatHistoryFile(temp.resolve("damaged-usage.json"));
+        List<ChatMessage> messages = List.of(new ChatMessage(ChatRole.ASSISTANT, "ответ", Instant.now(),
+                Status.DONE, List.of(), List.of(new ToolUse("id", "read", "read", "код", ToolUse.Status.DONE)
+                        .withUsage(TokenUsage.step(10, 2, false)))));
+        history.save(messages);
+        String original = Files.readString(history.path());
+        for (String source : List.of("\"FUTURE\"", "null", "42")) {
+            Files.writeString(history.path(), original.replace("\"inputSource\":\"SERVER\"", "\"inputSource\":" + source));
+            TokenUsage loaded = history.load().get(0).tools().get(0).usage();
+            assertEquals(TokenUsage.Source.UNKNOWN, loaded.inputSource());
+            assertEquals(TokenUsage.Source.SERVER, loaded.outputSource());
+            history.save(history.load());
+            assertEquals(TokenUsage.Source.UNKNOWN, history.load().get(0).tools().get(0).usage().inputSource());
+        }
+        Files.writeString(history.path(), original.replace("\"inputSource\":\"SERVER\",", ""));
+        assertEquals(TokenUsage.Source.UNKNOWN, history.load().get(0).tools().get(0).usage().inputSource());
+        for (String damaged : List.of("-1", "null", "\"10\"", "1.5", "1e100")) {
+            for (String field : List.of("\"input\":10", "\"output\":2", "\"context\":12")) {
+                Files.writeString(history.path(), original.replace(field, field.substring(0, field.indexOf(':') + 1) + damaged));
+                ChatMessage loaded = history.load().get(0);
+                assertEquals("ответ", loaded.text());
+                assertEquals("код", loaded.tools().get(0).outcome());
+                assertEquals(null, loaded.tools().get(0).usage());
+            }
+        }
+    }
+
+    @Test
+    void preservesPartialUsageAndReadsOldUsage() throws Exception {
+        ChatHistoryFile history = new ChatHistoryFile(temp.resolve("usage.json"));
+        TokenUsage partial = TokenUsage.serverStep(0, -1);
+        List<ChatMessage> messages = List.of(new ChatMessage(ChatRole.ASSISTANT, "ok", Instant.now(),
+                Status.DONE, List.of(), List.of(new ToolUse("id", "read", "read", "ok", ToolUse.Status.DONE).withUsage(partial))));
+        history.save(messages);
+        assertEquals(messages, history.load());
+        String json = Files.readString(history.path());
+        json = json.replace(",\"context\":0,\"inputSource\":\"SERVER\",\"outputSource\":\"UNKNOWN\",\"contextSource\":\"UNKNOWN\"", "");
+        assertFalse(json.contains("inputSource"));
+        Files.writeString(history.path(), json);
+        assertEquals(TokenUsage.step(0, 0, true), history.load().get(0).tools().get(0).usage());
+        history.save(history.load());
+        assertEquals(TokenUsage.step(0, 0, true), history.load().get(0).tools().get(0).usage());
+    }
+
+    @Test
     void savesAndLoads() throws Exception {
         List<ChatMessage> messages = List.of(
                 new ChatMessage(ChatRole.USER, "вопрос \"в кавычках\"\nи вторая строка", Instant.parse("2026-10-28T09:00:00Z"), Status.DONE),

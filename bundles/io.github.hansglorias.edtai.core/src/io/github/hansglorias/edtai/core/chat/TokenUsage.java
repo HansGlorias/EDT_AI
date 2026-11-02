@@ -2,43 +2,76 @@ package io.github.hansglorias.edtai.core.chat;
 
 import java.util.Locale;
 
-/**
- * Токены ответа: сколько ушло модели и сколько она написала за все шаги
- * ответа (с вызовами инструментов модель получает диалог на каждом шаге
- * заново), и сколько окна модели занято после последнего шага.
- *
- * @param input     токены запросов, сумма по шагам
- * @param output    токены ответа модели, сумма по шагам
- * @param context   занято окна после последнего шага: его запрос и ответ
- * @param estimated сервер не прислал usage — посчитано по длине текста
- */
-public record TokenUsage(long input, long output, long context, boolean estimated) {
+/** Токены шагов ответа и занятое окно последнего физического запроса. */
+public record TokenUsage(long input, long output, long context,
+        Source inputSource, Source outputSource, Source contextSource) {
 
-    /** Шаг ответа: запрос {@code input} токенов, ответ {@code output}. */
+    public TokenUsage {
+        if (input < 0 || output < 0 || context < 0) throw new IllegalArgumentException("Отрицательное число токенов");
+        java.util.Objects.requireNonNull(inputSource);
+        java.util.Objects.requireNonNull(outputSource);
+        java.util.Objects.requireNonNull(contextSource);
+    }
+
+    /** Происхождение поля; MIXED — сумма известных серверных чисел и оценок. */
+    public enum Source { SERVER, ESTIMATE, UNKNOWN, MIXED }
+
+    /** Совместимость с историей и существующими вызывающими сторонами. */
+    public TokenUsage(long input, long output, long context, boolean estimated) {
+        this(input, output, context, estimated ? Source.ESTIMATE : Source.SERVER,
+                estimated ? Source.ESTIMATE : Source.SERVER, estimated ? Source.ESTIMATE : Source.SERVER);
+    }
+
+    public boolean estimated() {
+        return inputSource != Source.SERVER || outputSource != Source.SERVER || contextSource != Source.SERVER;
+    }
+
     public static TokenUsage step(long input, long output, boolean estimated) {
         return new TokenUsage(input, output, input + output, estimated);
     }
 
-    /** Этот ответ и ещё один шаг. */
+    /** Отрицательное число означает, что сервер не передал соответствующее поле. */
+    public static TokenUsage serverStep(long input, long output) {
+        return step(Math.max(0, input), Math.max(0, output),
+                input < 0 ? Source.UNKNOWN : Source.SERVER, output < 0 ? Source.UNKNOWN : Source.SERVER);
+    }
+
+    public static TokenUsage step(long input, long output, Source inputSource, Source outputSource) {
+        return new TokenUsage(input, output, input + output, inputSource, outputSource, combine(inputSource, outputSource));
+    }
+
+    private static Source combine(Source first, Source second) {
+        if (first == Source.UNKNOWN || second == Source.UNKNOWN) return Source.UNKNOWN;
+        return first == second ? first : Source.MIXED;
+    }
+
+    /** Заполнить только неизвестные поля явно обозначенной оценкой. */
+    public TokenUsage fillMissing(TokenUsage estimate) {
+        long in = inputSource == Source.UNKNOWN ? estimate.input : input;
+        long out = outputSource == Source.UNKNOWN ? estimate.output : output;
+        Source inSource = inputSource == Source.UNKNOWN ? estimate.inputSource : inputSource;
+        Source outSource = outputSource == Source.UNKNOWN ? estimate.outputSource : outputSource;
+        if (contextSource != Source.UNKNOWN) return new TokenUsage(in, out, context, inSource, outSource, contextSource);
+        return step(in, out, inSource, outSource);
+    }
+
+    /** Сумма расхода шагов; окно и его источник относятся только к последнему шагу. */
     public TokenUsage plus(TokenUsage step) {
-        return new TokenUsage(input + step.input, output + step.output, step.context, estimated || step.estimated);
+        return new TokenUsage(input + step.input, output + step.output, step.context,
+                combine(inputSource, step.inputSource), combine(outputSource, step.outputSource), step.contextSource);
     }
 
-    /**
-     * Для строки состояния: «контекст 45k из 200k · ответ ↑120k ↓2,1k».
-     *
-     * @param window окно модели в токенах; 0 — не показывать
-     */
+    private static String describe(long value, Source source) {
+        return source == Source.UNKNOWN ? "неизвестно" : (source == Source.SERVER ? "" : "≈") + format(value);
+    }
+
     public String describe(long window) {
-        String approx = estimated ? "≈" : "";
-        String fill = "контекст " + approx + format(context) + (window > 0 ? " из " + format(window) : "");
-        return fill + " · ответ ↑" + approx + format(input) + " ↓" + approx + format(output);
+        return "контекст " + describe(context, contextSource) + (window > 0 ? " из " + format(window) : "")
+                + " · ответ ↑" + describe(input, inputSource) + " ↓" + describe(output, outputSource);
     }
 
-    /** Шаг коротко, для строки вызова инструмента: «↑12k ↓310», по оценке — «↑≈12k ↓≈310». */
     public String describeStep() {
-        String approx = estimated ? "≈" : "";
-        return "↑" + approx + format(input) + " ↓" + approx + format(output);
+        return "↑" + describe(input, inputSource) + " ↓" + describe(output, outputSource);
     }
 
     /** Занятое окно по оценке, когда ответа в этом чате ещё не было. */

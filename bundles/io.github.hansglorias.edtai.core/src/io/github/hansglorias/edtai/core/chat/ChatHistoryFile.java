@@ -96,7 +96,9 @@ public final class ChatHistoryFile {
                     }
                     if (use.usage() != null) {
                         saved.put("tokens", Json.object("input", use.usage().input(), "output", use.usage().output(),
-                                "estimated", use.usage().estimated()));
+                                "estimated", use.usage().estimated(), "context", use.usage().context(),
+                                "inputSource", use.usage().inputSource().name(), "outputSource", use.usage().outputSource().name(),
+                                "contextSource", use.usage().contextSource().name()));
                     }
                     tools.add(saved);
                 }
@@ -173,12 +175,41 @@ public final class ChatHistoryFile {
         return null;
     }
 
-    /** Токены шага у вызова; старые диалоги — без них. */
+    /** Повреждённые метрики не мешают загрузить сам диалог и результаты инструментов. */
     private static TokenUsage tokens(Object use) {
-        if (Json.at(use, "tokens", "input") instanceof Number input && Json.at(use, "tokens", "output") instanceof Number output) {
-            return TokenUsage.step(input.longValue(), output.longValue(), Boolean.TRUE.equals(Json.at(use, "tokens", "estimated")));
+        java.util.Map<String, Object> saved = Json.asObject(Json.at(use, "tokens"));
+        if (saved == null) return null;
+        try {
+            long input = tokenNumber(saved.get("input"));
+            long output = tokenNumber(saved.get("output"));
+            TokenUsage legacy = TokenUsage.step(input, output, Boolean.TRUE.equals(saved.get("estimated")));
+            boolean sources = saved.containsKey("inputSource") || saved.containsKey("outputSource") || saved.containsKey("contextSource");
+            return new TokenUsage(input, output,
+                    saved.containsKey("context") ? tokenNumber(saved.get("context")) : legacy.context(),
+                    source(saved, "inputSource", sources ? TokenUsage.Source.UNKNOWN : legacy.inputSource()),
+                    source(saved, "outputSource", sources ? TokenUsage.Source.UNKNOWN : legacy.outputSource()),
+                    source(saved, "contextSource", sources ? TokenUsage.Source.UNKNOWN : legacy.contextSource()));
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            return null;
         }
-        return null;
+    }
+
+    private static long tokenNumber(Object value) {
+        long number;
+        if (value instanceof Long integer) number = integer;
+        else if (value instanceof java.math.BigDecimal decimal) number = decimal.longValueExact();
+        else throw new IllegalArgumentException("Не число токенов");
+        if (number < 0) throw new IllegalArgumentException("Отрицательное число токенов");
+        return number;
+    }
+
+    private static TokenUsage.Source source(java.util.Map<String, Object> saved, String field, TokenUsage.Source fallback) {
+        if (!saved.containsKey(field)) return fallback;
+        Object value = saved.get(field);
+        for (TokenUsage.Source source : TokenUsage.Source.values()) {
+            if (source.name().equals(value)) return source;
+        }
+        return TokenUsage.Source.UNKNOWN;
     }
 
     private static List<Attachment> attachments(Object message) throws IOException {

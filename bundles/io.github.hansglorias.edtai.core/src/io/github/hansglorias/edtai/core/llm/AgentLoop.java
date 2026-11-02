@@ -204,8 +204,8 @@ final class AgentLoop {
             try {
                 Prepared request = prepare();
                 ModelReply reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
-                TokenUsage step = reply.usage() != null ? reply.usage()
-                        : estimate(RequestBudget.size(connection(), request.history(), request.extra(), tools), reply);
+                TokenUsage estimate = estimate(RequestBudget.size(connection(), request.history(), request.extra(), tools), reply);
+                TokenUsage step = reply.usage() == null ? estimate : reply.usage().fillMissing(estimate);
                 lastStep = step;
                 usage = usage == null ? step : usage.plus(step);
                 onUsage.accept(usage);
