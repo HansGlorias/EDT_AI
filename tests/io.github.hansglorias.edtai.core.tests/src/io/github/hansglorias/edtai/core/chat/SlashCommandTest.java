@@ -75,6 +75,7 @@ class SlashCommandTest {
         Instant start = Instant.parse("2026-10-28T10:00:00Z");
         ReplyActivity activity = new ReplyActivity(ReplyActivity.Phase.THINKING, "", start);
         assertEquals("ожидает модель… 5 с", activity.describe(start.plusSeconds(5)));
+        assertEquals("рассуждает… 12 с", activity.next(ReplyActivity.Phase.REASONING, "").describe(start.plusSeconds(12)));
         assertEquals("пишет ответ… 1 мин 5 с", activity.next(ReplyActivity.Phase.WRITING, "").describe(start.plusSeconds(65)));
         assertEquals("Читает модуль Общий… 0 с", activity.next(ReplyActivity.Phase.TOOL, "Читает модуль Общий").describe(start));
     }

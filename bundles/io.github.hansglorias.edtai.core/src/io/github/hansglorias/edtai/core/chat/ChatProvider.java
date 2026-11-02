@@ -40,6 +40,15 @@ public interface ChatProvider {
         return reply(history, onText, onTool);
     }
 
+    /**
+     * То же, и провайдер сообщает в {@code onReasoning}, что модель прислала часть
+     * рассуждения (сам текст не передаётся). Может вызываться часто, из любого потока.
+     */
+    default CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
+            Consumer<TokenUsage> onUsage, Runnable onReasoning) {
+        return reply(history, onText, onTool, onUsage);
+    }
+
     /** Окно модели в токенах; 0 — неизвестно. */
     default long window() {
         return 0;

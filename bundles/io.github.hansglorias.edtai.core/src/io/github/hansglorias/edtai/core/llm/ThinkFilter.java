@@ -64,6 +64,15 @@ final class ThinkFilter {
         return rest.toString();
     }
 
+    /** Сейчас внутри {@code <think>}: последняя часть потока — рассуждение. */
+    boolean inside() {
+        return thinking;
+    }
+
+    int thoughtLength() {
+        return thought.length();
+    }
+
     /** Рассуждение из тегов {@code <think>}, накопленное к этому моменту. */
     String thought() {
         return thought.toString();

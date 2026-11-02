@@ -17,6 +17,8 @@ public record ReplyActivity(Phase phase, String detail, Instant started) {
         PREPARING,
         /** Провайдер готовит или выполняет запрос; видимого текста пока нет. */
         THINKING,
+        /** Модель прислала рассуждение, текста ответа пока нет. */
+        REASONING,
         /** Модель пишет текст ответа. */
         WRITING,
         /** Выполняется инструмент или ждёт подтверждения. */
@@ -32,6 +34,7 @@ public record ReplyActivity(Phase phase, String detail, Instant started) {
         String what = switch (phase) {
             case PREPARING -> "готовит запрос";
             case THINKING -> "ожидает модель";
+            case REASONING -> "рассуждает";
             case WRITING -> "пишет ответ";
             case TOOL -> detail == null || detail.isBlank() ? "вызывает инструмент" : detail;
         };

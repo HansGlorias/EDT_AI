@@ -119,13 +119,19 @@ public final class ModelClient {
     }
 
     CompletableFuture<ModelReply> request(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText) {
+        return request(connection, prepared, onText, () -> { });
+    }
+
+    /** @param onReasoning модель прислала часть рассуждения; из фонового потока */
+    CompletableFuture<ModelReply> request(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText,
+            Runnable onReasoning) {
         try {
             RequestBudget.requireFits(connection, prepared);
         } catch (ModelException e) {
             return CompletableFuture.failedFuture(e);
         }
         CompletableFuture<ModelReply> result = new CompletableFuture<>();
-        Exchange exchange = new Exchange(connection, prepared, onText, result);
+        Exchange exchange = new Exchange(connection, prepared, onText, onReasoning, result);
         Thread thread = new Thread(exchange::run, "EDT AI: запрос к модели");
         thread.setDaemon(true);
         exchange.thread = thread;
@@ -260,6 +266,7 @@ public final class ModelClient {
         private final ModelConnection connection;
         private final PreparedRequest prepared;
         private final Consumer<String> onText;
+        private final Runnable onReasoning;
         private final CompletableFuture<ModelReply> result;
         private final ProtocolAdapter adapter;
 
@@ -269,11 +276,12 @@ public final class ModelClient {
         private volatile boolean idleExpired;
         private volatile long lastActivity;
 
-        Exchange(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText,
+        Exchange(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText, Runnable onReasoning,
                 CompletableFuture<ModelReply> result) {
             this.connection = connection;
             this.prepared = prepared;
             this.onText = onText;
+            this.onReasoning = onReasoning;
             this.result = result;
             this.adapter = ProtocolAdapter.of(connection.protocol());
         }
@@ -341,6 +349,10 @@ public final class ModelClient {
             StreamState state = new StreamState(part -> {
                 if (!result.isDone()) {
                     onText.accept(part);
+                }
+            }, () -> {
+                if (!result.isDone()) {
+                    onReasoning.run();
                 }
             });
             SseParser parser = new SseParser();

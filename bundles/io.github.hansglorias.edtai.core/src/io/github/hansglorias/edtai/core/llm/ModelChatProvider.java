@@ -110,6 +110,12 @@ public final class ModelChatProvider implements ChatProvider {
     @Override
     public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
             Consumer<TokenUsage> onUsage) {
+        return reply(history, onText, onTool, onUsage, () -> { });
+    }
+
+    @Override
+    public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
+            Consumer<TokenUsage> onUsage, Runnable onReasoning) {
         ModelConnection connection;
         try {
             connection = source.get();
@@ -140,7 +146,7 @@ public final class ModelChatProvider implements ChatProvider {
             if (fitted.trimmed()) {
                 onTool.accept(fitted.notice());
             }
-            CompletableFuture<ModelReply> request = client.request(plain, prepared, onText);
+            CompletableFuture<ModelReply> request = client.request(plain, prepared, onText, onReasoning);
             CompletableFuture<String> text = request.thenApply(reply -> {
                 TokenUsage estimate = AgentLoop.estimate(prepared.estimatedInputChars(), reply);
                 onUsage.accept(reply.usage() == null ? estimate : reply.usage().fillMissing(estimate));
@@ -154,6 +160,7 @@ public final class ModelChatProvider implements ChatProvider {
             return text;
         }
         AgentLoop loop = new AgentLoop(client, connection, history, tools, approver, onText, onTool, onUsage);
+        loop.onReasoning(onReasoning);
         CompletableFuture<String> reply = loop.start();
         reply.whenComplete((answer, error) -> {
             if (loop.toolsRejected()) {
