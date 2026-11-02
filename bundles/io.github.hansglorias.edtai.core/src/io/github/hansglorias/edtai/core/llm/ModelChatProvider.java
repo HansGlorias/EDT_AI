@@ -125,15 +125,22 @@ public final class ModelChatProvider implements ChatProvider {
                 onTool.accept(new ToolUse("tools", "tools", "Инструменты", WITHOUT_TOOLS, ToolUse.Status.FAILED));
             }
             ModelConnection plain = connection;
-            RequestBudget.Fitted fitted = RequestBudget.fit(history,
-                    part -> RequestBudget.size(plain, part, List.of(), List.of()), RequestBudget.chars(plain));
+            RequestBudget.Fitted fitted;
+            PreparedRequest prepared;
+            try {
+                fitted = RequestBudget.fit(history,
+                        part -> RequestBudget.size(plain, part, List.of(), List.of()), RequestBudget.chars(plain));
+                prepared = PreparedRequest.prepare(plain, fitted.history(), List.of(), List.of());
+            } catch (RuntimeException e) {
+                return CompletableFuture.failedFuture(ModelClient.preparationError(plain, e));
+            }
             if (fitted.trimmed()) {
                 onTool.accept(fitted.notice());
             }
-            CompletableFuture<ModelReply> request = client.request(plain, fitted.history(), List.of(), List.of(), onText);
+            CompletableFuture<ModelReply> request = client.request(plain, prepared, onText);
             CompletableFuture<String> text = request.thenApply(reply -> {
-                onUsage.accept(reply.usage() != null ? reply.usage()
-                        : AgentLoop.estimate(RequestBudget.size(plain, fitted.history(), List.of(), List.of()), reply));
+                TokenUsage estimate = AgentLoop.estimate(prepared.estimatedInputChars(), reply);
+                onUsage.accept(reply.usage() == null ? estimate : reply.usage().fillMissing(estimate));
                 return ChatMessage.stripTrace(reply.text());
             });
             text.whenComplete((answer, error) -> {

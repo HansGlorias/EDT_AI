@@ -104,8 +104,20 @@ public final class ModelClient {
      */
     CompletableFuture<ModelReply> request(ModelConnection connection, List<ChatMessage> history, List<Object> extra,
             List<Tool> tools, Consumer<String> onText) {
+        try {
+            return request(connection, PreparedRequest.prepare(connection, history, extra, tools), onText);
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(preparationError(connection, e));
+        }
+    }
+
+    static ModelException preparationError(ModelConnection connection, Throwable error) {
+        return new ModelException(ModelErrors.redact("Ошибка подготовки запроса к модели: " + error.getMessage(), connection.token()));
+    }
+
+    CompletableFuture<ModelReply> request(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText) {
         CompletableFuture<ModelReply> result = new CompletableFuture<>();
-        Exchange exchange = new Exchange(connection, history, extra, tools, onText, result);
+        Exchange exchange = new Exchange(connection, prepared, onText, result);
         Thread thread = new Thread(exchange::run, "EDT AI: запрос к модели");
         thread.setDaemon(true);
         exchange.thread = thread;
@@ -238,9 +250,7 @@ public final class ModelClient {
     private final class Exchange {
 
         private final ModelConnection connection;
-        private final List<ChatMessage> history;
-        private final List<Object> extra;
-        private final List<Tool> tools;
+        private final PreparedRequest prepared;
         private final Consumer<String> onText;
         private final CompletableFuture<ModelReply> result;
         private final ProtocolAdapter adapter;
@@ -251,12 +261,10 @@ public final class ModelClient {
         private volatile boolean idleExpired;
         private volatile long lastActivity;
 
-        Exchange(ModelConnection connection, List<ChatMessage> history, List<Object> extra, List<Tool> tools, Consumer<String> onText,
+        Exchange(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText,
                 CompletableFuture<ModelReply> result) {
             this.connection = connection;
-            this.history = history;
-            this.extra = extra;
-            this.tools = tools;
+            this.prepared = prepared;
             this.onText = onText;
             this.result = result;
             this.adapter = ProtocolAdapter.of(connection.protocol());
@@ -275,7 +283,7 @@ public final class ModelClient {
                         .header("Content-Type", "application/json")
                         .header("Accept", "text/event-stream, application/json")
                         .header("User-Agent", USER_AGENT)
-                        .POST(HttpRequest.BodyPublishers.ofString(Json.write(adapter.body(connection, history, extra, tools)), StandardCharsets.UTF_8));
+                        .POST(HttpRequest.BodyPublishers.ofString(prepared.body(), StandardCharsets.UTF_8));
                 for (Map.Entry<String, String> header : adapter.headers(connection).entrySet()) {
                     request.header(header.getKey(), header.getValue());
                 }
