@@ -93,6 +93,11 @@ Eclipse 2023-12 и зависимости, поэтому требует дос�
 
 ## Update-site zip из CI
 
+Для пробы до merge можно установить артефакт успешного PR-прогона или
+запуска выбранной ветки через `workflow_dispatch`: см.
+[инструкцию пробных сборок](install-pr-build.md). `Pages: skipped` у этих
+запусков ожидаем; создание `edtai-update-site` от публикации Pages не зависит.
+
 После merge не пересобирай локально только ради zip:
 
 1. Открой [Actions → build](https://github.com/HansGlorias/EDT_AI/actions/workflows/build.yml).
