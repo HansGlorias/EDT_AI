@@ -312,6 +312,9 @@ class DiagnosticLogTest {
 
     @Test
     void malformedExistingStorageIsUnavailableWithoutDeletingIt() throws Exception {
+        try (DiagnosticLog log = DiagnosticLog.open(temp.toAbsolutePath().getRoot())) {
+            assertEquals(State.UNAVAILABLE, log.state());
+        }
         Path directory = temp.resolve("directory.jsonl");
         Files.createDirectory(directory);
         try (DiagnosticLog log = DiagnosticLog.open(directory)) {

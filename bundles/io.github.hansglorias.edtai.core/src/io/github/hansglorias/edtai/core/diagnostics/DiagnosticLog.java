@@ -62,6 +62,9 @@ public final class DiagnosticLog implements AutoCloseable {
         this.maxFiles = maxFiles;
         state = State.AVAILABLE;
         try {
+            if (this.file.getFileName() == null) {
+                throw new IOException("Журнал недоступен");
+            }
             Files.createDirectories(this.file.getParent());
             // Чужой тип файла или нарушенный прежними запусками лимит — не удалять молча.
             for (int i = 0; i < maxFiles; i++) {
