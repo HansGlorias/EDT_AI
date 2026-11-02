@@ -75,7 +75,7 @@ final class AgentLoop {
     private ToolUse trimmed;
 
     /** История и шаги, которые помещаются в окно модели. */
-    private record Prepared(List<ChatMessage> history, List<Object> extra) {
+    private record FittedRequest(List<ChatMessage> history, List<Object> extra) {
     }
     /** Сколько раз сервер ответил «не помещается»: бюджет делится на 2 в этой степени. */
     private int shrink;
@@ -171,7 +171,7 @@ final class AgentLoop {
      * Запрос под окно модели: сначала вместо результатов старых шагов —
      * пометка {@link #OMITTED}, потом обрезается история.
      */
-    private Prepared prepare() {
+    private FittedRequest prepare() {
         int budget = RequestBudget.chars(connection()) >> shrink;
         int omitted = 0;
         List<Object> extra = transcript.project(adapter, omitted);
@@ -186,7 +186,7 @@ final class AgentLoop {
             trimmed = fitted.notice();
             onTool.accept(trimmed);
         }
-        return new Prepared(fitted.history(), extra);
+        return new FittedRequest(fitted.history(), extra);
     }
 
     /**
@@ -202,9 +202,11 @@ final class AgentLoop {
         while (true) {
             checkCancelled();
             try {
-                Prepared request = prepare();
-                ModelReply reply = await(client.request(connection(), request.history(), request.extra(), tools, this::text));
-                TokenUsage estimate = estimate(RequestBudget.size(connection(), request.history(), request.extra(), tools), reply);
+                FittedRequest fitted = prepare();
+                ModelConnection connection = connection();
+                PreparedRequest request = PreparedRequest.prepare(connection, fitted.history(), fitted.extra(), tools);
+                ModelReply reply = await(client.request(connection, request, this::text));
+                TokenUsage estimate = estimate(request.estimatedInputChars(), reply);
                 TokenUsage step = reply.usage() == null ? estimate : reply.usage().fillMissing(estimate);
                 lastStep = step;
                 usage = usage == null ? step : usage.plus(step);

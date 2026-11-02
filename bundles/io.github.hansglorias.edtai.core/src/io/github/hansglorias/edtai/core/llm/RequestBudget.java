@@ -4,11 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ToIntFunction;
 
-import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
-import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.tools.Tool;
 
 /**
@@ -34,16 +32,9 @@ final class RequestBudget {
         return Math.max(window / 4, window - reserve) * CHARS_PER_TOKEN;
     }
 
-    /** Размер тела запроса в символах. */
+    /** Оценочный размер входа в условных символах; картинки учитываются эвристикой. */
     static int size(ModelConnection connection, List<ChatMessage> history, List<Object> extra, List<Tool> tools) {
-        int size = Json.write(ProtocolAdapter.of(connection.protocol()).body(connection, history, extra, tools)).length();
-        // Картинка стоит не по длине base64, а по числу пикселей: скриншот — порядка 1,5 тыс. токенов.
-        for (ChatMessage message : history) {
-            for (Attachment image : message.images()) {
-                size += IMAGE_CHARS - image.data().length();
-            }
-        }
-        return size;
+        return PreparedRequest.prepare(connection, history, extra, tools).estimatedInputChars();
     }
 
     /** Сколько символов считать за картинку. */
