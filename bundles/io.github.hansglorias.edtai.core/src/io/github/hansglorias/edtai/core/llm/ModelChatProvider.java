@@ -161,6 +161,7 @@ public final class ModelChatProvider implements ChatProvider {
             if (fitted.trimmed()) {
                 onTool.accept(fitted.notice());
             }
+            onUsage.accept(TokenUsage.sending(null, prepared.estimatedInputTokens()));
             CompletableFuture<ModelReply> request = client.request(plain, prepared, onText, onReasoning);
             CompletableFuture<String> text = request.thenApply(reply -> {
                 TokenUsage estimate = AgentLoop.estimate(prepared.estimatedInputChars(), reply);

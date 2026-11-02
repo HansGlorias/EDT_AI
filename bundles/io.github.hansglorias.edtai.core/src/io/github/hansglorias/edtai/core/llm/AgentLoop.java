@@ -228,6 +228,7 @@ final class AgentLoop {
                 ModelConnection connection = connection();
                 PreparedRequest request = PreparedRequest.prepare(connection, fitted.history(), fitted.extra(), tools);
                 RequestBudget.requireFits(connection, request, RequestBudget.chars(connection) >> shrink);
+                onUsage.accept(TokenUsage.sending(usage, request.estimatedInputTokens()));
                 ModelReply reply = await(client.request(connection, request, this::text, onReasoning));
                 TokenUsage estimate = estimate(request.estimatedInputChars(), reply);
                 TokenUsage step = reply.usage() == null ? estimate : reply.usage().fillMissing(estimate);

@@ -95,6 +95,7 @@ class ChatSessionTest {
         ManualProvider provider = new ManualProvider();
         ChatSession session = new ChatSession(provider);
         assertNull(session.activity());
+        assertEquals(-1, session.liveContext(), "запросов ещё не было");
 
         CompletableFuture<ChatMessage> reply = session.send("вопрос");
         assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase());
@@ -113,7 +114,12 @@ class ChatSessionTest {
         assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase());
         provider.onReasoning.run();
         assertEquals(ReplyActivity.Phase.REASONING, session.activity().phase(), "после инструмента модель снова рассуждает");
+        provider.onUsage.accept(TokenUsage.sending(null, 90));
+        assertEquals(90, session.liveContext(), "перед запросом — оценка его размера");
+        provider.part("ааа".repeat(10));
+        assertEquals(100, session.liveContext(), "по ходу ответа растёт на пришедший текст");
         provider.onUsage.accept(new TokenUsage(100, 5, 105, false));
+        assertEquals(105, session.liveContext(), "после шага — по данным сервера");
         provider.complete("Смотрю.");
         reply.get(TIMEOUT, TimeUnit.SECONDS);
 

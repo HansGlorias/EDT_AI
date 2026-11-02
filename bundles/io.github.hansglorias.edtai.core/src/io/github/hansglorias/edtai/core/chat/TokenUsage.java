@@ -55,6 +55,18 @@ public record TokenUsage(long input, long output, long context,
         return step(in, out, inSource, outSource);
     }
 
+    /**
+     * Окно запроса, который только отправлен: расход прежних шагов тот же, занятое окно — оценка
+     * размера запроса. Так индикатор окна растёт по ходу ответа, а не только после шага.
+     *
+     * @param before расход ответа до этого запроса; {@code null} — это первый запрос
+     */
+    public static TokenUsage sending(TokenUsage before, long requestTokens) {
+        long context = Math.max(0, requestTokens);
+        return before == null ? new TokenUsage(0, 0, context, Source.UNKNOWN, Source.UNKNOWN, Source.ESTIMATE)
+                : new TokenUsage(before.input, before.output, context, before.inputSource, before.outputSource, Source.ESTIMATE);
+    }
+
     /** Сумма расхода шагов; окно и его источник относятся только к последнему шагу. */
     public TokenUsage plus(TokenUsage step) {
         return new TokenUsage(input + step.input, output + step.output, step.context,
