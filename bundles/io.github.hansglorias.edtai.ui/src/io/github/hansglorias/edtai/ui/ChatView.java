@@ -141,6 +141,7 @@ import io.github.hansglorias.edtai.core.llm.ModelChatProvider;
 import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
+import io.github.hansglorias.edtai.core.settings.AgentModeStore;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.settings.ModelChoices;
@@ -219,10 +220,10 @@ public class ChatView extends ViewPart {
     /** Как часто обновлять секунды в строке состояния, пока идёт ответ. */
     private static final int TICK_MS = 1000;
     /** Режим модели ({@link AgentMode}), во всех чатах. Хранится в настройках рабочей области. */
-    static final String AGENT_MODE = "agentMode";
+    static final String AGENT_MODE = AgentModeStore.KEY;
     /** Прежние флажки: из них режим берётся, пока {@link #AGENT_MODE} не сохранён. */
-    static final String AUTO_APPROVE = "autoApproveTools";
-    static final String READ_ONLY = "readOnlyMode";
+    static final String AUTO_APPROVE = AgentModeStore.LEGACY_AUTO;
+    static final String READ_ONLY = AgentModeStore.LEGACY_READ_ONLY;
 
     /** Подключения к MCP-серверам из настроек. */
     private final McpHub mcp = new McpHub();
@@ -1947,8 +1948,7 @@ public class ChatView extends ViewPart {
 
     /** Режим модели: из настроек, у старых рабочих областей — из прежних флажков. */
     static AgentMode agentMode() {
-        return AgentMode.parse(preferences().get(AGENT_MODE, ""), preferences().getBoolean(AUTO_APPROVE, false),
-                preferences().getBoolean(READ_ONLY, false));
+        return AgentModeStore.workspace().load();
     }
 
     private static boolean isAutoApprove() {
@@ -1956,9 +1956,20 @@ public class ChatView extends ViewPart {
     }
 
     void setAgentMode(AgentMode value) {
-        preferences().put(AGENT_MODE, value.name());
+        CompletableFuture<Void> saved = AgentModeStore.workspace().select(value);
         updateModeButton();
         showNotice("Режим «" + value.label() + "»: " + lowerFirst(value.description()));
+        saved.whenComplete((unused, error) -> {
+            if (error != null) {
+                Platform.getLog(getClass()).error("Не удалось сохранить режим модели", error);
+                inUi(() -> {
+                    if (AgentModeStore.workspace().pendingSave() == saved) {
+                        showNotice("Режим «" + value.label() + "» включён в этом сеансе, но не удалось сохранить его"
+                                + " для следующего запуска. Подробности — в журнале ошибок Eclipse.");
+                    }
+                });
+            }
+        });
     }
 
     /** «Авто» включить или выключить (кнопка «Всегда» в вопросе, тесты). */
