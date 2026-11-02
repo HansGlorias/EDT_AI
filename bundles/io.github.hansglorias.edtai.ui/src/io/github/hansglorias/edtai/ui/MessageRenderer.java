@@ -109,7 +109,7 @@ final class MessageRenderer {
 
         void retry();
 
-        void edit(int index);
+        Runnable editAction(int index, ChatMessage message);
 
         void open(String url);
 
@@ -261,7 +261,7 @@ final class MessageRenderer {
 
     /**
      * Строка под сообщением: у ответа — значки действий, ссылки на правки и
-     * время; у вопроса — время и значок «Изменить» (строка прижата вправо,
+     * время; у вопроса — время, «Копировать» и «Изменить» (строка прижата вправо,
      * под пузырь). Без перевода строки в конце.
      */
     private void footer(ChatMessage message, int index, Set<Action> actions, int offset, StringBuilder text, List<StyleRange> styles) {
@@ -283,7 +283,7 @@ final class MessageRenderer {
             Runnable run = switch (action) {
                 case COPY -> () -> callbacks.copy(message.text());
                 case RETRY -> callbacks::retry;
-                case EDIT -> () -> callbacks.edit(index);
+                case EDIT -> callbacks.editAction(index, message);
                 case CHANGES -> () -> callbacks.showChanges(message);
                 case REVERT -> () -> callbacks.revertChanges(message);
             };

@@ -385,6 +385,115 @@ class ChatSessionTest {
     }
 
     @Test
+    void editAndSendReplacesBranchBeforeNotifyingListenersAndRequestingAnswer() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        ChatMessage first = ChatMessage.of(ChatRole.USER, "первый вопрос");
+        ChatMessage firstAnswer = ChatMessage.of(ChatRole.ASSISTANT, "первый ответ");
+        Attachment originalFile = new Attachment("исходный.txt", "text/plain", "исходный файл");
+        ChatMessage original = ChatMessage.of(ChatRole.USER, "второй вопрос").withAttachments(List.of(originalFile));
+        ChatMessage oldAnswer = ChatMessage.of(ChatRole.ASSISTANT, "прежний ответ").withTools(List.of(
+                new ToolUse("1", "read_module", "Читает модуль", "прочитано", ToolUse.Status.DONE)));
+        List<ChatMessage> before = List.of(first, firstAnswer, original, oldAnswer,
+                ChatMessage.of(ChatRole.USER, "третий вопрос"));
+        session.restore(before);
+        List<List<ChatMessage>> observed = new ArrayList<>();
+        session.addListener(new ChatListener() {
+            @Override
+            public void historyChanged() {
+                observed.add(session.messages());
+            }
+
+            @Override
+            public void busyChanged(boolean busy) {
+                observed.add(session.messages());
+            }
+        });
+        List<String> events = record(session);
+        List<ContextItem> context = List.of(ContextItem.of("Демо", "src/CommonModules/Цены/Module.bsl",
+                3, 4, 10, "первая строка\nвторая строка"));
+        Attachment newFile = new Attachment("новый.txt", "text/plain", "новый файл");
+
+        assertEquals(before, session.messages(), "до подтверждения вся ветвь и вложения остаются на месте");
+        CompletableFuture<ChatMessage> reply = session.editAndSend(2, original, "  исправленный вопрос  ", context,
+                List.of(newFile));
+
+        List<ChatMessage> replaced = session.messages();
+        List<ChatMessage> branch = replaced.subList(0, 3);
+        assertEquals(List.of("USER:первый вопрос", "ASSISTANT:первый ответ", "USER:исправленный вопрос", "ASSISTANT:"), texts(replaced));
+        assertEquals(Status.STREAMING, replaced.get(3).status());
+        assertEquals(context, replaced.get(2).context());
+        assertEquals(List.of(newFile), replaced.get(2).attachments());
+        assertEquals(List.of(branch, replaced), observed, "слушатели видят целую заменённую ветвь, затем её ожидающий ответ");
+        assertEquals(List.of("history", "added:ASSISTANT/STREAMING:", "busy:true"), events);
+        assertEquals(branch, provider.history, "новый запрос получает только подтверждённую ветвь без ожидающего ответа");
+        assertEquals(List.of(originalFile), original.attachments(), "снимок исходного сообщения неизменен");
+        assertEquals(1, oldAnswer.tools().size());
+        provider.complete("новый ответ");
+        assertEquals("новый ответ", reply.get(TIMEOUT, TimeUnit.SECONDS).text());
+        assertEquals(List.of("USER:первый вопрос", "ASSISTANT:первый ответ", "USER:исправленный вопрос",
+                "ASSISTANT:новый ответ"), texts(session.messages()));
+    }
+
+    @Test
+    void invalidEditAndSendKeepsWholeHistoryAndAttachments() {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        Attachment file = new Attachment("контекст.txt", "text/plain", "не потерять");
+        ChatMessage original = ChatMessage.of(ChatRole.USER, "вопрос").withAttachments(List.of(file));
+        ChatMessage answer = ChatMessage.of(ChatRole.ASSISTANT, "ответ");
+        session.restore(List.of(original, answer));
+        List<ChatMessage> before = session.messages();
+        List<String> events = record(session);
+
+        for (String text : new String[] { null, "", " \n\t " }) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> session.editAndSend(0, original, text, List.of(), List.of()));
+            assertEquals(before, session.messages(), "пустая правка не обрезает прежний ответ и вложения");
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> session.editAndSend(-1, original, "правка", List.of(), List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> session.editAndSend(2, original, "правка", List.of(), List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> session.editAndSend(1, answer, "правка", List.of(), List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> session.editAndSend(0, null, "правка", List.of(), List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> session.editAndSend(0, original.with("устаревшая цель", Status.DONE), "правка", List.of(), List.of()));
+        assertEquals(before, session.messages());
+        assertEquals(List.of(file), session.messages().get(0).attachments());
+        assertEquals(List.of(), events, "отклонённая правка не уведомляет об изменении истории");
+        assertNull(provider.history, "невалидная правка не вызывает модель");
+        assertFalse(session.isBusy());
+    }
+
+    @Test
+    void editAndSendWhileBusyKeepsCurrentBranchAndAttachments() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        Attachment file = new Attachment("контекст.txt", "text/plain", "не потерять");
+        ChatMessage original = ChatMessage.of(ChatRole.USER, "вопрос").withAttachments(List.of(file));
+        session.restore(List.of(original, ChatMessage.of(ChatRole.ASSISTANT, "прежний ответ")));
+        CompletableFuture<ChatMessage> running = session.send("следующий вопрос");
+        provider.part("начало текущего ответа");
+        List<ChatMessage> before = session.messages();
+        List<ChatMessage> request = provider.history;
+        List<String> events = record(session);
+
+        assertThrows(IllegalStateException.class,
+                () -> session.editAndSend(0, original, "правка", List.of(), List.of()));
+
+        assertTrue(session.isBusy());
+        assertEquals(before, session.messages());
+        assertEquals(List.of(file), session.messages().get(0).attachments());
+        assertEquals(request, provider.history, "правка не заменяет выполняющийся запрос");
+        assertEquals(List.of(), events);
+        provider.complete("текущий ответ");
+        assertEquals("текущий ответ", running.get(TIMEOUT, TimeUnit.SECONDS).text());
+    }
+
+    @Test
     void contextGoesToProviderAndSurvivesRetryAndEdit() throws Exception {
         ManualProvider provider = new ManualProvider();
         ChatSession session = new ChatSession(provider);
