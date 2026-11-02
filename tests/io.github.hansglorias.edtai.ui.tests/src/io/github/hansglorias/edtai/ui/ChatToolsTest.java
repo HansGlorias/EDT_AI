@@ -95,7 +95,7 @@ class ChatToolsTest extends AbstractChatTest {
         assertTrue(transcript.contains("Ревью · 1 ошибка   " + MessageRenderer.CLEAR_MARKERS + "\n●  ОбщийМодуль.Тест.Модуль:2"
                 + "  Сообщить в общем модуле"), transcript);
         org.eclipse.core.resources.IFile file = project.getFile("src/CommonModules/Тест/Module.bsl");
-        waitUntil(() -> reviewMarkers(file).length == 1);
+        waitUntil(() -> reviewMarkersReady(file, 1));
         org.eclipse.core.resources.IMarker marker = reviewMarkers(file)[0];
         assertEquals(2, marker.getAttribute(org.eclipse.core.resources.IMarker.LINE_NUMBER, 0));
         assertEquals(org.eclipse.core.resources.IMarker.SEVERITY_ERROR, marker.getAttribute(org.eclipse.core.resources.IMarker.SEVERITY, -1));
@@ -122,6 +122,28 @@ class ChatToolsTest extends AbstractChatTest {
         }
     }
 
+    /** WorkspaceJob создаёт маркер раньше, чем заполняет проверяемые атрибуты. */
+    private static boolean reviewMarkersReady(IFile file, int count) {
+        var markers = reviewMarkers(file);
+        if (markers.length != count) {
+            return false;
+        }
+        try {
+            for (var marker : markers) {
+                var attributes = marker.getAttributes();
+                if (attributes == null || !attributes.keySet().containsAll(List.of(
+                        org.eclipse.core.resources.IMarker.LINE_NUMBER,
+                        org.eclipse.core.resources.IMarker.SEVERITY,
+                        org.eclipse.core.resources.IMarker.MESSAGE))) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (org.eclipse.core.runtime.CoreException e) {
+            return false;
+        }
+    }
+
     @Test
     void reviewUsesOwnAnnotationsForAllSeverities() throws Exception {
         IFile file = project.getFile("src/CommonModules/Тест/Module.bsl");
@@ -132,7 +154,7 @@ class ChatToolsTest extends AbstractChatTest {
                         Finding.Severity.WARNING, "Предупреждение ревью", ""),
                 new Finding(PROJECT, file.getProjectRelativePath().toString(), "ОбщийМодуль.Тест", 3,
                         Finding.Severity.INFO, "Совет ревью", "")));
-        waitUntil(() -> reviewMarkers(file).length == 3);
+        waitUntil(() -> reviewMarkersReady(file, 3));
         var lookup = org.eclipse.ui.editors.text.EditorsUI.getAnnotationTypeLookup();
         var preferences = org.eclipse.ui.editors.text.EditorsUI.getAnnotationPreferenceLookup();
         for (var marker : reviewMarkers(file)) {
@@ -206,7 +228,7 @@ class ChatToolsTest extends AbstractChatTest {
             Map<String, Object> finding = Map.of("module", "ОбщийМодуль.Тест", "line", 4, "severity", "info", "title", "Проверить");
             Map<String, Object> input = Map.of("project", PROJECT, "findings", List.of(finding));
             review.call(input);
-            waitUntil(() -> reviewMarkers(file).length == 1);
+            waitUntil(() -> reviewMarkersReady(file, 1));
             var marker = reviewMarkers(file)[0];
             assertEquals(4, marker.getAttribute(org.eclipse.core.resources.IMarker.LINE_NUMBER, 0));
 
