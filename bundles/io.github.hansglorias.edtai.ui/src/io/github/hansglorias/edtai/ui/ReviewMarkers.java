@@ -48,15 +48,12 @@ final class ReviewMarkers {
                 }
                 file.deleteMarkers(TYPE, false, IResource.DEPTH_ZERO);
                 for (Finding finding : entry.getValue()) {
-                    IMarker marker = file.createMarker(TYPE);
-                    marker.setAttribute(IMarker.SEVERITY, switch (finding.severity()) {
+                    // findMarkers видит маркер сразу: не публикуем его до заполнения атрибутов.
+                    file.createMarker(TYPE, Map.of(IMarker.SEVERITY, switch (finding.severity()) {
                         case ERROR -> IMarker.SEVERITY_ERROR;
                         case WARNING -> IMarker.SEVERITY_WARNING;
                         case INFO -> IMarker.SEVERITY_INFO;
-                    });
-                    marker.setAttribute(IMarker.LINE_NUMBER, finding.line());
-                    marker.setAttribute(IMarker.MESSAGE, message(finding));
-                    marker.setAttribute(FIX, finding.fix());
+                    }, IMarker.LINE_NUMBER, finding.line(), IMarker.MESSAGE, message(finding), FIX, finding.fix()));
                 }
             }
         });
