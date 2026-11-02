@@ -140,6 +140,7 @@ import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.llm.ModelChatProvider;
 import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.mcp.McpHub;
+import io.github.hansglorias.edtai.core.mcp.McpMonitor;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.AgentModeStore;
 import io.github.hansglorias.edtai.core.settings.McpServer;
@@ -226,7 +227,9 @@ public class ChatView extends ViewPart {
     static final String READ_ONLY = AgentModeStore.LEGACY_READ_ONLY;
 
     /** Подключения к MCP-серверам из настроек. */
-    private final McpHub mcp = new McpHub();
+    private final McpHub mcp = new McpHub(() -> inUi(this::updateMcpButton));
+    private final McpMonitor mcpMonitor = new McpMonitor(mcp);
+    private volatile boolean viewDisposed;
     /** Чаты, для которых уже просили название у модели: по разу. */
     private final Set<String> titleRequested = ConcurrentHashMap.newKeySet();
     /**
@@ -541,14 +544,7 @@ public class ChatView extends ViewPart {
         if (session.provider() instanceof ModelChatProvider provider) {
             provider.forgetRejections();
         }
-        if (!previous.mcpServers().equals(settings.mcpServers())
-                || !TrustSettings.from(previous).equals(TrustSettings.from(settings))) {
-            // Закрытие сессий — запросы по сети, а вызов инструмента может идти минуты: не в UI-потоке.
-            background("EDT AI: переподключение MCP", () -> {
-                mcp.reset();
-                inUi(this::checkMcpInBackground);
-            });
-        }
+        checkMcpInBackground();
         contextBar.setLimit(settings.contextLimit());
         updateModeButton();
         updateMcpButton();
@@ -2190,10 +2186,16 @@ public class ChatView extends ViewPart {
     /** {@code /mcp}: подключение к серверам — в фоне, итог — в окне. */
     private void showMcpStatus() {
         AiSettings current = SettingsStore.workspace().load();
+        long revision = mcp.revision();
         showNotice("Проверяю MCP-серверы…");
         background("EDT AI: состояние MCP", () -> {
-            List<McpHub.ServerStatus> servers = mcp.status(current.mcpServers(), TrustSettings.from(current));
+            List<McpHub.ServerStatus> servers = mcp.status(current.mcpServers(), TrustSettings.from(current), revision);
             inUi(() -> {
+                AiSettings saved = SettingsStore.workspace().load();
+                if (!current.mcpServers().equals(saved.mcpServers()) || !TrustSettings.from(current).equals(TrustSettings.from(saved))) {
+                    showNotice("Настройки MCP изменились во время проверки. Проверьте серверы снова");
+                    return;
+                }
                 updateStatus();
                 updateMcpButton();
                 mcpStatus.accept(servers);
@@ -2429,11 +2431,11 @@ public class ChatView extends ViewPart {
 
     /** Значок и подсказка кнопки MCP по последнему известному состоянию серверов, без подключения. */
     void updateMcpButton() {
-        if (mcpButton == null || mcpButton.isDisposed()) {
+        if (viewDisposed || mcpButton == null || mcpButton.isDisposed()) {
             return;
         }
-        McpHub.Health health = McpHub.health(mcp.lastStatus(SettingsStore.workspace().load().mcpServers()));
         List<McpHub.ServerStatus> servers = mcp.lastStatus(SettingsStore.workspace().load().mcpServers());
+        McpHub.Health health = McpHub.health(servers);
         mcpButton.setText(McpHub.counter(servers));
         mcpButton.setColor(health.state() == McpHub.State.FAILED || health.state() == McpHub.State.UNSUPPORTED
                 ? new RGB(0xDC, 0x26, 0x26) : null);
@@ -2442,16 +2444,42 @@ public class ChatView extends ViewPart {
         mcpButton.getParent().layout(true, true);
     }
 
-    /** При открытии вида — проверка включённых серверов в фоне: индикатор сразу показывает, подключены ли. */
-    private void checkMcpInBackground() {
-        AiSettings current = SettingsStore.workspace().load();
-        if (current.mcpServers().stream().noneMatch(McpServer::enabled)) {
-            return;
+    /** Проверка на странице настроек обновляет открытые чаты только для сохранённого подключения. */
+    static void mcpChecked(McpHub.ServerStatus status, TrustSettings trust) {
+        AiSettings saved = SettingsStore.workspace().load();
+        if (!TrustSettings.from(saved).equals(trust) || status.checkedAt() == null) return;
+        for (var window : PlatformUI.getWorkbench().getWorkbenchWindows()) {
+            for (var page : window.getPages()) {
+                if (page.findView(ID) instanceof ChatView view && !view.viewDisposed) {
+                    for (var configured : saved.mcpServers()) {
+                        if (configured.target().equals(status.server().target()) && configured.transport() == status.server().transport()) {
+                            view.mcp.recordCheck(new McpHub.ServerStatus(configured, status.state(), status.message(), status.serverName(),
+                                    status.tools(), status.checkedAt()));
+                        }
+                    }
+                }
+            }
         }
-        background("EDT AI: проверка MCP", () -> {
-            mcp.status(current.mcpServers(), TrustSettings.from(current));
-            inUi(this::updateMcpButton);
-        });
+    }
+
+    /** Общая блокировка занятого подключения для ручной проверки и монитора. Вызывается из UI. */
+    static McpHub mcpForCheck(McpServer server, TrustSettings trust) {
+        AiSettings saved = SettingsStore.workspace().load();
+        if (!TrustSettings.from(saved).equals(trust) || saved.mcpServers().stream().noneMatch(configured ->
+                configured.target().equals(server.target()) && configured.transport() == server.transport())) return null;
+        for (var window : PlatformUI.getWorkbench().getWorkbenchWindows()) {
+            for (var page : window.getPages()) {
+                if (page.findView(ID) instanceof ChatView view && !view.viewDisposed) return view.mcp;
+            }
+        }
+        return null;
+    }
+
+    /** Один монитор на вид: при открытии и далее по выбранному интервалу. */
+    private void checkMcpInBackground() {
+        if (viewDisposed) return;
+        AiSettings current = SettingsStore.workspace().load();
+        mcpMonitor.configure(current.mcpServers(), TrustSettings.from(current), current.mcpCheckMinutes());
     }
 
     /** Показ итога {@code /mcp}; тесты подменяют. */
@@ -3192,12 +3220,13 @@ public class ChatView extends ViewPart {
     }
 
     private void inUi(Runnable runnable) {
+        if (viewDisposed) return;
         Display display = history == null || history.isDisposed() ? null : history.getDisplay();
         if (display == null) {
             return;
         }
         display.asyncExec(() -> {
-            if (!history.isDisposed()) {
+            if (!viewDisposed && !history.isDisposed()) {
                 runnable.run();
             }
         });
@@ -3279,6 +3308,8 @@ public class ChatView extends ViewPart {
 
     @Override
     public void dispose() {
+        viewDisposed = true;
+        mcpMonitor.close();
         markTabBusy(false);
         contextBar.clear();
         lives.values().forEach(chat -> {

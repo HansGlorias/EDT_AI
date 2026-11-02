@@ -31,6 +31,7 @@ public final class SettingsStore {
     static final String KEY_USE_SYSTEM_TRUST_STORE = "useSystemTrustStore";
     static final String KEY_CA_CERTIFICATE_FILE = "caCertificateFile";
     static final String KEY_MCP_SERVERS = "mcpServers";
+    static final String KEY_MCP_CHECK_MINUTES = "mcpCheckMinutes";
 
     static final String SECURE_NODE = "io.github.hansglorias.edtai";
     static final String SECURE_KEY_TOKEN = "token";
@@ -67,7 +68,8 @@ public final class SettingsStore {
                 preferences.getBoolean(KEY_USE_SYSTEM_TRUST_STORE, AiSettings.DEFAULT_USE_SYSTEM_TRUST_STORE),
                 preferences.get(KEY_CA_CERTIFICATE_FILE, ""),
                 servers,
-                preferences.getInt(KEY_MODEL_WINDOW, 0));
+                preferences.getInt(KEY_MODEL_WINDOW, 0),
+                preferences.getInt(KEY_MCP_CHECK_MINUTES, AiSettings.DEFAULT_MCP_CHECK_MINUTES));
     }
 
     public void save(AiSettings settings) throws BackingStoreException {
@@ -104,6 +106,8 @@ public final class SettingsStore {
         preferences.putBoolean(KEY_USE_SYSTEM_TRUST_STORE, settings.useSystemTrustStore());
         put(KEY_CA_CERTIFICATE_FILE, settings.caCertificateFile());
         put(KEY_MCP_SERVERS, McpServersCodec.encode(settings.mcpServers()));
+        if (settings.mcpCheckMinutes() == AiSettings.DEFAULT_MCP_CHECK_MINUTES) preferences.remove(KEY_MCP_CHECK_MINUTES);
+        else preferences.putInt(KEY_MCP_CHECK_MINUTES, settings.mcpCheckMinutes());
         preferences.flush();
     }
 

@@ -18,6 +18,20 @@ import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 class AiPreferencePageTest extends AbstractChatTest {
 
+    @Test void mcpIntervalIsEditableAndPersists() throws Exception {
+        PreferenceDialog dialog = openPreferences();
+        try {
+            var settings = (AiPreferencePage) dialog.getSelectedPage();
+            assertEquals(5, settings.current().mcpCheckMinutes());
+            settings.mcpIntervalField().select(0);
+            assertEquals(0, settings.current().mcpCheckMinutes());
+            assertTrue(settings.performOk());
+            assertEquals(0, SettingsStore.workspace().load().mcpCheckMinutes());
+            settings.mcpIntervalField().select(1);
+            assertEquals(3, settings.current().mcpCheckMinutes());
+        } finally { dialog.close(); }
+    }
+
     @Test
     void previewsWindowAndItsSourceFromUnsavedFields() throws Exception {
         PreferenceDialog dialog = openPreferences();

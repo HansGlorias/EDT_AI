@@ -18,6 +18,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.json.JsonException;
@@ -41,23 +44,52 @@ public final class McpClient implements AutoCloseable {
     private final URI uri;
     private final HttpClient http;
     private final Duration timeout;
+    private final long deadline;
+    private final ScheduledFuture<?> deadlineTask;
+    private volatile InputStream activeBody;
+    private static final ScheduledThreadPoolExecutor DEADLINES = deadlines();
 
     private long nextId = 1;
     private volatile String sessionId;
     private volatile String protocolVersion;
     private String serverName = "";
+    private String serverTitle = "";
     private volatile boolean initialized;
 
     /** @param timeout сколько ждать ответа на один запрос: вызов инструмента может работать долго */
     public McpClient(URI uri, HttpClient http, Duration timeout) {
+        this(uri, http, timeout, null);
+    }
+
+    McpClient(URI uri, HttpClient http, Duration timeout, Duration totalTimeout) {
         this.uri = uri;
         this.http = http;
         this.timeout = timeout;
+        deadline = totalTimeout == null ? Long.MAX_VALUE : System.nanoTime() + totalTimeout.toNanos();
+        deadlineTask = totalTimeout == null ? null : DEADLINES.schedule(() -> {
+            InputStream body = activeBody;
+            if (body != null) try { body.close(); } catch (IOException ignored) { }
+        }, totalTimeout.toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    private static ScheduledThreadPoolExecutor deadlines() {
+        var timer = new ScheduledThreadPoolExecutor(1, task -> {
+            Thread thread = new Thread(task, "EDT AI: таймаут чтения MCP"); thread.setDaemon(true); return thread;
+        });
+        timer.setRemoveOnCancelPolicy(true);
+        timer.setKeepAliveTime(1, TimeUnit.SECONDS);
+        timer.allowCoreThreadTimeOut(true);
+        return timer;
     }
 
     /** Имя и версия сервера из ответа на {@code initialize}, например «EDT MCP Server 1.27.0». */
     public synchronized String serverName() {
         return serverName;
+    }
+
+    /** Имя из serverInfo без версии: для автоматического заполнения настроек. */
+    public synchronized String serverTitle() {
+        return serverTitle;
     }
 
     /** Подключается, если ещё не подключён. */
@@ -71,6 +103,7 @@ public final class McpClient implements AutoCloseable {
                 "clientInfo", Json.object("name", CLIENT_NAME, "version", "0.1.0")), false);
         protocolVersion = Json.stringAt(result, "protocolVersion");
         String name = Json.stringAt(result, "serverInfo", "name");
+        serverTitle = name == null ? "" : name.strip();
         String version = Json.stringAt(result, "serverInfo", "version");
         serverName = name == null ? "" : version == null ? name : name + " " + version;
         initialized = true;
@@ -104,6 +137,16 @@ public final class McpClient implements AutoCloseable {
         return McpCallResult.of(request("tools/call", Json.object("name", name, "arguments", arguments)));
     }
 
+    /** Только транспорт MCP. Запасной read-only запрос разрешён лишь при JSON-RPC -32601. */
+    public synchronized void ping() throws McpException {
+        try {
+            request("ping", Json.object());
+        } catch (McpException e) {
+            if (!e.methodNotFound()) throw e;
+            request("tools/list", Json.object()); // Одной страницы достаточно для проверки ответа MCP.
+        }
+    }
+
     /**
      * Завершает сессию на сервере, если она есть. Ошибки не важны. Не ждёт
      * вызова, который сейчас выполняется: его ответ сервер пришлёт уже в
@@ -111,14 +154,15 @@ public final class McpClient implements AutoCloseable {
      */
     @Override
     public void close() {
+        if (deadlineTask != null) deadlineTask.cancel(false);
         String session = sessionId;
         sessionId = null;
         initialized = false;
         if (session != null) {
             try {
-                HttpRequest.Builder request = builder().header("Mcp-Session-Id", session).DELETE();
+                HttpRequest.Builder request = builder().timeout(Duration.ofSeconds(2)).header("Mcp-Session-Id", session).DELETE();
                 http.send(request.build(), HttpResponse.BodyHandlers.discarding());
-            } catch (IOException e) {
+            } catch (IOException | McpException e) {
                 // Сервер мог уже закрыться.
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -161,10 +205,13 @@ public final class McpClient implements AutoCloseable {
             Object error = Json.at(message, "error");
             if (error != null) {
                 String text = Json.stringAt(error, "message");
-                throw new McpException("Сервер вернул ошибку на " + method + ": " + (text != null ? text : Json.write(error)));
+                Object code = Json.at(error, "code");
+                throw new McpException("Сервер вернул ошибку на " + method + ": " + (text != null ? text : Json.write(error)),
+                        null, code instanceof Number number ? number.intValue() : null);
             }
             return Json.at(message, "result");
         } catch (IOException e) {
+            if (expired()) throw deadlineError();
             throw new McpException("Обрыв ответа MCP-сервера " + uri + ": " + e.getMessage(), e);
         } catch (JsonException e) {
             throw new McpException("MCP-сервер прислал не JSON: " + e.getMessage(), e);
@@ -187,7 +234,13 @@ public final class McpClient implements AutoCloseable {
                 .POST(HttpRequest.BodyPublishers.ofString(Json.write(message), StandardCharsets.UTF_8))
                 .build();
         try {
-            return http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            var response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            activeBody = response.body();
+            if (expired()) {
+                response.body().close();
+                throw deadlineError();
+            }
+            return response;
         } catch (HttpConnectTimeoutException | ConnectException e) {
             throw new McpException("Не удалось подключиться к MCP-серверу " + uri + ": сервер не запущен или порт другой.", e);
         } catch (HttpTimeoutException e) {
@@ -200,8 +253,14 @@ public final class McpClient implements AutoCloseable {
         }
     }
 
-    private HttpRequest.Builder builder() {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(uri).timeout(timeout).header("User-Agent", "EDT-AI");
+    private boolean expired() { return deadline != Long.MAX_VALUE && System.nanoTime() >= deadline; }
+    private McpException deadlineError() { return new McpException("Истекло время проверки MCP", new HttpTimeoutException("MCP deadline")); }
+
+    private HttpRequest.Builder builder() throws McpException {
+        long remaining = deadline == Long.MAX_VALUE ? timeout.toNanos() : deadline - System.nanoTime();
+        if (remaining <= 0) throw new McpException("Истекло время проверки MCP", new HttpTimeoutException("MCP deadline"));
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri).timeout(Duration.ofNanos(Math.min(timeout.toNanos(), remaining)))
+                .header("User-Agent", "EDT-AI");
         if (sessionId != null) {
             builder.header("Mcp-Session-Id", sessionId);
         }

@@ -120,7 +120,7 @@ class ChatCommandsTest extends AbstractChatTest {
             Tree tree = dialog.tree();
             assertEquals(3, tree.getItemCount());
             TreeItem server = tree.getItem(0);
-            assertEquals(List.of("EDT", "подключён", "Подключено: EDT-MCP. Инструментов: 3, модели доступно: 2"),
+            assertEquals(List.of("EDT", "подключён", "Подключено: EDT-MCP. Инструментов: 3, модели доступно: 2. Ещё не проверялся"),
                     List.of(server.getText(0), server.getText(1), server.getText(2)));
             assertTrue(server.getExpanded());
             List<String> rows = new ArrayList<>();
@@ -130,7 +130,7 @@ class ChatCommandsTest extends AbstractChatTest {
             assertEquals(List.of("get_problems | " + McpStatusDialog.READS + " | Ошибки проекта.",
                     "update_module | " + McpStatusDialog.MODIFIES + " | Меняет модуль",
                     "run_tests | " + McpStatusDialog.FILTERED + " | Запускает тесты"), rows);
-            assertEquals("Не подключён: соединение отклонено", tree.getItem(1).getText(2));
+            assertEquals("Не подключён: соединение отклонено. Ещё не проверялся", tree.getItem(1).getText(2));
             assertEquals("выключен", tree.getItem(2).getText(1));
 
             tree.setSelection(server.getItem(0));
@@ -138,7 +138,7 @@ class ChatCommandsTest extends AbstractChatTest {
             // Многострочное поле на Windows отдаёт текст с \r\n.
             assertEquals("get_problems\nОшибки проекта.\nПодробнее: по всем проектам.",
                     dialog.details().getText().replace("\r\n", "\n"));
-            Screenshots.capture(dialog.getShell(), "mcp-status");
+            Screenshots.render(dialog.getShell().getChildren()[0], "mcp-status");
         } finally {
             dialog.close();
         }

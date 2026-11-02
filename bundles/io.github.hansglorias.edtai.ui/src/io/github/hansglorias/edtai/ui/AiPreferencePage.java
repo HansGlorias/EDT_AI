@@ -84,6 +84,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Button removeServer;
     private Button checkServer;
     private Label serverResult;
+    private Combo mcpInterval;
 
     @Override
     public void init(IWorkbench workbench) {
@@ -399,7 +400,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
         Button add = button(buttons, "Добавить…");
         add.addListener(SWT.Selection, event -> {
-            McpServerDialog dialog = new McpServerDialog(getShell(), null, names(null));
+            McpServerDialog dialog = new McpServerDialog(getShell(), null, names(null), TrustSettings.from(current()));
             if (dialog.open() == Window.OK) {
                 servers.add(dialog.result());
                 refreshServers();
@@ -421,6 +422,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
         serverResult = new Label(group, SWT.WRAP);
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, SWT.DEFAULT).applyTo(serverResult);
+        new Label(group, SWT.NONE).setText("Проверять связь:");
+        mcpInterval = new Combo(group, SWT.READ_ONLY);
+        mcpInterval.setItems("Периодическая проверка выключена", "Каждые 3 минуты", "Каждые 5 минут", "Каждые 10 минут");
+        mcpInterval.setToolTipText("Первая проверка — при открытии чата. Занятый сервер проверяется после освобождения.");
         updateServerButtons();
     }
 
@@ -433,21 +438,28 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         checkServer.setEnabled(false);
         showServerResult("Подключаюсь к «" + server.name() + "»…");
         TrustSettings trust = TrustSettings.from(current());
+        McpHub shared = ChatView.mcpForCheck(server, trust);
+        long revision = shared == null ? 0 : shared.revision();
         Display display = checkServer.getDisplay();
         Thread thread = new Thread(() -> {
-            String result;
-            try (McpHub hub = new McpHub()) {
-                result = "«" + server.name() + "»: " + hub.check(server, trust);
-            } catch (McpException e) {
-                result = "«" + server.name() + "» не работает: " + e.getMessage();
-            }
-            String text = result;
-            display.asyncExec(() -> {
-                if (!serverResult.isDisposed()) {
-                    showServerResult(text);
-                    updateServerButtons();
+            try (McpHub temporary = shared == null ? new McpHub() : null) {
+                McpHub hub = shared == null ? temporary : shared;
+                String result;
+                try {
+                    result = "«" + server.name() + "»: " + hub.checkDetails(server, trust, revision).text();
+                } catch (McpException e) {
+                    result = "«" + server.name() + "» не работает: " + e.getMessage();
                 }
-            });
+                String text = result;
+                McpHub.ServerStatus status = hub.lastStatus(List.of(server)).get(0);
+                display.asyncExec(() -> {
+                    if (!serverResult.isDisposed()) {
+                        ChatView.mcpChecked(status, trust);
+                        if (servers.contains(server)) showServerResult(text);
+                        updateServerButtons();
+                    }
+                });
+            }
         }, "EDT AI: проверка MCP-сервера");
         thread.setDaemon(true);
         thread.start();
@@ -463,7 +475,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         if (selected == null) {
             return;
         }
-        McpServerDialog dialog = new McpServerDialog(getShell(), selected, names(selected));
+        McpServerDialog dialog = new McpServerDialog(getShell(), selected, names(selected), TrustSettings.from(current()));
         if (dialog.open() == Window.OK) {
             servers.set(servers.indexOf(selected), dialog.result());
             refreshServers();
@@ -509,6 +521,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         caFile.setText(settings.caCertificateFile());
         servers.clear();
         servers.addAll(settings.mcpServers());
+        mcpInterval.select(List.of(0, 3, 5, 10).indexOf(settings.mcpCheckMinutes()));
         refreshServers();
         updateCaState();
     }
@@ -516,7 +529,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     AiSettings current() {
         return new AiSettings(Protocol.values()[Math.max(0, protocol.getSelectionIndex())], baseUrl.getText(),
                 model.getText(), Math.max(0, maxTokensValue()), systemPrompt.getText(), Math.max(0, number(contextLimit)),
-                toolsEnabled.getSelection(), useSystemTrustStore.getSelection(), caFile.getText(), servers, Math.max(0, number(modelWindow)));
+                toolsEnabled.getSelection(), useSystemTrustStore.getSelection(), caFile.getText(), servers, Math.max(0, number(modelWindow)),
+                List.of(0, 3, 5, 10).get(Math.max(0, mcpInterval.getSelectionIndex())));
     }
 
     private int maxTokensValue() {
@@ -712,6 +726,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     Label serverResult() {
         return serverResult;
     }
+
+    Combo mcpIntervalField() { return mcpInterval; }
 
     CheckboxTableViewer serverViewer() {
         return serverViewer;

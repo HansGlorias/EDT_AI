@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.OptionalInt;
 
 /**
  * Описание MCP-сервера из настроек.
@@ -30,6 +33,55 @@ public record McpServer(String name, McpTransport transport, String target, bool
 
     public McpServer withEnabled(boolean value) {
         return new McpServer(name, transport, target, value, tools);
+    }
+
+    /** Простой локальный адрес, который можно безопасно редактировать одним портом. */
+    public static OptionalInt localPort(String target) {
+        try {
+            URI uri = new URI(target);
+            String host = Objects.requireNonNullElse(uri.getHost(), "").toLowerCase(Locale.ROOT);
+            boolean local = host.equals("localhost") || host.equals("127.0.0.1") || host.equals("[::1]");
+            if (local && "http".equalsIgnoreCase(uri.getScheme()) && "/mcp".equals(uri.getPath())
+                    && uri.getRawUserInfo() == null && uri.getRawQuery() == null && uri.getRawFragment() == null
+                    && uri.getPort() > 0 && uri.getPort() <= 65535) {
+                return OptionalInt.of(uri.getPort());
+            }
+        } catch (URISyntaxException e) {
+            // Полный URL остаётся доступен в обычном режиме.
+        }
+        return OptionalInt.empty();
+    }
+
+    public static String localTarget(String port) {
+        int value;
+        try {
+            value = Integer.parseInt(port.strip());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Порт должен быть числом от 1 до 65535");
+        }
+        if (value < 1 || value > 65535) throw new IllegalArgumentException("Порт должен быть числом от 1 до 65535");
+        return "http://localhost:" + value + "/mcp";
+    }
+
+    /** Имя сервера или понятное запасное имя, с учётом уже занятых имён. */
+    public static String suggestedName(String reported, String target, List<String> taken) {
+        String base = Objects.requireNonNullElse(reported, "").strip();
+        if (base.isEmpty()) {
+            try {
+                URI uri = new URI(target);
+                base = uri.getHost() == null ? "MCP" : "MCP " + uri.getHost() + (uri.getPort() < 0 ? "" : ":" + uri.getPort());
+            } catch (URISyntaxException e) {
+                base = "MCP";
+            }
+        }
+        String candidate = base;
+        int suffix = 2;
+        while (containsName(taken, candidate)) candidate = base + " (" + suffix++ + ")";
+        return candidate;
+    }
+
+    private static boolean containsName(List<String> names, String name) {
+        return names.stream().anyMatch(value -> value.equalsIgnoreCase(name));
     }
 
     /** Давать ли модели инструмент с этим именем. */
