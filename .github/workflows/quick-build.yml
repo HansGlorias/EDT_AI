@@ -1,0 +1,55 @@
+name: Быстрая сборка ZIP (без тестов)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LANG: C.UTF-8
+      BUILD_REF: ${{ github.ref }}
+      BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build ZIP without tests
+        run: ./mvnw -B -ntp verify -DskipTests
+
+      - name: Short revision
+        id: revision
+        run: printf 'short_sha=%s\n' "${BUILD_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload preview ZIP
+        id: preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: edtai-preview-${{ steps.revision.outputs.short_sha }}
+          path: releng/io.github.hansglorias.edtai.repository/target/repository/
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: How to install this preview
+        env:
+          ARTIFACT_URL: ${{ steps.preview.outputs.artifact-url }}
+        run: |
+          {
+            printf '### Пробная сборка EDT AI без тестов\n\n'
+            printf 'Ref: `%s` · SHA: `%s`\n\n' "$BUILD_REF" "$BUILD_SHA"
+            printf '**Тесты не запускались.** Эта сборка не заменяет обязательные проверки Windows и Ubuntu перед merge.\n\n'
+            printf '[Скачать ZIP для установки](%s) — нужен вход в GitHub. Срок хранения: 7 дней.\n\n' "$ARTIFACT_URL"
+            printf 'В EDT: **Help → Install New Software… → Add… → Archive…** → скачанный zip → EDT AI → Finish → перезапуск.\n\n'
+            printf 'Pages не публикуется. [Подробная инструкция](%s/%s/blob/%s/docs/install-pr-build.md)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$BUILD_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
