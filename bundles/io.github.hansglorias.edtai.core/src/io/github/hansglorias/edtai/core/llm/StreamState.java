@@ -18,6 +18,8 @@ final class StreamState {
     private final Map<Integer, Builder> calls = new TreeMap<>();
     private final Consumer<String> onText;
     private final ThinkFilter thinking = new ThinkFilter();
+    private final StringBuilder reasoning = new StringBuilder();
+    private String reasoningField = "";
     private boolean truncated;
     private long inputTokens = -1;
     private long outputTokens = -1;
@@ -30,6 +32,21 @@ final class StreamState {
     void text(String part) {
         if (part != null && !part.isEmpty()) {
             visible(thinking.feed(part));
+        }
+    }
+
+    /**
+     * Часть рассуждения из отдельного поля дельты ({@code reasoning_content} или {@code reasoning}).
+     * Не показывается; запоминается поле, в котором сервер прислал рассуждение первым.
+     */
+    void reasoning(String field, String part) {
+        if (part != null && !part.isEmpty()) {
+            if (reasoningField.isEmpty()) {
+                reasoningField = field;
+            }
+            if (reasoningField.equals(field)) {
+                reasoning.append(part);
+            }
         }
     }
 
@@ -80,7 +97,10 @@ final class StreamState {
         }
         TokenUsage usage = inputTokens < 0 && outputTokens < 0 ? null
                 : TokenUsage.serverStep(inputTokens, outputTokens);
-        return new ModelReply(ThinkFilter.strip(text.toString()), result, truncated, usage);
+        ModelReply.Reasoning thought = !reasoningField.isEmpty()
+                ? new ModelReply.Reasoning(reasoningField, reasoning.toString())
+                : new ModelReply.Reasoning(ModelReply.Reasoning.TAGS, thinking.thought());
+        return new ModelReply(ThinkFilter.strip(text.toString()), result, truncated, usage, thought);
     }
 
     private static final class Builder {

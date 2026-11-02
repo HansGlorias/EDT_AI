@@ -246,7 +246,8 @@ final class AgentLoop {
 
     /** Сервер не прислал usage: по длине запроса и ответа. */
     static TokenUsage estimate(int requestChars, ModelReply reply) {
-        int answerChars = reply.text().length() + reply.calls().stream().mapToInt(call -> call.name().length() + call.arguments().length()).sum();
+        // Рассуждение сервер тоже считает в выходе (и в max_tokens).
+        int answerChars = reply.text().length() + reply.reasoning().text().length() + reply.calls().stream().mapToInt(call -> call.name().length() + call.arguments().length()).sum();
         return TokenUsage.step(requestChars / RequestBudget.CHARS_PER_TOKEN, answerChars / RequestBudget.CHARS_PER_TOKEN, true);
     }
 

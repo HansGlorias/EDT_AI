@@ -17,6 +17,8 @@ final class ThinkFilter {
     private static final Pattern BLOCK = Pattern.compile("(?s)<think>.*?(</think>|$)");
 
     private final StringBuilder pending = new StringBuilder();
+    /** Текст внутри {@code <think>}: не показывается, но нужен модели в следующем шаге цикла инструментов. */
+    private final StringBuilder thought = new StringBuilder();
     private boolean thinking;
     /** Только что закрылся блок рассуждений: пробелы и переводы строк после него не нужны. */
     private boolean afterThinking;
@@ -31,6 +33,8 @@ final class ThinkFilter {
             if (found >= 0) {
                 if (!thinking) {
                     append(visible, pending.substring(0, found));
+                } else {
+                    thought.append(pending, 0, found);
                 }
                 pending.delete(0, found + tag.length());
                 afterThinking = thinking;
@@ -40,6 +44,8 @@ final class ThinkFilter {
             int keep = partialTag(pending, tag);
             if (!thinking) {
                 append(visible, pending.substring(0, pending.length() - keep));
+            } else {
+                thought.append(pending, 0, pending.length() - keep);
             }
             pending.delete(0, pending.length() - keep);
             return visible.toString();
@@ -51,9 +57,16 @@ final class ThinkFilter {
         StringBuilder rest = new StringBuilder();
         if (!thinking) {
             append(rest, pending.toString());
+        } else {
+            thought.append(pending);
         }
         pending.setLength(0);
         return rest.toString();
+    }
+
+    /** Рассуждение из тегов {@code <think>}, накопленное к этому моменту. */
+    String thought() {
+        return thought.toString();
     }
 
     private void append(StringBuilder visible, String text) {
