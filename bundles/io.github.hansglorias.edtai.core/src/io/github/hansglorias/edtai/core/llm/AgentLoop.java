@@ -34,6 +34,16 @@ final class AgentLoop {
      */
     static final int MAX_STEPS = 50;
 
+    /** После этого шага модели напоминают, что пора отвечать: небольшие модели иначе ищут без конца. */
+    static final int WRAP_UP_STEP = 30;
+
+    static final String WRAP_UP = "(Служебная пометка EDT AI: это уже " + WRAP_UP_STEP + "-й шаг с инструментами из "
+            + MAX_STEPS + " возможных. Если найденного достаточно — отвечай пользователю. Если нет — продолжай только по делу,"
+            + " не перебирай варианты наугад.)";
+
+    static final String LAST_STEP = "(Служебная пометка EDT AI: это был последний шаг с инструментами. Больше их не вызывай:"
+            + " ответь пользователю по найденному — что выяснил, со ссылками Модуль:строка, и чего не хватило.)";
+
     /** Вместо результата старого шага, когда запрос не помещается в окно модели. */
     static final String OMITTED = AgentTranscript.OMITTED;
 
@@ -167,6 +177,11 @@ final class AgentLoop {
                 checkCancelled();
                 results.add(execute(call, tokens));
                 tokens = null;
+            }
+            String note = step == MAX_STEPS - 1 ? LAST_STEP : step == WRAP_UP_STEP ? WRAP_UP : "";
+            if (!note.isEmpty() && !results.isEmpty()) {
+                ProtocolAdapter.ToolResult last = results.get(results.size() - 1);
+                results.set(results.size() - 1, new ProtocolAdapter.ToolResult(last.call(), last.text() + "\n\n" + note, last.error()));
             }
             transcript.add(reply, results);
             separate = answer.length() > 0;
