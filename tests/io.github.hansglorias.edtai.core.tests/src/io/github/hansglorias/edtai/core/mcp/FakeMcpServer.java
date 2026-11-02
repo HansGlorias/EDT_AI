@@ -30,6 +30,10 @@ final class FakeMcpServer implements AutoCloseable {
     volatile boolean sse;
     /** Следующий запрос в сессии получит 404, как будто сервер перезапустили. */
     volatile boolean expireSession;
+    volatile Integer pingError;
+    volatile Runnable beforePing = () -> { };
+    volatile boolean dropCalls;
+    volatile int callHttpStatus = 200;
     private volatile int sessions;
 
     FakeMcpServer() throws IOException {
@@ -94,6 +98,12 @@ final class FakeMcpServer implements AutoCloseable {
             return;
         }
         switch (method) {
+            case "ping" -> {
+                beforePing.run();
+                if (pingError == null) reply(response, id, Json.object(), Map.of());
+                else send(response, Json.object("jsonrpc", "2.0", "id", id, "error",
+                        Json.object("code", pingError, "message", "unsupported ping")), Map.of());
+            }
             case "tools/list" -> {
                 Object cursor = Json.at(message, "params", "cursor");
                 int half = (tools.size() + 1) / 2;
@@ -102,6 +112,8 @@ final class FakeMcpServer implements AutoCloseable {
                         : Json.object("tools", tools.subList(half, tools.size())), Map.of());
             }
             case "tools/call" -> {
+                if (dropCalls) return;
+                if (callHttpStatus != 200) { response.send(callHttpStatus, "text/plain", "unavailable"); return; }
                 String name = Json.stringAt(message, "params", "name");
                 Function<Map<String, Object>, Object> result = results.get(name);
                 if (result == null) {

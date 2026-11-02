@@ -191,8 +191,107 @@ class McpHubTest {
         release.countDown();
 
         assertTrue(millis < 2000, "reset ждал вызова " + millis + " мс");
-        assertTrue(server.methods.contains("DELETE"), server.methods.toString());
         assertEquals("готово", call.get(5, TimeUnit.SECONDS).text());
+        assertTrue(server.methods.contains("DELETE"), "освобождённая сессия закрыта: " + server.methods);
+    }
+
+    @Test
+    void realProbeDetectsStoppedCachedServer() throws Exception {
+        McpServer config = edt("");
+        tools(config);
+        assertEquals(McpHub.State.CONNECTED, hub.lastStatus(List.of(config)).get(0).state());
+        server.close();
+        hub.refreshAvailability(List.of(config), TRUST);
+        var status = hub.lastStatus(List.of(config)).get(0);
+        assertEquals(McpHub.State.FAILED, status.state());
+        assertTrue(status.checkedAt() != null);
+        assertEquals("MCP 0/1", McpHub.counter(List.of(status)));
+        assertTrue(hub.status(List.of(config), TRUST).get(0).state() == McpHub.State.FAILED);
+    }
+
+    @Test
+    void callFailureAndRecoveryUpdateHealthButToolErrorDoesNotDisconnect() throws Exception {
+        McpServer config = edt("");
+        Map<String, Tool> tools = tools(config);
+        server.dropCalls = true;
+        assertThrows(ToolException.class, () -> tools.get("get_edt_version").call(Map.of()));
+        assertEquals(McpHub.State.FAILED, hub.lastStatus(List.of(config)).get(0).state());
+        server.dropCalls = false;
+        tools.get("get_edt_version").call(Map.of());
+        assertEquals(McpHub.State.CONNECTED, hub.lastStatus(List.of(config)).get(0).state());
+        server.callHttpStatus = 503;
+        assertThrows(ToolException.class, () -> tools.get("get_edt_version").call(Map.of()));
+        assertEquals(McpHub.State.FAILED, hub.lastStatus(List.of(config)).get(0).state());
+        server.callHttpStatus = 200;
+        tools.get("get_edt_version").call(Map.of());
+        assertThrows(ToolException.class, () -> tools.get("broken").call(Map.of()));
+        assertEquals(McpHub.State.CONNECTED, hub.lastStatus(List.of(config)).get(0).state());
+        assertThrows(ToolException.class, () -> hub.call(config, "unknown-tool", Map.of()));
+        assertEquals(McpHub.State.CONNECTED, hub.lastStatus(List.of(config)).get(0).state());
+    }
+
+    @Test
+    void busyToolDefersProbeWithoutChangingHealthOrTime() throws Exception {
+        CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);
+        server.tool("slow_probe_test", "slow", arguments -> {
+            started.countDown();
+            try { release.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return FakeMcpServer.resource("done");
+        });
+        McpServer config = edt("");
+        Tool tool = tools(config).get("slow_probe_test");
+        var before = hub.lastStatus(List.of(config)).get(0);
+        var future = CompletableFuture.supplyAsync(() -> {
+            try { return tool.call(Map.of()); } catch (ToolException e) { throw new IllegalStateException(e); }
+        });
+        try {
+            assertTrue(started.await(3, TimeUnit.SECONDS));
+            assertFalse(hub.refreshAvailability(List.of(config), TRUST));
+            assertEquals(before, hub.lastStatus(List.of(config)).get(0));
+            assertFalse(server.methods.contains("ping"));
+            var manual = hub.status(List.of(config), TRUST).get(0);
+            assertEquals(before.checkedAt(), manual.checkedAt());
+            assertTrue(manual.summary().contains("проверка отложена"));
+        } finally { release.countDown(); }
+        future.get(3, TimeUnit.SECONDS);
+        assertTrue(hub.refreshAvailability(List.of(config), TRUST));
+        assertTrue(server.methods.contains("ping"));
+    }
+
+    @Test
+    void staleProbeCannotRestoreHealthAfterSettingsChange() throws Exception {
+        CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);
+        McpServer old = edt("");
+        server.beforePing = () -> {
+            started.countDown();
+            try { release.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        };
+        var check = CompletableFuture.runAsync(() -> hub.refreshAvailability(List.of(old), TRUST));
+        try {
+            assertTrue(started.await(3, TimeUnit.SECONDS));
+            assertEquals(McpHub.State.CHECKING, hub.lastStatus(List.of(old)).get(0).state());
+            hub.invalidateConfiguration();
+        } finally { release.countDown(); }
+        check.get(3, TimeUnit.SECONDS);
+        assertEquals(McpHub.State.UNKNOWN, hub.lastStatus(List.of(old)).get(0).state());
+        McpServer changed = new McpServer(old.name(), McpTransport.HTTP, "http://localhost:1/mcp", true);
+        hub.refreshAvailability(List.of(changed), TRUST);
+        assertEquals(McpHub.State.FAILED, hub.lastStatus(List.of(changed)).get(0).state());
+        hub.recordCheck(new McpHub.ServerStatus(old, McpHub.State.CONNECTED, "", "old", List.of()));
+        assertEquals(McpHub.State.FAILED, hub.lastStatus(List.of(changed)).get(0).state());
+    }
+
+    @Test
+    void checkReturnsReportedNameWithoutVersion() throws Exception {
+        assertEquals("Fake MCP", hub.checkDetails(edt(""), TRUST).name());
+    }
+
+    @Test void queuedOldCheckDoesNotStartAfterInvalidation() {
+        long revision = hub.revision();
+        hub.invalidateConfiguration();
+        assertThrows(McpException.class, () -> hub.checkDetails(edt(""), TRUST, revision));
+        assertEquals(List.of(), server.methods);
+        assertEquals(McpHub.State.UNKNOWN, hub.lastStatus(List.of(edt(""))).get(0).state());
     }
 
     @Test

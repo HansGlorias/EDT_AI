@@ -103,14 +103,14 @@ class McpStatusDialog extends TitleAreaDialog {
         Color muted = mutedColor();
         for (McpHub.ServerStatus server : servers) {
             TreeItem item = new TreeItem(tree, SWT.NONE);
-            item.setText(new String[] { server.server().name(), state(server.state()), server.summary() });
+            item.setText(new String[] { server.server().name(), state(server.state()), server.summary() + ". " + server.checkedTime() });
             item.setImage(Icons.image(switch (server.state()) {
                 case CONNECTED -> Icons.STATUS_OK;
                 case FAILED, UNSUPPORTED -> Icons.STATUS_ERROR;
-                case DISABLED, UNKNOWN -> Icons.STATUS_OFF;
+                case DISABLED, UNKNOWN, CHECKING -> Icons.STATUS_OFF;
             }));
             item.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DIALOG_FONT));
-            item.setData(server.server().name() + " — " + server.server().target() + "\n" + server.summary());
+            item.setData(server.server().name() + " — " + server.server().target() + "\n" + server.summary() + "\n" + server.checkedTime());
             for (McpToolInfo tool : server.tools()) {
                 boolean allowed = server.server().allowsTool(tool.name());
                 TreeItem child = new TreeItem(item, SWT.NONE);
@@ -138,6 +138,7 @@ class McpStatusDialog extends TitleAreaDialog {
             case UNSUPPORTED -> "не поддерживается";
             case DISABLED -> "выключен";
             case UNKNOWN -> "не проверялся";
+            case CHECKING -> "проверяется";
         };
     }
 

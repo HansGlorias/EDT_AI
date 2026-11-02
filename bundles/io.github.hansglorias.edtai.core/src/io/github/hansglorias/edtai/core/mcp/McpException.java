@@ -4,12 +4,21 @@ package io.github.hansglorias.edtai.core.mcp;
 public class McpException extends Exception {
 
     private static final long serialVersionUID = 1L;
+    private final Integer rpcCode;
 
     public McpException(String message) {
-        super(message);
+        this(message, null, null);
     }
 
     public McpException(String message, Throwable cause) {
-        super(message, cause);
+        this(message, cause, null);
     }
+
+    public McpException(String message, Throwable cause, Integer rpcCode) {
+        super(message, cause);
+        this.rpcCode = rpcCode;
+    }
+
+    public boolean methodNotFound() { return Integer.valueOf(-32601).equals(rpcCode); }
+    public boolean remoteError() { return rpcCode != null; }
 }

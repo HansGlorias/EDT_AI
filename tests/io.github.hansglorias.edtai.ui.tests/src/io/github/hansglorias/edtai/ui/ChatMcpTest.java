@@ -25,6 +25,8 @@ import org.eclipse.jgit.lib.StoredConfig;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.jface.viewers.StructuredSelection;
+import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,6 +76,66 @@ class ChatMcpTest extends AbstractChatTest {
     @AfterEach
     void stopMcp() throws IOException {
         mcp.close();
+    }
+
+    @Test
+    void statusButtonRechecksStoppedServerAndChangedPort() throws Exception {
+        ChatView view = configured(mcp.url() + "/mcp");
+        waitUntil(() -> view.mcpButton().getData() == McpHub.State.CONNECTED);
+        assertEquals("MCP 1/1", view.mcpButton().getText());
+        List<List<McpHub.ServerStatus>> shown = new ArrayList<>();
+        view.mcpStatus = shown::add;
+        mcp.close();
+        view.mcpButton().notifyListeners(SWT.Selection, new Event());
+        waitUntil(() -> !shown.isEmpty());
+        assertEquals(McpHub.State.FAILED, shown.get(0).get(0).state());
+        assertEquals("MCP 0/1", view.mcpButton().getText());
+        assertTrue(view.mcpButton().getToolTipText().contains("Последняя проверка:"));
+        configured("http://localhost:1/mcp");
+        waitUntil(() -> view.mcpButton().getData() == McpHub.State.FAILED && view.mcpButton().getToolTipText().contains("localhost:1/"));
+    }
+
+    @Test
+    void lostCallAndPreferencesCheckUpdateIndicator() throws Exception {
+        ChatView view = configured(mcp.url() + "/mcp");
+        waitUntil(() -> view.mcpButton().getData() == McpHub.State.CONNECTED);
+        view.input().setText("Проверь версию"); view.send();
+        waitUntil(() -> view.approvalBar().isShown());
+        mcp.close();
+        click(view.approvalBar().allowButton());
+        waitUntil(() -> view.mcpButton().getData() == McpHub.State.FAILED);
+        waitUntil(() -> !view.session().isBusy());
+        assertEquals("MCP 0/1", view.mcpButton().getText());
+
+        var dialog = PreferencesUtil.createPreferenceDialogOn(page.getWorkbenchWindow().getShell(), AiPreferencePage.ID, null, null);
+        dialog.setBlockOnOpen(false); dialog.open();
+        try {
+            var preferences = (AiPreferencePage) dialog.getSelectedPage();
+            preferences.serverViewer().setSelection(new StructuredSelection(preferences.current().mcpServers().get(0)));
+            preferences.checkServerButton().notifyListeners(SWT.Selection, new Event());
+            waitUntil(() -> preferences.serverResult().getText().contains("не работает"));
+            assertEquals(McpHub.State.FAILED, view.mcpButton().getData());
+        } finally { dialog.close(); }
+    }
+
+    @Test
+    void oneStartupProbePerViewNotPerChatAndReopenProbesAgain() throws Exception {
+        ChatView view = configured(mcp.url() + "/mcp");
+        waitUntil(() -> view.mcpButton().getData() == McpHub.State.CONNECTED);
+        long initial = pings();
+        assertEquals(1, initial);
+        view.newChatForTest(); view.newChatForTest(); settle();
+        assertEquals(initial, pings());
+        page.hideView(view);
+        ChatView reopened = showView();
+        waitUntil(() -> reopened.mcpButton().getData() == McpHub.State.CONNECTED);
+        assertEquals(initial + 1, pings());
+        assertTrue(reopened.mcpButton().getToolTipText().contains("Последняя проверка:"));
+    }
+
+    private long pings() {
+        return mcp.requests().stream().filter(request -> !request.body().isBlank())
+                .filter(request -> "ping".equals(Json.stringAt(Json.parseObject(request.body()), "method"))).count();
     }
 
     @Test

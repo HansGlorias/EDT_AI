@@ -59,6 +59,17 @@ class SettingsStoreTest {
     }
 
     @Test
+    void mcpIntervalRoundTripsAndModelSwitchPreservesIt() throws Exception {
+        assertEquals(5, store.load().mcpCheckMinutes());
+        for (int minutes : List.of(0, 3, 5, 10)) {
+            AiSettings value = new AiSettings(null, "", "", 0, "", 0, true, false, "", List.of(), 0, minutes);
+            store.save(value);
+            assertEquals(minutes, new SettingsStore(preferences, secure).load().mcpCheckMinutes());
+            assertEquals(minutes, value.withModel("other").mcpCheckMinutes());
+        }
+    }
+
+    @Test
     void savesAndLoadsSettings() throws Exception {
         AiSettings settings = new AiSettings(Protocol.ANTHROPIC, "https://llm.example.invalid", "test-model", 2048, "", 12_000, true, false,
                 "/etc/ssl/corp-ca.pem", List.of(

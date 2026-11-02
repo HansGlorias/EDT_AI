@@ -7,6 +7,9 @@ import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -15,6 +18,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.IntSupplier;
 
@@ -45,17 +51,34 @@ public final class McpHub implements AutoCloseable {
 
     private final Map<String, Connection> connections = new ConcurrentHashMap<>();
     /** Чем кончилось последнее подключение к серверу: для индикатора у поля ввода. */
-    private final Map<String, ServerStatus> lastStatus = new ConcurrentHashMap<>();
+    private final Map<McpServer, ServerStatus> lastStatus = new ConcurrentHashMap<>();
+    private final AtomicLong generation = new AtomicLong();
+    private final Object statusLock = new Object();
+    private final Runnable statusChanged;
+    private final Map<String, ReentrantLock> usage = new ConcurrentHashMap<>();
+    private final ConcurrentLinkedQueue<Connection> retired = new ConcurrentLinkedQueue<>();
+    private volatile boolean closed;
+    private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration PROBE_BUDGET = Duration.ofSeconds(10);
     private final Duration callTimeout;
     /** Пауза перед повтором вызова, пока EDT собирает проект; в тестах — короче. */
     volatile Duration buildRetryDelay = Duration.ofSeconds(3);
 
     public McpHub() {
-        this(CALL_TIMEOUT);
+        this(CALL_TIMEOUT, () -> { });
+    }
+
+    public McpHub(Runnable statusChanged) {
+        this(CALL_TIMEOUT, statusChanged);
     }
 
     McpHub(Duration callTimeout) {
+        this(callTimeout, () -> { });
+    }
+
+    private McpHub(Duration callTimeout, Runnable statusChanged) {
         this.callTimeout = callTimeout;
+        this.statusChanged = Objects.requireNonNull(statusChanged);
     }
 
     private record Connection(McpServer server, TrustSettings trust, McpClient client, List<McpToolInfo> tools) {
@@ -71,6 +94,7 @@ public final class McpHub implements AutoCloseable {
     public List<Tool> tools(List<McpServer> servers, TrustSettings trust, Set<String> reserved, IntSupplier limit,
             Consumer<ToolUse> problems) {
         List<Tool> tools = new ArrayList<>();
+        long version = generation.get();
         Set<String> taken = new HashSet<>(reserved);
         // Этот встроенный инструмент появится лениво, после первого большого результата.
         taken.add("read_tool_result");
@@ -79,19 +103,18 @@ public final class McpHub implements AutoCloseable {
                 continue;
             }
             if (server.transport() == McpTransport.STDIO) {
-                remember(new ServerStatus(server, State.UNSUPPORTED, "", "", List.of()));
+                remember(new ServerStatus(server, State.UNSUPPORTED, "", "", List.of()), version);
                 problems.accept(problem(server, "stdio пока не поддерживается, нужен адрес http://…/mcp"));
                 continue;
             }
             Connection connection;
             try {
-                connection = connect(server, trust);
+                connection = connect(server, trust, version);
             } catch (McpException e) {
-                remember(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of()));
+                remember(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of(), Instant.now()), version);
                 problems.accept(problem(server, e.getMessage()));
                 continue;
             }
-            remember(new ServerStatus(server, State.CONNECTED, "", connection.client().serverName(), connection.tools()));
             int allowed = 0;
             for (McpToolInfo info : connection.tools()) {
                 if (server.allowsTool(info.name())) {
@@ -116,16 +139,85 @@ public final class McpHub implements AutoCloseable {
      * @return описание для пользователя
      */
     public String check(McpServer server, TrustSettings trust) throws McpException {
+        return checkDetails(server, trust).text();
+    }
+
+    /** Проверка и имя сервера из serverInfo, без версии. */
+    public record CheckResult(String text, String name, boolean deferred) {
+        public CheckResult(String text, String name) { this(text, name, false); }
+    }
+
+    public CheckResult checkDetails(McpServer server, TrustSettings trust) throws McpException {
+        return checkDetails(server, trust, revision());
+    }
+
+    public long revision() { return generation.get(); }
+
+    public CheckResult checkDetails(McpServer server, TrustSettings trust, long version) throws McpException {
+        if (closed || version != generation.get()) throw new McpException("Настройки MCP изменились до начала проверки");
         if (server.transport() == McpTransport.STDIO) {
+            remember(new ServerStatus(server, State.UNSUPPORTED, "", "", List.of()), version);
             throw new McpException("Транспорт stdio пока не поддерживается: укажите адрес http://…/mcp");
         }
-        forget(server.name());
-        Connection connection = connect(server, trust);
-        int all = connection.tools().size();
-        long allowed = connection.tools().stream().filter(info -> server.allowsTool(info.name())).count();
+        ReentrantLock gate = gate(server);
+        if (!gate.tryLock()) return new CheckResult("Сервер занят: проверка отложена", "", true);
+        ServerStatus previous = lastStatus(List.of(server)).get(0);
+        remember(new ServerStatus(server, State.CHECKING, "", previous.serverName(), previous.tools(), previous.checkedAt()), version);
+        // Отдельная короткая сессия: не верим кэшу и не прерываем вызов инструмента в живом чате.
+        try (McpClient client = probeClient(server, trust)) {
+            client.initialize();
+            List<McpToolInfo> tools = List.copyOf(client.listTools());
+            remember(new ServerStatus(server, State.CONNECTED, "", client.serverName(), tools, Instant.now()), version);
+            return new CheckResult(checkText(server, client.serverName(), tools), client.serverTitle());
+        } catch (McpException e) {
+            remember(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of(), Instant.now()), version);
+            throw e;
+        } finally {
+            gate.unlock();
+            closeRetired();
+        }
+    }
+
+    /** Доступность транспорта, без вызова бизнес-инструментов. false — занятый сервер отложен. */
+    public boolean refreshAvailability(List<McpServer> servers, TrustSettings trust) {
+        long version = generation.get();
+        boolean complete = true;
+        for (McpServer server : servers) {
+            if (closed || generation.get() != version) return true;
+            if (!server.enabled()) continue;
+            if (server.transport() != McpTransport.HTTP) {
+                remember(new ServerStatus(server, State.UNSUPPORTED, "", "", List.of()), version);
+                continue;
+            }
+            ReentrantLock gate = gate(server);
+            if (!gate.tryLock()) { complete = false; continue; }
+            ServerStatus previous = lastStatus(List.of(server)).get(0);
+            remember(new ServerStatus(server, State.CHECKING, "", previous.serverName(), previous.tools(), previous.checkedAt()), version);
+            try (McpClient client = probeClient(server, trust)) {
+                client.initialize();
+                client.ping();
+                remember(new ServerStatus(server, State.CONNECTED, "", client.serverName(), previous.tools(), Instant.now()), version);
+            } catch (McpException e) {
+                remember(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of(), Instant.now()), version);
+            } finally {
+                gate.unlock();
+                closeRetired();
+            }
+        }
+        closeRetired();
+        return complete;
+    }
+
+    private McpClient probeClient(McpServer server, TrustSettings trust) throws McpException {
+        return new McpClient(uri(server), httpClient(uri(server), trust), PROBE_TIMEOUT, PROBE_BUDGET);
+    }
+
+    private static String checkText(McpServer server, String serverName, List<McpToolInfo> tools) {
+        int all = tools.size();
+        long allowed = tools.stream().filter(info -> server.allowsTool(info.name())).count();
         StringBuilder text = new StringBuilder("Подключено");
-        if (!connection.client().serverName().isEmpty()) {
-            text.append(": ").append(connection.client().serverName());
+        if (!serverName.isEmpty()) {
+            text.append(": ").append(serverName);
         }
         text.append(". Инструментов: ").append(all);
         if (allowed != all) {
@@ -133,7 +225,7 @@ public final class McpHub implements AutoCloseable {
         }
         text.append('.');
         if (allowed > MANY_TOOLS) {
-            int size = connection.tools().stream().filter(info -> server.allowsTool(info.name()))
+            int size = tools.stream().filter(info -> server.allowsTool(info.name()))
                     .mapToInt(info -> info.description().length() + Json.write(info.inputSchema()).length()).sum();
             text.append(" Описания займут около ").append(size / 1000).append(" тыс. символов в каждом запросе к модели —"
                     + " лучше перечислить нужные инструменты в поле «Инструменты».");
@@ -143,7 +235,7 @@ public final class McpHub implements AutoCloseable {
 
     /** Состояние сервера для окна {@code /mcp}. */
     public enum State {
-        CONNECTED, FAILED, DISABLED, UNSUPPORTED,
+        CONNECTED, FAILED, DISABLED, UNSUPPORTED, CHECKING,
         /** Ещё не подключались: после запуска или изменения настроек. */
         UNKNOWN
     }
@@ -155,7 +247,11 @@ public final class McpHub implements AutoCloseable {
      * @param serverName как сервер назвал себя при подключении
      * @param tools      все инструменты сервера; модели уходят те, что пропускает фильтр сервера
      */
-    public record ServerStatus(McpServer server, State state, String message, String serverName, List<McpToolInfo> tools) {
+    public record ServerStatus(McpServer server, State state, String message, String serverName, List<McpToolInfo> tools, Instant checkedAt) {
+
+        public ServerStatus(McpServer server, State state, String message, String serverName, List<McpToolInfo> tools) {
+            this(server, state, message, serverName, tools, null);
+        }
 
         public ServerStatus {
             message = Objects.requireNonNullElse(message, "");
@@ -174,10 +270,18 @@ public final class McpHub implements AutoCloseable {
                 case DISABLED -> "Выключен";
                 case UNSUPPORTED -> "stdio пока не поддерживается, нужен адрес http://…/mcp";
                 case FAILED -> "Не подключён: " + message;
-                case UNKNOWN -> "Ещё не проверялся";
-                case CONNECTED -> "Подключено" + (serverName.isEmpty() ? "" : ": " + serverName) + ". Инструментов: " + tools.size()
-                        + ", модели доступно: " + allowed().size();
+                case UNKNOWN -> "Ещё не проверялся" + (message.isEmpty() ? "" : ". " + message);
+                case CHECKING -> "Проверяется связь" + (message.isEmpty() ? "" : ". " + message);
+                case CONNECTED -> "Подключено" + (serverName.isEmpty() ? "" : ": " + serverName)
+                        + (tools.isEmpty() ? ". Доступен транспорт MCP; инструменты не запрашивались"
+                                : ". Инструментов: " + tools.size() + ", модели доступно: " + allowed().size())
+                        + (message.isEmpty() ? "" : ". " + message);
             };
+        }
+
+        public String checkedTime() {
+            return checkedAt == null ? "Ещё не проверялся" : "Последняя проверка: "
+                    + DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault()).format(checkedAt);
         }
     }
 
@@ -187,16 +291,11 @@ public final class McpHub implements AutoCloseable {
      * перед ответом.
      */
     public List<ServerStatus> status(List<McpServer> servers, TrustSettings trust) {
-        List<ServerStatus> result = new ArrayList<>();
-        try {
-            check(servers, trust, result);
-        } finally {
-            result.forEach(this::remember);
-        }
-        return result;
+        return status(servers, trust, revision());
     }
 
-    private void check(List<McpServer> servers, TrustSettings trust, List<ServerStatus> result) {
+    public List<ServerStatus> status(List<McpServer> servers, TrustSettings trust, long version) {
+        List<ServerStatus> result = new ArrayList<>();
         for (McpServer server : servers) {
             if (!server.enabled()) {
                 result.add(new ServerStatus(server, State.DISABLED, "", "", List.of()));
@@ -204,17 +303,39 @@ public final class McpHub implements AutoCloseable {
                 result.add(new ServerStatus(server, State.UNSUPPORTED, "", "", List.of()));
             } else {
                 try {
-                    Connection connection = connect(server, trust);
-                    result.add(new ServerStatus(server, State.CONNECTED, "", connection.client().serverName(), connection.tools()));
+                    CheckResult check = checkDetails(server, trust, version);
+                    ServerStatus last = lastStatus(List.of(server)).get(0);
+                    result.add(check.deferred() ? new ServerStatus(server, last.state(),
+                            (last.message().isEmpty() ? "" : last.message() + ". ") + check.text(), last.serverName(), last.tools(), last.checkedAt()) : last);
                 } catch (McpException e) {
-                    result.add(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of()));
+                    result.add(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of(), Instant.now()));
                 }
             }
         }
+        result.forEach(status -> remember(status, version));
+        return result;
     }
 
     private void remember(ServerStatus status) {
-        lastStatus.put(status.server().name(), status);
+        remember(status, generation.get());
+    }
+
+    private void remember(ServerStatus status, long version) {
+        boolean changed = false;
+        synchronized (statusLock) {
+            if (!closed && generation.get() == version) {
+                ServerStatus previous = lastStatus.get(status.server());
+                if (previous != null && previous.checkedAt() != null && status.checkedAt() != null
+                        && status.checkedAt().isBefore(previous.checkedAt())) return;
+                changed = !status.equals(lastStatus.put(status.server(), status));
+            }
+        }
+        if (changed) statusChanged.run();
+    }
+
+    /** Итог независимой проверки в настройках; вызывающий проверяет, что настройки ещё актуальны. */
+    public void recordCheck(ServerStatus status) {
+        remember(status);
     }
 
     /**
@@ -225,7 +346,7 @@ public final class McpHub implements AutoCloseable {
     public List<ServerStatus> lastStatus(List<McpServer> servers) {
         List<ServerStatus> result = new ArrayList<>();
         for (McpServer server : servers) {
-            ServerStatus last = lastStatus.get(server.name());
+            ServerStatus last = lastStatus.get(server);
             if (!server.enabled()) {
                 result.add(new ServerStatus(server, State.DISABLED, "", "", List.of()));
             } else if (last != null && last.server().equals(server)) {
@@ -249,6 +370,7 @@ public final class McpHub implements AutoCloseable {
         if (servers.isEmpty()) {
             return "MCP";
         }
+        if (servers.stream().anyMatch(server -> server.state() == State.CHECKING)) return "MCP …/" + servers.size();
         return "MCP " + servers.stream().filter(server -> server.state() == State.CONNECTED).count() + "/" + servers.size();
     }
 
@@ -268,13 +390,17 @@ public final class McpHub implements AutoCloseable {
             state = State.FAILED;
         } else if (enabled.stream().allMatch(server -> server.state() == State.CONNECTED)) {
             state = State.CONNECTED;
+        } else if (enabled.stream().anyMatch(server -> server.state() == State.CHECKING)) {
+            state = State.CHECKING;
         } else {
             state = State.UNKNOWN;
         }
         StringBuilder text = new StringBuilder();
         for (ServerStatus server : servers) {
-            text.append(text.isEmpty() ? "" : "\n").append(server.server().name()).append(": ").append(server.summary());
+            text.append(text.isEmpty() ? "" : "\n").append(server.server().name()).append(": ").append(server.summary())
+                    .append(". ").append(server.checkedTime());
         }
+        text.append("\nПроверяется транспорт MCP; успешность отдельных инструментов зависит от сервера и проекта.");
         return new Health(state, text.toString());
     }
 
@@ -308,18 +434,34 @@ public final class McpHub implements AutoCloseable {
 
     /** Имена инструментов сервера: для подсказки в настройках. */
     public List<String> toolNames(McpServer server, TrustSettings trust) throws McpException {
-        return connect(server, trust).tools().stream().map(McpToolInfo::name).toList();
+        return connect(server, trust, revision()).tools().stream().map(McpToolInfo::name).toList();
     }
 
     McpCallResult call(McpServer server, String tool, Map<String, Object> arguments) throws ToolException {
+        long version = generation.get();
         Connection connection = connections.get(server.name());
-        if (connection == null) {
+        if (connection == null || !connection.server().target().equals(server.target())
+                || connection.server().transport() != server.transport()) {
             throw new ToolException(ToolUse.Problem.SERVER, "MCP-сервер «" + server.name() + "» отключён");
         }
+        ReentrantLock gate = gate(server);
+        gate.lock();
         try {
-            return connection.client().callTool(tool, arguments);
+            if (connections.get(server.name()) != connection) throw new ToolException(ToolUse.Problem.SERVER, "Подключение MCP изменилось");
+            McpCallResult result = connection.client().callTool(tool, arguments);
+            if (connections.get(server.name()) == connection) {
+                remember(new ServerStatus(server, State.CONNECTED, "", connection.client().serverName(), connection.tools(), Instant.now()), version);
+            }
+            return result;
         } catch (McpException e) {
+            if (connections.get(server.name()) == connection
+                    && !e.remoteError() && !Thread.currentThread().isInterrupted()) {
+                remember(new ServerStatus(server, State.FAILED, e.getMessage(), "", List.of(), Instant.now()), version);
+            }
             throw new ToolException(problem(e), e.getMessage());
+        } finally {
+            gate.unlock();
+            closeRetired();
         }
     }
 
@@ -337,45 +479,95 @@ public final class McpHub implements AutoCloseable {
 
     /** Закрывает подключения: например, после изменения настроек. */
     public void reset() {
-        for (String name : List.copyOf(connections.keySet())) {
-            forget(name);
+        invalidateConfiguration();
+        closeRetired();
+    }
+
+    /** Без сети и без прерывания начатых инструментов; старые сессии закрываются после освобождения. */
+    public void invalidateConfiguration() {
+        synchronized (statusLock) {
+            generation.incrementAndGet();
+            lastStatus.clear();
+            retired.addAll(connections.values());
+            connections.clear();
         }
-        lastStatus.clear();
+        statusChanged.run();
+    }
+
+    /** Без сети: устаревшие проверки после смены настроек больше не публикуются. */
+    public void invalidateStatus() {
+        synchronized (statusLock) {
+            generation.incrementAndGet();
+            lastStatus.clear();
+        }
+        statusChanged.run();
     }
 
     @Override
     public void close() {
+        closed = true;
         reset();
     }
 
-    private synchronized Connection connect(McpServer server, TrustSettings trust) throws McpException {
+    private synchronized Connection connect(McpServer server, TrustSettings trust, long version) throws McpException {
+        if (closed || version != generation.get()) throw new McpException("Настройки MCP изменились до подключения");
         Connection current = connections.get(server.name());
-        if (current != null && current.server().target().equals(server.target()) && current.trust().equals(trust)) {
+        ServerStatus previous = lastStatus.get(server);
+        if (current != null && current.server().target().equals(server.target()) && current.trust().equals(trust)
+                && current.server().transport() == server.transport() && (previous == null || previous.state() != State.FAILED)) {
             return current;
         }
         forget(server.name());
+        ReentrantLock gate = gate(server);
         McpClient client = new McpClient(uri(server), httpClient(uri(server), trust), callTimeout);
+        gate.lock();
         try {
             client.initialize();
             List<McpToolInfo> tools = List.copyOf(client.listTools());
-            if (tools.isEmpty()) {
-                // Пустой список не запоминаем: EDT-MCP сразу после запуска EDT может ещё не зарегистрировать инструменты.
-                throw new McpException("сервер не вернул ни одного инструмента. Если EDT только что запущена, повторите вопрос"
-                        + " чуть позже");
-            }
+            requireTools(tools);
             Connection connection = new Connection(server, trust, client, tools);
-            connections.put(server.name(), connection);
+            synchronized (statusLock) {
+                if (closed || generation.get() != version) throw new McpException("Настройки MCP изменились во время подключения");
+                connections.put(server.name(), connection);
+            }
+            remember(new ServerStatus(server, State.CONNECTED, "", client.serverName(), tools, Instant.now()), version);
             return connection;
         } catch (McpException e) {
             client.close();
             throw e;
+        } finally {
+            gate.unlock();
+            closeRetired();
         }
     }
 
-    private synchronized void forget(String name) {
+    private static void requireTools(List<McpToolInfo> tools) throws McpException {
+        if (tools.isEmpty()) {
+            throw new McpException("сервер не вернул ни одного инструмента. Если EDT только что запущена, повторите вопрос чуть позже");
+        }
+    }
+
+    private void forget(String name) {
         Connection connection = connections.remove(name);
         if (connection != null) {
-            connection.client().close();
+            retired.add(connection);
+            closeRetired();
+        }
+    }
+
+    private ReentrantLock gate(McpServer server) {
+        return usage.computeIfAbsent(server.transport() + ":" + server.target(), key -> new ReentrantLock());
+    }
+
+    private void closeRetired() {
+        for (Connection connection : retired) {
+            ReentrantLock gate = gate(connection.server());
+            if (!gate.tryLock()) continue;
+            try {
+                if (retired.remove(connection)) connection.client().close();
+            } finally {
+                gate.unlock();
+            }
         }
     }
 
@@ -383,7 +575,7 @@ public final class McpHub implements AutoCloseable {
         try {
             URI uri = new URI(server.target());
             String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
-            if (!scheme.equals("http") && !scheme.equals("https") || uri.getHost() == null) {
+            if (!scheme.equals("http") && !scheme.equals("https") || uri.getHost() == null || uri.getPort() == 0 || uri.getPort() > 65535) {
                 throw new McpException("Адрес MCP-сервера «" + server.target() + "»: нужен http://… или https://…");
             }
             return uri;
