@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -55,6 +56,8 @@ public final class GitTools {
 
     static final int DEFAULT_LOG = 15;
     static final int MAX_LOG = 100;
+    /** До скольких коммитов считать всего и по авторам. */
+    static final int MAX_COUNTED_LOG = 10_000;
     static final int MAX_STATUS = 300;
 
     private final WorkspaceFiles files;
@@ -225,8 +228,9 @@ public final class GitTools {
 
         @Override
         public String description() {
-            return "История коммитов git: хеш, дата, автор, сообщение. module — история одного модуля (кто и когда его"
-                    + " менял). Что изменил коммит — git_diff с commit.";
+            return "История коммитов git: в первой строке — всего коммитов и авторы по всей истории, ниже последние коммиты"
+                    + " (хеш, дата, автор, сообщение). module — история одного модуля (кто и когда его менял)."
+                    + " Что изменил коммит — git_diff с commit (и module, чтобы только в этом модуле).";
         }
 
         @Override
@@ -248,20 +252,38 @@ public final class GitTools {
                     return new Result("В репозитории ещё нет коммитов.", "коммитов нет");
                 }
                 int max = Math.max(1, Math.min(MAX_LOG, number(input, "max_count", DEFAULT_LOG)));
-                LogCommand log = git.log().setMaxCount(max);
+                // Вся история, а не max: на «сколько коммитов и кто менял» модель иначе отвечает по первым 15.
+                LogCommand log = git.log().setMaxCount(MAX_COUNTED_LOG);
                 String module = text(input, "module");
                 String path = module.isEmpty() ? opened.prefix() : opened.repositoryPath(ProjectTools.modulePath(opened.project(), module));
                 if (!path.isEmpty()) {
                     log.addPath(path);
                 }
                 List<String> lines = new ArrayList<>();
+                Map<String, Integer> authors = new LinkedHashMap<>();
+                int total = 0;
                 for (RevCommit commit : log.call()) {
-                    lines.add(describe(commit));
+                    total++;
+                    authors.merge(commit.getAuthorIdent().getName(), 1, Integer::sum);
+                    if (lines.size() < max) {
+                        lines.add(describe(commit));
+                    }
                 }
                 if (lines.isEmpty()) {
                     return new Result("Коммитов" + (module.isEmpty() ? "" : " с модулем " + module) + " нет.", "коммитов нет");
                 }
-                return new Result(String.join("\n", lines), "коммитов: " + lines.size());
+                String counted = total >= MAX_COUNTED_LOG ? "не меньше " + total : String.valueOf(total);
+                StringBuilder head = new StringBuilder("Всего коммитов" + (module.isEmpty() ? "" : " с модулем") + ": " + counted);
+                if (lines.size() < total) {
+                    head.append(" (ниже последние ").append(lines.size()).append("; больше — max_count до ").append(MAX_LOG).append(')');
+                }
+                head.append(". Авторы (имя в git, коммитов): ");
+                head.append(String.join(", ", authors.entrySet().stream()
+                        .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+                        .map(entry -> entry.getKey() + " " + entry.getValue()).toList()));
+                head.append('.');
+                return new Result(head + "\n" + String.join("\n", lines),
+                        lines.size() < total ? "показано " + lines.size() + " из " + counted : "коммитов: " + total);
             } catch (GitAPIException | IOException e) {
                 throw new ToolException("git log не выполнен: " + e.getMessage());
             }
