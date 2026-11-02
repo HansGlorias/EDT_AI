@@ -98,6 +98,8 @@ class ChatSessionTest {
 
         CompletableFuture<ChatMessage> reply = session.send("вопрос");
         assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase());
+        provider.part("\n\n");
+        assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase(), "переводы строк — ещё не ответ");
         provider.onReasoning.run();
         assertEquals(ReplyActivity.Phase.REASONING, session.activity().phase());
         provider.part("Смотрю.");

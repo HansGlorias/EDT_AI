@@ -396,7 +396,8 @@ public final class ChatSession {
                 return;
             }
             request.text.append(part);
-            if (request.activity.phase() != ReplyActivity.Phase.WRITING) {
+            // Пробелы и переводы строк — ещё не ответ: Qwen шлёт их перед вызовом инструмента.
+            if (request.activity.phase() != ReplyActivity.Phase.WRITING && !part.isBlank()) {
                 request.activity = request.activity.next(ReplyActivity.Phase.WRITING, "");
             }
             put(request, request.text.toString(), Status.STREAMING);
