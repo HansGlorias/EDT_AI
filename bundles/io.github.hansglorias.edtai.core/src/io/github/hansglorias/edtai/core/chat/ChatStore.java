@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -25,7 +26,8 @@ import io.github.hansglorias.edtai.core.json.JsonException;
  * Все диалоги: по файлу {@link ChatHistoryFile} на диалог в одном каталоге.
  * Название диалога — начало первого вопроса или данное пользователем
  * (хранится отдельно, в {@code titles.json}: файл диалога переписывается на
- * каждом сообщении), порядок — по времени последнего изменения.
+ * каждом сообщении), порядок — по времени последнего изменения. Модель,
+ * привязанная к диалогу, — тоже отдельно, в {@code models.json}.
  */
 public final class ChatStore {
 
@@ -37,6 +39,7 @@ public final class ChatStore {
     private static final String SUFFIX = ".json";
     private static final String CURRENT = "current.txt";
     private static final String TITLES = "titles.json";
+    private static final String MODELS = "models.json";
     private static final DateTimeFormatter ID = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
     /**
@@ -109,7 +112,7 @@ public final class ChatStore {
 
     private static boolean isChat(Path path) {
         String name = path.getFileName().toString();
-        return name.endsWith(SUFFIX) && !name.equals(TITLES);
+        return name.endsWith(SUFFIX) && !name.equals(TITLES) && !name.equals(MODELS);
     }
 
     private static boolean matches(List<String> words, String title, List<ChatMessage> messages) {
@@ -176,6 +179,49 @@ public final class ChatStore {
         Files.writeString(directory.resolve(TITLES), Json.write(titles), StandardCharsets.UTF_8);
     }
 
+    /** Модель, привязанная к диалогу; нет или файл повреждён — {@link ChatModel#NONE}. */
+    public ChatModel model(String id) {
+        Object entry = models().get(id);
+        return entry == null ? ChatModel.NONE
+                : new ChatModel(Json.stringAt(entry, "model"), Json.stringAt(entry, "baseUrl"));
+    }
+
+    /** Привязывает модель к диалогу; {@link ChatModel#NONE} — снять привязку. */
+    public void setModel(String id, ChatModel model) throws IOException {
+        Map<String, Object> models = models();
+        Object before = models.get(id);
+        if (model.isEmpty()) {
+            models.remove(id);
+        } else {
+            models.put(id, Json.object("model", model.model(), "baseUrl", model.baseUrl()));
+        }
+        if (!Objects.equals(before, models.get(id))) {
+            writeModels(models);
+        }
+    }
+
+    private Map<String, Object> models() {
+        Map<String, Object> models = new LinkedHashMap<>();
+        Path file = directory.resolve(MODELS);
+        if (Files.isRegularFile(file)) {
+            try {
+                Json.parseObject(Files.readString(file, StandardCharsets.UTF_8)).forEach((id, entry) -> {
+                    if (Json.stringAt(entry, "model") != null) {
+                        models.put(id, entry);
+                    }
+                });
+            } catch (IOException | JsonException e) {
+                // Чаты отвечают моделью из настроек.
+            }
+        }
+        return models;
+    }
+
+    private void writeModels(Map<String, Object> models) throws IOException {
+        Files.createDirectories(directory);
+        Files.writeString(directory.resolve(MODELS), Json.write(models), StandardCharsets.UTF_8);
+    }
+
     /** Последний изменённый диалог. */
     public Optional<String> latest() throws IOException {
         return list().stream().findFirst().map(Entry::id);
@@ -204,6 +250,10 @@ public final class ChatStore {
         Map<String, String> titles = titles();
         if (titles.remove(id) != null) {
             writeTitles(titles);
+        }
+        Map<String, Object> models = models();
+        if (models.remove(id) != null) {
+            writeModels(models);
         }
     }
 
