@@ -40,6 +40,7 @@ public final class ChatStore {
     private static final String CURRENT = "current.txt";
     private static final String TITLES = "titles.json";
     private static final String MODELS = "models.json";
+    private static final String CONTEXTS = "contexts.json";
     private static final DateTimeFormatter ID = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
     /**
@@ -112,7 +113,7 @@ public final class ChatStore {
 
     private static boolean isChat(Path path) {
         String name = path.getFileName().toString();
-        return name.endsWith(SUFFIX) && !name.equals(TITLES) && !name.equals(MODELS);
+        return name.endsWith(SUFFIX) && !name.equals(TITLES) && !name.equals(MODELS) && !name.equals(CONTEXTS);
     }
 
     private static boolean matches(List<String> words, String title, List<ChatMessage> messages) {
@@ -222,6 +223,50 @@ public final class ChatStore {
         Files.writeString(directory.resolve(MODELS), Json.write(models), StandardCharsets.UTF_8);
     }
 
+    /**
+     * Сколько окна модели занял последний запрос этого диалога, токенов; -1 — неизвестно. Хранится,
+     * чтобы после перезапуска EDT индикатор окна показывал то же, что в конце ответа: оценка по одной
+     * истории меньше — в ней нет системного промпта, описаний и результатов инструментов.
+     */
+    public long context(String id) {
+        return contexts().getOrDefault(id, -1L);
+    }
+
+    public void setContext(String id, long tokens) throws IOException {
+        Map<String, Long> contexts = contexts();
+        Long before = contexts.get(id);
+        if (tokens < 0) {
+            contexts.remove(id);
+        } else {
+            contexts.put(id, tokens);
+        }
+        if (!java.util.Objects.equals(before, contexts.get(id))) {
+            writeContexts(contexts);
+        }
+    }
+
+    private Map<String, Long> contexts() {
+        Map<String, Long> contexts = new LinkedHashMap<>();
+        Path file = directory.resolve(CONTEXTS);
+        if (Files.isRegularFile(file)) {
+            try {
+                Json.parseObject(Files.readString(file, StandardCharsets.UTF_8)).forEach((id, value) -> {
+                    if (value instanceof Number number && number.longValue() >= 0) {
+                        contexts.put(id, number.longValue());
+                    }
+                });
+            } catch (IOException | JsonException e) {
+                // Индикатор покажет оценку по истории.
+            }
+        }
+        return contexts;
+    }
+
+    private void writeContexts(Map<String, Long> contexts) throws IOException {
+        Files.createDirectories(directory);
+        Files.writeString(directory.resolve(CONTEXTS), Json.write(contexts), StandardCharsets.UTF_8);
+    }
+
     /** Последний изменённый диалог. */
     public Optional<String> latest() throws IOException {
         return list().stream().findFirst().map(Entry::id);
@@ -254,6 +299,10 @@ public final class ChatStore {
         Map<String, Object> models = models();
         if (models.remove(id) != null) {
             writeModels(models);
+        }
+        Map<String, Long> contexts = contexts();
+        if (contexts.remove(id) != null) {
+            writeContexts(contexts);
         }
     }
 

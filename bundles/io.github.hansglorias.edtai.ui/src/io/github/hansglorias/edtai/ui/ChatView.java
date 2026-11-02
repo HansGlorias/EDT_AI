@@ -265,6 +265,8 @@ public class ChatView extends ViewPart {
         MessageEdit edit;
         /** Модель чата: им он и отвечает; пустая — модель из настроек до первой отправки. */
         volatile ChatModel model;
+        /** Окно последнего запроса из прошлого запуска EDT, токенов; -1 — нет. */
+        volatile long savedContext;
 
         boolean hasDraft() {
             return edit != null || !draft.text().isEmpty() || !draft.context().isEmpty() || !draft.files().isEmpty();
@@ -273,6 +275,7 @@ public class ChatView extends ViewPart {
         Live(String id) {
             this.id = id;
             model = chats.model(id);
+            savedContext = chats.context(id);
             session = newSession(this);
             session.addListener(liveListener(this));
         }
@@ -319,6 +322,9 @@ public class ChatView extends ViewPart {
                     chat.touched.clear();
                     lateKey = null;
                     chat.toolActivity.reset();
+                }
+                if (!busy) {
+                    rememberContext(chat);
                 }
                 inUi(() -> {
                     if (!busy) {
@@ -2266,6 +2272,19 @@ public class ChatView extends ViewPart {
         }
     }
 
+    /** Окно последнего запроса — в contexts.json: после перезапуска кольцо покажет то же число. */
+    private void rememberContext(Live chat) {
+        long context = chat.session.liveContext();
+        if (context > 0 && context != chat.savedContext) {
+            chat.savedContext = context;
+            try {
+                chats.setContext(chat.id, context);
+            } catch (IOException e) {
+                // До перезапуска кольцо и так знает окно из ответа.
+            }
+        }
+    }
+
     private void bindModel(Live chat, ChatModel model) {
         chat.model = model;
         try {
@@ -3231,7 +3250,11 @@ public class ChatView extends ViewPart {
         }
         long used = session.liveContext();
         boolean estimated;
-        if (used < 0) {
+        if (used < 0 && current != null && current.savedContext > 0) {
+            // Перезапуск EDT: окно последнего запроса из прошлого раза, а не одна история без промпта и инструментов.
+            used = current.savedContext;
+            estimated = true;
+        } else if (used < 0) {
             used = estimate();
             estimated = true;
         } else {

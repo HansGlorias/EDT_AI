@@ -63,6 +63,13 @@ class ChatModelTest {
         reopened.setModel(second, ChatModel.NONE);
         assertEquals(ChatModel.NONE, reopened.model(second));
 
+        reopened.setContext(second, 45_000);
+        assertEquals(45_000, new ChatStore(temp.resolve("chats")).context(second), "окно последнего запроса переживает перезапуск");
+        assertEquals(-1, reopened.context(first));
+        assertEquals(1, reopened.list().size(), "contexts.json — не диалог");
+        reopened.delete(second);
+        assertEquals(-1, reopened.context(second), "удалённый чат забывает окно");
+
         Files.writeString(temp.resolve("chats/models.json"), "{не json");
         assertEquals(ChatModel.NONE, new ChatStore(temp.resolve("chats")).model(second), "повреждённый файл — модель из настроек");
     }
