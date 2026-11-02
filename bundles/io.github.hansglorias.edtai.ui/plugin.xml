@@ -101,12 +101,31 @@
             sequence="M1+M3+A">
       </key>
    </extension>
-   <!-- #TextEditorContext — меню текстовых редакторов Eclipse, его же использует
-        BSL-редактор EDT на Xtext. Проверяется руками в EDT. -->
+   <!-- Подменю «EDT AI» в контекстном меню редактора. #TextEditorContext — меню
+        текстовых редакторов Eclipse; у BSL-редактора EDT своё меню #BslEditorContext
+        (в него же добавляют пункты примеры 1С: dt-example-plugins, v8-code-style).
+        Нет группы additions — E4 ставит пункт в конец меню. -->
    <extension point="org.eclipse.ui.menus">
       <menuContribution locationURI="popup:#TextEditorContext?after=additions">
          <menu
                id="io.github.hansglorias.edtai.ui.editorMenu"
+               icon="icons/edtai.png"
+               label="EDT AI">
+            <command
+                  commandId="io.github.hansglorias.edtai.ui.askAboutSelection"
+                  icon="icons/edtai.png"
+                  label="Спросить о выделенном"
+                  style="push">
+            </command>
+            <separator name="actions" visible="true"/>
+            <command commandId="io.github.hansglorias.edtai.ui.explainSelection" style="push"/>
+            <command commandId="io.github.hansglorias.edtai.ui.reviewSelection" style="push"/>
+            <command commandId="io.github.hansglorias.edtai.ui.refactorSelection" style="push"/>
+         </menu>
+      </menuContribution>
+      <menuContribution locationURI="popup:#BslEditorContext?after=additions">
+         <menu
+               id="io.github.hansglorias.edtai.ui.bslEditorMenu"
                icon="icons/edtai.png"
                label="EDT AI">
             <command
