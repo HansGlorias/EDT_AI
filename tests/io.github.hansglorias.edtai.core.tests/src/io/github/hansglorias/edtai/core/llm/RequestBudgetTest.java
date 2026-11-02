@@ -28,7 +28,8 @@ class RequestBudgetTest {
         assertEquals((32_768 - 4096) * 3, RequestBudget.chars(connection(0, 32_768)));
         assertEquals((32_768 - 1000) * 3, RequestBudget.chars(connection(1000, 32_768)));
         assertEquals(3000 * 3, RequestBudget.chars(connection(0, 4000)), "на ответ — не больше четверти окна");
-        assertEquals(1000 * 3, RequestBudget.chars(connection(100_000, 4000)), "запросу — хотя бы четверть окна");
+        assertEquals(0, RequestBudget.chars(connection(100_000, 4000)), "невозможный резерв не оставляет искусственную четверть окна");
+        assertEquals(Integer.MAX_VALUE, RequestBudget.chars(connection(1, Integer.MAX_VALUE)));
     }
 
     @Test

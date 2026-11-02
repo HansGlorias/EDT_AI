@@ -171,7 +171,8 @@ final class AgentLoop {
      * Запрос под окно модели: сначала вместо результатов старых шагов —
      * пометка {@link #OMITTED}, потом обрезается история.
      */
-    private FittedRequest prepare() {
+    private FittedRequest prepare() throws ModelException {
+        RequestBudget.requireInputSpace(connection());
         int budget = RequestBudget.chars(connection()) >> shrink;
         int omitted = 0;
         List<Object> extra = transcript.project(adapter, omitted);
@@ -205,6 +206,7 @@ final class AgentLoop {
                 FittedRequest fitted = prepare();
                 ModelConnection connection = connection();
                 PreparedRequest request = PreparedRequest.prepare(connection, fitted.history(), fitted.extra(), tools);
+                RequestBudget.requireFits(connection, request, RequestBudget.chars(connection) >> shrink);
                 ModelReply reply = await(client.request(connection, request, this::text));
                 TokenUsage estimate = estimate(request.estimatedInputChars(), reply);
                 TokenUsage step = reply.usage() == null ? estimate : reply.usage().fillMissing(estimate);

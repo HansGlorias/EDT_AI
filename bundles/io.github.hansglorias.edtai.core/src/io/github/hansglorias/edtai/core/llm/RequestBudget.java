@@ -2,6 +2,7 @@ package io.github.hansglorias.edtai.core.llm;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.function.ToIntFunction;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
@@ -11,8 +12,7 @@ import io.github.hansglorias.edtai.core.tools.Tool;
 
 /**
  * Бюджет запроса: сколько символов можно отправить модели, чтобы запрос
- * вместе с ответом поместился в её окно. Токены не считаем — оцениваем с
- * запасом: {@value #CHARS_PER_TOKEN} символа на токен (кириллица и код).
+ * вместе с ответом укладывался в оценку окна. Токены не считаем — эвристика: {@value #CHARS_PER_TOKEN} символа на токен (кириллица и код).
  * Если не помещается, сначала не передаётся код, прикреплённый к старым
  * сообщениям, потом сами старые сообщения; последний вопрос остаётся всегда.
  */
@@ -27,9 +27,45 @@ final class RequestBudget {
 
     /** Бюджет в символах тела запроса. */
     static int chars(ModelConnection connection) {
-        int window = connection.window();
-        int reserve = connection.maxTokens() > 0 ? connection.maxTokens() : Math.min(ANSWER_RESERVE, window / 4);
-        return Math.max(window / 4, window - reserve) * CHARS_PER_TOKEN;
+        return chars(connection.window(), reserve(connection.window(), OutputPolicy.maxTokens(connection)));
+    }
+
+    private static int reserve(int window, OptionalInt maxTokens) {
+        return maxTokens.orElse(Math.min(ANSWER_RESERVE, window / 4));
+    }
+
+    private static int chars(int window, int reserve) {
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, (long) window - reserve) * CHARS_PER_TOKEN);
+    }
+
+    /** Невозможный резерв — ошибка настройки, до сокращения истории и HTTP. */
+    static void requireInputSpace(ModelConnection connection) throws ModelException {
+        int reserve = reserve(connection.window(), OutputPolicy.maxTokens(connection));
+        if (reserve >= connection.window()) {
+            throw new ModelException("Лимит ответа " + reserve + " токенов при окне " + connection.window()
+                    + " токенов не оставляет места для запроса. Уменьшите лимит ответа или укажите реальное окно сервера.");
+        }
+    }
+
+    static void requireFits(ModelConnection connection, PreparedRequest request) throws ModelException {
+        int reserve = reserve(connection.window(), request.maxTokens());
+        requireFits(connection, request, chars(connection.window(), reserve));
+    }
+
+    /** Лимит может быть меньше обычного после серверного отказа по размеру окна. */
+    static void requireFits(ModelConnection connection, PreparedRequest request, int budget) throws ModelException {
+        int reserve = reserve(connection.window(), request.maxTokens());
+        if (reserve >= connection.window() || request.estimatedInputChars() > budget) {
+            throw failure(connection.window(), reserve, request.estimatedInputChars(), budget, request.maxTokens().isEmpty());
+        }
+    }
+
+    private static ModelException failure(int window, int reserve, int inputChars, int budget, boolean assumedReserve) {
+        return new ModelException("Запрос не помещается в оценочный бюджет: вход ≈" + ((inputChars + 2L) / CHARS_PER_TOKEN)
+                + " токенов (" + inputChars + " условных символов), доступно " + budget + " условных символов; резерв ответа "
+                + reserve + (assumedReserve ? " токенов (предположение плагина, max_tokens не отправлен)" : " токенов (max_tokens)")
+                + ", окно " + window + " токенов. Уменьшите лимит ответа или размер запроса либо укажите реальное окно сервера."
+                + " Это оценка, а не точная токенизация.");
     }
 
     /** Оценочный размер входа в условных символах; картинки учитываются эвристикой. */

@@ -184,7 +184,7 @@ class AgentResultPagingTest {
             });
             servers.add(server);
 
-            assertEquals("done", run(protocol, server, List.of(source, other), use -> { }).get(10, TimeUnit.SECONDS));
+            assertEquals("done", run(protocol, server, List.of(source, other), use -> { }, 16384).get(10, TimeUnit.SECONDS));
             String omitted = results(protocol, server.requests().get(4)).get(0).text();
             assertTrue(omitted.contains("result_id: " + id.get()), "ссылка пережила сокращение запроса");
             assertFalse(omitted.contains("receipt-start:"));
@@ -210,8 +210,13 @@ class AgentResultPagingTest {
 
     private static CompletableFuture<String> run(Protocol protocol, FakeModelServer server, List<Tool> tools,
             Consumer<ToolUse> onTool) {
+        return run(protocol, server, tools, onTool, 8192);
+    }
+
+    private static CompletableFuture<String> run(Protocol protocol, FakeModelServer server, List<Tool> tools,
+            Consumer<ToolUse> onTool, int window) {
         ModelConnection connection = new ModelConnection(protocol, server.url(), "test-model", "", 512, "",
-                new TrustSettings(false, Optional.empty()), 8192);
+                new TrustSettings(false, Optional.empty()), window);
         return new ModelChatProvider(() -> connection, new ModelClient(), problems -> tools, ToolApprover.ALLOW_ALL)
                 .reply(List.of(ChatMessage.of(ChatRole.USER, "test task")), text -> { }, onTool);
     }
