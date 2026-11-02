@@ -124,6 +124,7 @@ import io.github.hansglorias.edtai.core.chat.ChatHistoryFile;
 import io.github.hansglorias.edtai.core.chat.ChatListener;
 import io.github.hansglorias.edtai.core.chat.ChatMarkdown;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
+import io.github.hansglorias.edtai.core.chat.ChatModel;
 import io.github.hansglorias.edtai.core.chat.ReplyActivity;
 import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
@@ -215,6 +216,9 @@ public class ChatView extends ViewPart {
 
     /** Как часто перерисовывать ленту во время стриминга. */
     private static final int REFRESH_DELAY_MS = 40;
+    /** Длинный ответ перерисовываем реже: разметка всего сообщения дорожает с его длиной. */
+    private static final int LONG_REFRESH_DELAY_MS = 120;
+    private static final int LONG_ANSWER_CHARS = 6000;
     private static final int MIN_INPUT_LINES = 2;
     private static final int MAX_INPUT_LINES = 10;
     private static final int NOTICE_MS = 4000;
@@ -258,6 +262,8 @@ public class ChatView extends ViewPart {
         /** Ввод припаркованного чата; правка никогда не меняет историю до отправки. */
         Draft draft = Draft.empty();
         MessageEdit edit;
+        /** Модель чата: им он и отвечает; пустая — модель из настроек до первой отправки. */
+        volatile ChatModel model;
 
         boolean hasDraft() {
             return edit != null || !draft.text().isEmpty() || !draft.context().isEmpty() || !draft.files().isEmpty();
@@ -265,6 +271,7 @@ public class ChatView extends ViewPart {
 
         Live(String id) {
             this.id = id;
+            model = chats.model(id);
             session = newSession(this);
             session.addListener(liveListener(this));
         }
@@ -280,7 +287,7 @@ public class ChatView extends ViewPart {
 
     private ChatSession newSession(Live chat) {
         return new ChatSession(
-            ModelChatProvider.forStore(SettingsStore.workspace(), new ModelClient(), new ToolSource() {
+            ModelChatProvider.forStore(SettingsStore.workspace(), loaded -> chat.model.apply(loaded), new ModelClient(), new ToolSource() {
                 @Override
                 public List<Tool> tools(Consumer<ToolUse> problems) {
                     return ChatView.this.tools(chat, problems);
@@ -306,6 +313,8 @@ public class ChatView extends ViewPart {
             @Override
             public void busyChanged(boolean busy) {
                 if (busy) {
+                    // Первая отправка закрепляет за чатом модель, которой он отвечает.
+                    bindModel(chat, chat.model.isEmpty() ? ChatModel.of(SettingsStore.workspace().load()) : chat.model);
                     chat.touched.clear();
                     lateKey = null;
                     chat.toolActivity.reset();
@@ -541,6 +550,10 @@ public class ChatView extends ViewPart {
     private final IPreferenceChangeListener preferenceListener = event -> inUi(() -> {
         AiSettings previous = settings;
         settings = SettingsStore.workspace().load();
+        if (current != null && !previous.model().equals(settings.model())) {
+            // Модель сменили (меню, /model или настройки) — открытый чат дальше отвечает ею.
+            useModel(current, ChatModel.of(settings));
+        }
         if (session.provider() instanceof ModelChatProvider provider) {
             provider.forgetRejections();
         }
@@ -1200,6 +1213,8 @@ public class ChatView extends ViewPart {
     private void show(Live chat, List<ChatMessage> messages) {
         Live previous = current;
         if (previous != null) {
+            // Уведомление было о прежнем чате (например, «Модель: …»), в другом оно сбивает с толку.
+            notice = null;
             previous.session.removeListener(chatListener);
             previous.approval = approvalBar.park();
             if (!queueBar.isEmpty()) {
@@ -1234,6 +1249,11 @@ public class ChatView extends ViewPart {
         scrollToEnd = !session.messages().isEmpty();
         if (previous != null) {
             markBusy(session.isBusy());
+            // У каждого чата своя модель: кнопка, окно и строка состояния — по ней.
+            updateModelButton();
+            estimated = null;
+            window = session.provider().window();
+            updateEmptyState();
             // Действия ленты принадлежат Live, даже если сообщения двух чатов совпадают.
             rendered.clear();
             history.setText("");
@@ -2210,18 +2230,43 @@ public class ChatView extends ViewPart {
         if (modelButton == null || modelButton.isDisposed()) {
             return;
         }
-        String text = settings.model().isEmpty() ? "Модель" : ModelChoices.label(settings.model(), 28);
+        AiSettings chat = chatSettings();
+        String text = chat.model().isEmpty() ? "Модель" : ModelChoices.label(chat.model(), 28);
         if (!text.equals(modelButton.getText())) {
             modelButton.setText(text);
             modelButton.getParent().layout(true, true);
         }
-        modelButton.setToolTipText(settings.model().isEmpty() ? "Модель не выбрана: щелчок — выбрать"
-                : "Модель: " + settings.model() + " · " + host(settings.baseUrl()) + "\nЩелчок — сменить (/model)");
+        modelButton.setToolTipText(chat.model().isEmpty() ? "Модель не выбрана: щелчок — выбрать"
+                : "Модель: " + chat.model() + " · " + host(chat.baseUrl()) + "\nЩелчок — сменить (/model)");
     }
 
     /** Модели для меню: текущая, недавние, с сервера. */
     List<String> modelChoices() {
-        return ModelChoices.merge(settings.model(), ModelChoices.parse(preferences().get(recentModelsKey(), "")), serverModels);
+        return ModelChoices.merge(chatSettings().model(), ModelChoices.parse(preferences().get(recentModelsKey(), "")), serverModels);
+    }
+
+    /** Настройки открытого чата: с его моделью, если она привязана к этому серверу. */
+    AiSettings chatSettings() {
+        Live chat = current;
+        return chat == null ? settings : chat.model.apply(settings);
+    }
+
+    /** Новая модель чата: у ещё не отправленного — только в памяти, иначе и в {@code models.json}. */
+    private void useModel(Live chat, ChatModel model) {
+        if (chat.saved.isEmpty() && !chat.session.isBusy()) {
+            chat.model = model;
+        } else {
+            bindModel(chat, model);
+        }
+    }
+
+    private void bindModel(Live chat, ChatModel model) {
+        chat.model = model;
+        try {
+            chats.setModel(chat.id, model);
+        } catch (IOException e) {
+            // До перезапуска EDT чат помнит модель в памяти, потом — модель из настроек.
+        }
     }
 
     /** Недавние модели — у каждого сервера свои. */
@@ -2349,7 +2394,7 @@ public class ChatView extends ViewPart {
         for (String name : modelChoices()) {
             MenuItem item = new MenuItem(menu, SWT.RADIO);
             item.setText(name);
-            item.setSelection(name.equals(settings.model()));
+            item.setSelection(name.equals(chatSettings().model()));
             item.addListener(SWT.Selection, event -> {
                 if (item.getSelection()) {
                     chooseModel(name);
@@ -2383,10 +2428,14 @@ public class ChatView extends ViewPart {
         return line.length() <= max ? line : line.substring(0, max - 1) + "…";
     }
 
-    /** Выбор модели: в настройки (со следующего запроса), в недавние. */
+    /**
+     * Выбор модели: открытому чату (со следующего запроса), в настройки — её получат новые чаты,
+     * в недавние.
+     */
     void chooseModel(String name) {
         String model = name.strip();
-        if (model.isEmpty() || model.equals(settings.model())) {
+        String before = chatSettings().model();
+        if (model.isEmpty() || model.equals(before)) {
             return;
         }
         try {
@@ -2395,8 +2444,9 @@ public class ChatView extends ViewPart {
             showNotice("Модель не сохранить: " + e.getMessage());
             return;
         }
+        useModel(current, new ChatModel(model, settings.baseUrl()));
         // Прежняя — тоже в недавние: к ней обычно возвращаются.
-        List<String> recent = ModelChoices.remember(ModelChoices.parse(preferences().get(recentModelsKey(), "")), settings.model());
+        List<String> recent = ModelChoices.remember(ModelChoices.parse(preferences().get(recentModelsKey(), "")), before);
         preferences().put(recentModelsKey(), ModelChoices.format(ModelChoices.remember(recent, model)));
         settings = SettingsStore.workspace().load();
         updateModelButton();
@@ -2787,7 +2837,7 @@ public class ChatView extends ViewPart {
         inUi(() -> {
             if (!refreshScheduled) {
                 refreshScheduled = true;
-                history.getDisplay().timerExec(REFRESH_DELAY_MS, () -> {
+                history.getDisplay().timerExec(refreshDelay(), () -> {
                     refreshScheduled = false;
                     if (!history.isDisposed()) {
                         refresh();
@@ -2795,6 +2845,14 @@ public class ChatView extends ViewPart {
                 });
             }
         });
+    }
+
+    private int refreshDelay() {
+        if (!session.isBusy() || rendered.isEmpty()) {
+            return REFRESH_DELAY_MS;
+        }
+        return rendered.get(rendered.size() - 1).message().text().length() > LONG_ANSWER_CHARS ? LONG_REFRESH_DELAY_MS
+                : REFRESH_DELAY_MS;
     }
 
     /**
@@ -2837,6 +2895,9 @@ public class ChatView extends ViewPart {
 
             StringBuilder text = new StringBuilder();
             List<StyleRange> styles = new ArrayList<>();
+            // Без перерисовки до конца: иначе при стриминге видны промежуточные состояния —
+            // текст без стилей, ленту до прокрутки, пропавшие пузыри. Это и мелькало.
+            history.setRedraw(false);
             updatingHistory = true;
             try {
                 for (int i = first; i < messages.size(); i++) {
@@ -2847,16 +2908,24 @@ public class ChatView extends ViewPart {
                     rendered.add(new Rendered(messages.get(i), actions.get(i), files.get(i), expanded.get(i), from, codeRanges, placement,
                             pending(messages.get(i), pending)));
                 }
-                history.replaceTextRange(start, history.getCharCount() - start, text.toString());
+                // Меняем только хвост, который отличается: при стриминге начало ответа не переразмечается,
+                // выделение в нём не сбрасывается.
+                String shown = history.getTextRange(start, history.getCharCount() - start);
+                String fresh = text.toString();
+                int same = commonPrefix(shown, fresh);
+                if (same < shown.length() || same < fresh.length()) {
+                    history.replaceTextRange(start + same, shown.length() - same, fresh.substring(same));
+                }
                 history.replaceStyleRanges(start, text.length(), styles.toArray(StyleRange[]::new));
+                layoutMessages(first);
+                if (atBottom || scrollToEnd) {
+                    history.setTopPixel(Integer.MAX_VALUE);
+                }
             } finally {
                 updatingHistory = false;
+                history.setRedraw(true);
             }
-            layoutMessages(first);
             history.redraw();
-            if (atBottom || scrollToEnd) {
-                history.setTopPixel(Integer.MAX_VALUE);
-            }
             if (scrollToEnd) {
                 scrollToEnd = false;
                 // При первом показе вида размеры ленты ещё не известны: прокручиваем и после компоновки.
@@ -3047,6 +3116,19 @@ public class ChatView extends ViewPart {
         return style != null && style.data instanceof MessageRenderer.Hint hint ? hint.text() : null;
     }
 
+    /** Длина общего начала; суррогатную пару и перевод строки \r\n не разрезает. */
+    static int commonPrefix(String a, String b) {
+        int limit = Math.min(a.length(), b.length());
+        int same = 0;
+        while (same < limit && a.charAt(same) == b.charAt(same)) {
+            same++;
+        }
+        if (same > 0 && (Character.isHighSurrogate(a.charAt(same - 1)) || a.charAt(same - 1) == '\r')) {
+            same--;
+        }
+        return same;
+    }
+
     private boolean isScrolledToBottom() {
         int bottom = history.getLinePixel(history.getLineCount());
         return bottom <= history.getClientArea().height + history.getLineHeight();
@@ -3098,7 +3180,7 @@ public class ChatView extends ViewPart {
         boolean configured = settings.isConfigured();
         String title = configured ? "Чем помочь?" : "Модель не настроена";
         String text = configured
-                ? "Задайте вопрос модели " + settings.model() + ". Enter — отправить, Shift+Enter — новая строка,"
+                ? "Задайте вопрос модели " + chatSettings().model() + ". Enter — отправить, Shift+Enter — новая строка,"
                         + " Esc — остановить ответ. Чтобы спросить о коде, выделите его в модуле и нажмите Ctrl+Alt+A. Скриншот — Ctrl+V в поле ввода, файлы — кнопкой рядом с ним или перетаскиванием."
                 : "Укажите адрес сервера, протокол и модель в настройках EDT AI. Для локальной Ollama или"
                         + " LM Studio токен не нужен.";
@@ -3140,7 +3222,7 @@ public class ChatView extends ViewPart {
         } else if (!settings.isConfigured()) {
             text = "Модель не настроена";
         } else {
-            List<String> parts = new ArrayList<>(List.of(settings.model()));
+            List<String> parts = new ArrayList<>(List.of(chatSettings().model()));
             ReplyActivity activity = session.activity();
             TokenUsage usage = session.usage();
             if (approvalBar != null && approvalBar.isShown()) {
@@ -3161,7 +3243,7 @@ public class ChatView extends ViewPart {
         }
         if (!text.equals(status.getText())) {
             status.setText(text);
-            status.setToolTipText(settings.isConfigured() ? settings.model() + " · " + settings.baseUrl() : null);
+            status.setToolTipText(settings.isConfigured() ? chatSettings().model() + " · " + settings.baseUrl() : null);
             // Строка и так во всю ширину: перекомпоновка всего вида раз в секунду (счётчик секунд) дёргала ленту.
             if (status.computeSize(SWT.DEFAULT, SWT.DEFAULT).y != status.getSize().y) {
                 root.layout(new Control[] { status });

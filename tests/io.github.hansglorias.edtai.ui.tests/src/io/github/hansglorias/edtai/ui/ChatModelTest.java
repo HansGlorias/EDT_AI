@@ -14,6 +14,9 @@ import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.junit.jupiter.api.Test;
 
+import io.github.hansglorias.edtai.core.chat.ChatMessage;
+import io.github.hansglorias.edtai.core.chat.ChatModel;
+import io.github.hansglorias.edtai.core.chat.ChatStore;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
@@ -85,5 +88,46 @@ class ChatModelTest extends AbstractChatTest {
         server.requests().forEach(request -> requests.add(request.method() + " " + request.path()));
         assertEquals(List.of("GET /v1/models"), requests, "список загружен один раз, вопросов модели не было");
         assertFalse(view.session().isBusy());
+    }
+
+    /** У каждого чата своя модель: переключение чатов переключает и модель, новые чаты — с последней выбранной. */
+    @Test
+    void modelIsRememberedPerChat() throws Exception {
+        ChatView view = serverWithModels();
+        view.chooseModel("qwen3-32b");
+        ask(view, "Кто ты?");
+        assertTrue(view.history().getText().contains("Отвечает qwen3-32b"), view.history().getText());
+        String first = view.chats().list().get(0).id();
+
+        view.newChatForTest();
+        settle();
+        assertEquals("qwen3-32b", view.modelButton().getText(), "новый чат — с последней выбранной моделью");
+        view.chooseModel("deepseek-r1");
+        ask(view, "А ты?");
+        assertTrue(view.history().getText().contains("Отвечает deepseek-r1"), view.history().getText());
+        String second = view.chats().list().get(0).id();
+
+        view.openChatForTest(first);
+        settle();
+        assertEquals("qwen3-32b", view.modelButton().getText(), "открытый чат — со своей моделью");
+        assertTrue(view.status().getText().startsWith("qwen3-32b"), view.status().getText());
+        ask(view, "Ещё раз?");
+        List<ChatMessage> messages = view.session().messages();
+        assertEquals("Отвечает qwen3-32b", messages.get(messages.size() - 1).text());
+        assertEquals("deepseek-r1", SettingsStore.workspace().load().model(), "общая модель — последняя выбранная");
+
+        ChatStore saved = new ChatStore(stateLocation().resolve(ChatView.CHATS_DIRECTORY));
+        assertEquals("qwen3-32b", saved.model(first).model());
+        assertEquals("deepseek-r1", saved.model(second).model());
+
+        view.openChatForTest(second);
+        settle();
+        assertEquals("deepseek-r1", view.modelButton().getText());
+
+        // Сменили сервер — привязка к прежнему не действует, чат отвечает моделью из настроек.
+        SettingsStore.workspace().save(SettingsStore.workspace().load().withModel("test-model"));
+        settle();
+        assertEquals("test-model", view.modelButton().getText());
+        assertEquals(new ChatModel("test-model", server.url()), saved.model(second), "смена модели в настройках — открытому чату");
     }
 }

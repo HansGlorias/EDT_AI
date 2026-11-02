@@ -6,6 +6,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatProvider;
@@ -71,14 +72,28 @@ public final class ModelChatProvider implements ChatProvider {
 
     /** То же с инструментами. */
     public static ModelChatProvider forStore(SettingsStore store, ModelClient client, ToolSource tools, ToolApprover approver) {
-        return new ModelChatProvider(() -> connection(store), () -> ModelConnection.of(store.load(), ""), client, tools, approver);
+        return forStore(store, UnaryOperator.identity(), client, tools, approver);
+    }
+
+    /**
+     * То же, но настройки перед каждым запросом уточняет {@code adjust}:
+     * например, модель, привязанная к чату ({@link io.github.hansglorias.edtai.core.chat.ChatModel#apply}).
+     */
+    public static ModelChatProvider forStore(SettingsStore store, UnaryOperator<AiSettings> adjust, ModelClient client,
+            ToolSource tools, ToolApprover approver) {
+        return new ModelChatProvider(() -> connection(store, adjust), () -> ModelConnection.of(adjust.apply(store.load()), ""),
+                client, tools, approver);
     }
 
     /**
      * @throws ModelException если адрес или модель не заданы
      */
     public static ModelConnection connection(SettingsStore store) throws Exception {
-        AiSettings settings = store.load();
+        return connection(store, UnaryOperator.identity());
+    }
+
+    private static ModelConnection connection(SettingsStore store, UnaryOperator<AiSettings> adjust) throws Exception {
+        AiSettings settings = adjust.apply(store.load());
         if (!settings.isConfigured()) {
             throw new ModelException("Модель не настроена: укажите адрес сервера и модель в настройках EDT AI.");
         }
@@ -110,6 +125,12 @@ public final class ModelChatProvider implements ChatProvider {
     @Override
     public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
             Consumer<TokenUsage> onUsage) {
+        return reply(history, onText, onTool, onUsage, () -> { });
+    }
+
+    @Override
+    public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
+            Consumer<TokenUsage> onUsage, Runnable onReasoning) {
         ModelConnection connection;
         try {
             connection = source.get();
@@ -140,7 +161,7 @@ public final class ModelChatProvider implements ChatProvider {
             if (fitted.trimmed()) {
                 onTool.accept(fitted.notice());
             }
-            CompletableFuture<ModelReply> request = client.request(plain, prepared, onText);
+            CompletableFuture<ModelReply> request = client.request(plain, prepared, onText, onReasoning);
             CompletableFuture<String> text = request.thenApply(reply -> {
                 TokenUsage estimate = AgentLoop.estimate(prepared.estimatedInputChars(), reply);
                 onUsage.accept(reply.usage() == null ? estimate : reply.usage().fillMissing(estimate));
@@ -154,6 +175,7 @@ public final class ModelChatProvider implements ChatProvider {
             return text;
         }
         AgentLoop loop = new AgentLoop(client, connection, history, tools, approver, onText, onTool, onUsage);
+        loop.onReasoning(onReasoning);
         CompletableFuture<String> reply = loop.start();
         reply.whenComplete((answer, error) -> {
             if (loop.toolsRejected()) {

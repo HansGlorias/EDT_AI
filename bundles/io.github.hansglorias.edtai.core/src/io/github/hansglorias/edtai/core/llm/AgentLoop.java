@@ -54,6 +54,7 @@ final class AgentLoop {
     private final Consumer<String> onText;
     private final Consumer<ToolUse> onTool;
     private final Consumer<TokenUsage> onUsage;
+    private Runnable onReasoning = () -> { };
     private final ProtocolAdapter adapter;
     private final ToolSource source;
     private final ToolApprover approver;
@@ -103,6 +104,11 @@ final class AgentLoop {
         this.adapter = ProtocolAdapter.of(connection.protocol());
         this.resultStore = new ToolResultStore(Math.max(512, Math.min(6000, RequestBudget.chars(connection) / 8)), 1_000_000);
         this.resultReader = resultStore.tool();
+    }
+
+    /** Сообщать, что модель прислала часть рассуждения; до {@link #start()}. */
+    void onReasoning(Runnable value) {
+        onReasoning = value;
     }
 
     boolean toolsRejected() {
@@ -207,7 +213,7 @@ final class AgentLoop {
                 ModelConnection connection = connection();
                 PreparedRequest request = PreparedRequest.prepare(connection, fitted.history(), fitted.extra(), tools);
                 RequestBudget.requireFits(connection, request, RequestBudget.chars(connection) >> shrink);
-                ModelReply reply = await(client.request(connection, request, this::text));
+                ModelReply reply = await(client.request(connection, request, this::text, onReasoning));
                 TokenUsage estimate = estimate(request.estimatedInputChars(), reply);
                 TokenUsage step = reply.usage() == null ? estimate : reply.usage().fillMissing(estimate);
                 lastStep = step;

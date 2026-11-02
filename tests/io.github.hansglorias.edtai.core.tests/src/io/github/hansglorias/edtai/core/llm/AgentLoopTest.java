@@ -143,10 +143,20 @@ class AgentLoopTest {
             }
         });
 
-        String answer = run(Protocol.OPENAI_COMPATIBLE);
+        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()));
+        AtomicInteger reasoning = new AtomicInteger();
+        List<Integer> beforeText = new CopyOnWriteArrayList<>();
+        String answer = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(READ), ToolApprover.ALLOW_ALL)
+                .reply(HISTORY, part -> {
+                    beforeText.add(reasoning.get());
+                    parts.add(part);
+                }, uses::add, usage -> { }, reasoning::incrementAndGet).get(15, TimeUnit.SECONDS);
 
         assertEquals("В нём процедура А.", answer);
         assertEquals(String.join("", parts), answer);
+        assertEquals(3, reasoning.get(), "каждая часть рассуждения — сигнал для «рассуждает…»");
+        assertEquals(List.of(3), beforeText);
         List<Object> messages = chat(Json.parseObject(server.requests().get(1).body()));
         assertEquals("Надо прочитать модуль.", Json.stringAt(messages.get(1), "reasoning_content"));
         assertNull(Json.at(messages.get(1), "content"), "рассуждение не подмешивается в текст");
@@ -190,8 +200,13 @@ class AgentLoopTest {
             }
         });
 
-        String answer = run(Protocol.OPENAI_COMPATIBLE);
+        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()));
+        AtomicInteger reasoning = new AtomicInteger();
+        String answer = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(READ), ToolApprover.ALLOW_ALL)
+                .reply(HISTORY, parts::add, uses::add, usage -> { }, reasoning::incrementAndGet).get(15, TimeUnit.SECONDS);
 
+        assertTrue(reasoning.get() >= 1, "часть внутри <think> — сигнал для «рассуждает…»");
         assertEquals("Смотрю.\n\nГотово.", answer);
         assertEquals(String.join("", parts), answer);
         Object assistant = chat(Json.parseObject(server.requests().get(1).body())).get(1);

@@ -345,7 +345,7 @@ public final class ChatSession {
     private CompletableFuture<String> reply(Request request, List<ChatMessage> history) {
         request.activity = request.activity.next(ReplyActivity.Phase.THINKING, "");
         CompletableFuture<String> reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use),
-                tokens -> onUsage(request, tokens));
+                tokens -> onUsage(request, tokens), () -> onReasoning(request));
         request.inner = reply;
         return reply;
     }
@@ -399,6 +399,17 @@ public final class ChatSession {
             if (request.activity.phase() != ReplyActivity.Phase.WRITING) {
                 request.activity = request.activity.next(ReplyActivity.Phase.WRITING, "");
             }
+            put(request, request.text.toString(), Status.STREAMING);
+        }
+    }
+
+    /** Рассуждение меняет только «ожидает модель»: текст и инструмент важнее. */
+    private void onReasoning(Request request) {
+        synchronized (lock) {
+            if (request.finished || request.activity.phase() != ReplyActivity.Phase.THINKING) {
+                return;
+            }
+            request.activity = request.activity.next(ReplyActivity.Phase.REASONING, "");
             put(request, request.text.toString(), Status.STREAMING);
         }
     }

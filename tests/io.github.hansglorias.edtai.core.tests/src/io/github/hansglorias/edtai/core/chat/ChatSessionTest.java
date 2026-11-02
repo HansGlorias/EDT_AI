@@ -98,13 +98,19 @@ class ChatSessionTest {
 
         CompletableFuture<ChatMessage> reply = session.send("вопрос");
         assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase());
+        provider.onReasoning.run();
+        assertEquals(ReplyActivity.Phase.REASONING, session.activity().phase());
         provider.part("Смотрю.");
         assertEquals(ReplyActivity.Phase.WRITING, session.activity().phase());
+        provider.onReasoning.run();
+        assertEquals(ReplyActivity.Phase.WRITING, session.activity().phase(), "рассуждение не перебивает текст");
         provider.onTool.accept(new ToolUse("1", "read_module", "Читает модуль Общий", "", ToolUse.Status.RUNNING));
         assertEquals(new ReplyActivity(ReplyActivity.Phase.TOOL, "Читает модуль Общий", session.activity().started()),
                 session.activity());
         provider.onTool.accept(new ToolUse("1", "read_module", "Читает модуль Общий", "10 строк", ToolUse.Status.DONE));
         assertEquals(ReplyActivity.Phase.THINKING, session.activity().phase());
+        provider.onReasoning.run();
+        assertEquals(ReplyActivity.Phase.REASONING, session.activity().phase(), "после инструмента модель снова рассуждает");
         provider.onUsage.accept(new TokenUsage(100, 5, 105, false));
         provider.complete("Смотрю.");
         reply.get(TIMEOUT, TimeUnit.SECONDS);
@@ -708,6 +714,7 @@ class ChatSessionTest {
         Consumer<String> onText;
         Consumer<ToolUse> onTool = use -> { };
         Consumer<TokenUsage> onUsage = usage -> { };
+        Runnable onReasoning = () -> { };
         CompletableFuture<String> reply;
 
         @Override
@@ -729,6 +736,13 @@ class ChatSessionTest {
             onTool = tool;
             onUsage = usage;
             return reply(request, text);
+        }
+
+        @Override
+        public CompletableFuture<String> reply(List<ChatMessage> request, Consumer<String> text, Consumer<ToolUse> tool,
+                Consumer<TokenUsage> usage, Runnable reasoning) {
+            onReasoning = reasoning;
+            return reply(request, text, tool, usage);
         }
 
         void part(String text) {

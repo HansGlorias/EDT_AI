@@ -17,6 +17,7 @@ final class StreamState {
     private final StringBuilder text = new StringBuilder();
     private final Map<Integer, Builder> calls = new TreeMap<>();
     private final Consumer<String> onText;
+    private final Runnable onReasoning;
     private final ThinkFilter thinking = new ThinkFilter();
     private final StringBuilder reasoning = new StringBuilder();
     private String reasoningField = "";
@@ -25,13 +26,24 @@ final class StreamState {
     private long outputTokens = -1;
 
     StreamState(Consumer<String> onText) {
+        this(onText, () -> { });
+    }
+
+    /** @param onReasoning пришла часть рассуждения: в отдельном поле или внутри {@code <think>} */
+    StreamState(Consumer<String> onText, Runnable onReasoning) {
         this.onText = onText;
+        this.onReasoning = onReasoning;
     }
 
     /** Часть текста; рассуждения {@code <think>…</think>} не показываются и не сохраняются. */
     void text(String part) {
         if (part != null && !part.isEmpty()) {
-            visible(thinking.feed(part));
+            int thought = thinking.thoughtLength();
+            String shown = thinking.feed(part);
+            if (thinking.inside() || thinking.thoughtLength() > thought) {
+                onReasoning.run();
+            }
+            visible(shown);
         }
     }
 
@@ -47,6 +59,7 @@ final class StreamState {
             if (reasoningField.equals(field)) {
                 reasoning.append(part);
             }
+            onReasoning.run();
         }
     }
 
