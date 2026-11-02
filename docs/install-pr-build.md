@@ -1,9 +1,35 @@
 # Как установить пробную сборку PR или ветки
 
 Общий [update site](https://hansglorias.github.io/EDT_AI/) публикуется
-только при push в `main`. Для PR и ручного запуска job Pages имеет статус
-`skipped`, а установочный zip создаётся отдельным шагом Linux-сборки.
-Пробы до merge не публикуются на общем сайте.
+только при push в `main`. В обычном workflow `build` для PR и ручного
+запуска job Pages имеет статус `skipped`, а zip создаётся шагом Linux-сборки.
+В отдельной быстрой сборке job Pages вообще нет. Пробы до merge не
+публикуются на общем сайте.
+
+## Быстрый zip выбранной ветки без тестов
+
+При наличии прав записи:
+
+1. Откройте **Actions → Быстрая сборка ZIP (без тестов) → Run workflow**.
+2. В **Use workflow from** выберите нужную ветку, затем **Run workflow**.
+   Произвольные команды или дополнительные параметры вводить не нужно.
+3. Дождитесь успешного job `zip` и сверьте ref/полный SHA в его кратком итоге.
+4. В **Artifacts** скачайте `edtai-preview-<shortSHA>`; прямая ссылка есть
+   также в кратком итоге. Нужен вход в GitHub. Архив хранится 7 дней,
+   уже содержит установочный p2-site и не требует распаковки.
+5. В EDT: **Help → Install New Software… → Add… → Archive…** — выберите zip.
+   Остальные шаги — в разделе «Установить zip в EDT» ниже.
+
+Этот workflow делает один запуск `./mvnw -B -ntp verify -DskipTests` на
+Ubuntu с Java 17. Тесты, UI harness и публикация Pages не запускаются.
+Получается пробная сборка для ручной проверки; обязательные полные проверки
+`build` на Windows и Ubuntu перед merge сохраняются.
+
+Чтобы workflow появился в интерфейсе Actions, файл
+`.github/workflows/quick-build.yml` должен сначала попасть в `main`.
+Выбранная ветка также должна содержать этот файл с `workflow_dispatch`:
+в старых ветках его может ещё не быть. В таком случае обновите свою ветку
+из `main` или используйте уже доступный артефакт PR/локальную сборку ниже.
 
 ## Скачать сборку PR
 
@@ -27,7 +53,7 @@
 Порядок скачивания описан также в
 [документации GitHub](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
 
-## Запустить сборку выбранной ветки вручную
+## Запустить полную сборку выбранной ветки вручную
 
 При наличии прав записи: **Actions → build → Run workflow → Branch**,
 выберите нужную ветку, затем **Run workflow**. `workflow_dispatch` уже
@@ -63,7 +89,7 @@ java -version
 ## Установить zip в EDT
 
 1. **Help → Install New Software… → Add… → Archive…** — выберите скачанный
-   `edtai-update-site.zip` или локальный zip из `target`.
+   `edtai-preview-<shortSHA>.zip`, `edtai-update-site.zip` или локальный zip из `target`.
 2. Нажмите **Add**, отметьте **EDT AI**. Если список пуст, снимите
    **Group items by category**.
 3. Снимите **Contact all update sites during install to find required software**.

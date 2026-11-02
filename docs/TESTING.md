@@ -93,6 +93,12 @@ Eclipse 2023-12 и зависимости, поэтому требует дос�
 
 ## Update-site zip из CI
 
+Для быстрой личной пробы доступен отдельный ручной
+[quick-build.yml](../.github/workflows/quick-build.yml): один Ubuntu-job
+с `-DskipTests`, артефакт `edtai-preview-<shortSHA>` на 7 дней, без Pages.
+Это не обязательные проверки `build` и не замена их зелёного результата.
+Порядок выбора ветки и установки — в [инструкции](install-pr-build.md).
+
 Для пробы до merge можно установить артефакт успешного PR-прогона или
 запуска выбранной ветки через `workflow_dispatch`: см.
 [инструкцию пробных сборок](install-pr-build.md). `Pages: skipped` у этих

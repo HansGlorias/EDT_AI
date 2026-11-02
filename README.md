@@ -352,7 +352,14 @@ Network Connections**).
    на GitHub Pages после каждого слияния в `main`). Обновления потом —
    **Help → Check for Updates**.
 
-   **Сборку PR можно поставить до слияния:** в PR откройте проверку
+   **Быстрый zip без тестов:** **Actions → Быстрая сборка ZIP (без тестов) →
+   Run workflow → Use workflow from** — выберите ветку и запустите.
+   В **Artifacts** скачайте `edtai-preview-<shortSHA>` и установите zip через
+   **Archive…**. Workflow появится в интерфейсе после попадания в `main`;
+   в выбранной старой ветке тоже должен быть файл `quick-build.yml`.
+   Этот ручной запуск не публикует Pages и не заменяет обязательный CI.
+
+   **Сборку PR с проверками можно поставить до слияния:** в PR откройте проверку
    **build / ubuntu-latest → Details**, перейдите к **Summary** запуска
    и скачайте `edtai-update-site` из **Artifacts**. Дождитесь зелёных
    проверок Ubuntu и Windows нужной версии PR. Для скачивания войдите в GitHub.
