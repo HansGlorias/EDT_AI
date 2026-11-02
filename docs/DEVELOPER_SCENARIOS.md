@@ -231,6 +231,11 @@ reasoning on/off/бюджет, max output, temperature/top-p/top-k и seed.
 
 ## Метрики и полная стоимость задачи
 
+Для локальной сводки уже оценённых вручную прогонов есть
+[компактный JSON и генератор Markdown](scenarios/RESULTS.md).
+Он не запускает модель; примеры только синтетические. Подробные журналы
+ниже остаются источником для проверки полноты и происхождения метрик.
+
 Шаблоны: [runs.csv](scenarios/runs.csv), [requests.csv](scenarios/requests.csv),
 [tools.csv](scenarios/tools.csv), [human-waits.csv](scenarios/human-waits.csv).
 Хранить рядом конфигурацию, точные запросы/ответы локального тестового
