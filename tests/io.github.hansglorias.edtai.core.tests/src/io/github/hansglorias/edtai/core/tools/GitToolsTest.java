@@ -109,9 +109,16 @@ class GitToolsTest {
     void logOfModule() throws Exception {
         Tool.Result log = tools.get("git_log").call(Map.of("module", MODULE, "max_count", 1));
 
-        assertEquals("коммитов: 1", log.outcome());
-        assertTrue(log.text().matches("[0-9a-f]{7} \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d Тестов: Прощание вместо приветствия"), log.text());
-        assertEquals("коммитов: 2", tools.get("git_log").call(Map.of()).outcome());
+        String[] lines = log.text().split("\n");
+        assertEquals(2, lines.length, log.text());
+        assertTrue(lines[1].matches("[0-9a-f]{7} \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d Тестов: Прощание вместо приветствия"), log.text());
+        Tool.Result all = tools.get("git_log").call(Map.of());
+        assertEquals("коммитов: 2", all.outcome());
+        assertTrue(all.text().startsWith("Всего коммитов: 2. Авторы (имя в git, коммитов): Тестов 2."), all.text());
+        assertEquals(3, all.text().split("\n").length);
+        assertEquals("показано 1 из 2", log.outcome(), "список урезан, но итог — по всей истории модуля");
+        assertEquals("Всего коммитов с модулем: 2 (ниже последние 1; больше — max_count до 100)."
+                + " Авторы (имя в git, коммитов): Тестов 2.", lines[0]);
     }
 
     @Test
