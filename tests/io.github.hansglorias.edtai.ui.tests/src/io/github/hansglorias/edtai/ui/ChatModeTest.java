@@ -1,17 +1,21 @@
 package io.github.hansglorias.edtai.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
+import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.AgentMode;
 import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.json.Json;
+import io.github.hansglorias.edtai.core.settings.AgentModeStore;
+import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 /** Режим модели: кнопка у поля ввода и {@code /plan}. */
 class ChatModeTest extends AbstractChatTest {
@@ -20,6 +24,51 @@ class ChatModeTest extends AbstractChatTest {
         server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(openAiPart("Готово"), "data: [DONE]\n\n"), 0));
         configure(server);
         return showView();
+    }
+
+    @Test
+    void selectedModesSurviveBackingStoreReloadAndViewReopen() throws Exception {
+        ChatView view = showView();
+        var preferences = InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
+        for (AgentMode mode : List.of(AgentMode.AUTO, AgentMode.PLAN, AgentMode.ASK, AgentMode.AGENT)) {
+            choose(view.modeMenu(), mode.label() + " —");
+            savedMode();
+            preferences.put(ChatView.AGENT_MODE, mode == AgentMode.AUTO ? "AGENT" : "AUTO");
+            preferences.sync();
+            assertEquals(mode, ChatView.agentMode(), "режим заново прочитан с диска");
+            page.hideView(view);
+            view = showView();
+            assertEquals(mode.label(), view.modeButton().getText());
+            assertEquals(mode, ChatView.agentMode());
+        }
+    }
+
+    @Test
+    void reopeningLegacyWorkspaceDoesNotOverwriteMode() throws Exception {
+        var preferences = InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
+        preferences.putBoolean(ChatView.AUTO_APPROVE, true);
+        preferences.flush();
+        ChatView view = showView();
+        assertEquals("Авто", view.modeButton().getText());
+        assertNull(preferences.get(ChatView.AGENT_MODE, null));
+        page.hideView(view);
+        view = showView();
+        assertEquals("Авто", view.modeButton().getText());
+        assertNull(preferences.get(ChatView.AGENT_MODE, null), "открытие вида не сохраняет режим по умолчанию");
+
+        choose(view.modeMenu(), "Агент —");
+        savedMode();
+        preferences.put(ChatView.AGENT_MODE, "AUTO");
+        preferences.sync();
+        page.hideView(view);
+        view = showView();
+        assertEquals("Агент", view.modeButton().getText(), "явный выбор сохраняется поверх legacy-флажка");
+    }
+
+    private static void savedMode() {
+        var saving = AgentModeStore.workspace().pendingSave();
+        waitUntil(saving::isDone);
+        saving.join();
     }
 
     @Test

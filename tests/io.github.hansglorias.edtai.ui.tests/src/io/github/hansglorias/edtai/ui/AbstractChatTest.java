@@ -29,6 +29,7 @@ import org.osgi.framework.FrameworkUtil;
 
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
+import io.github.hansglorias.edtai.core.settings.AgentModeStore;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
@@ -70,6 +71,9 @@ abstract class AbstractChatTest {
 
     @AfterEach
     void cleanWorkbench() throws Exception {
+        var modeSaved = AgentModeStore.workspace().pendingSave();
+        waitUntil(modeSaved::isDone);
+        modeSaved.join();
         IViewPart view = page.findView(ChatView.ID);
         if (view != null) {
             page.hideView(view);
