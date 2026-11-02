@@ -399,6 +399,21 @@ class AgentLoopTest {
     }
 
     @Test
+    void partialUsageKeepsServerZeroAndEstimatesOnlyMissingField() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Ответ длиннее четырёх символов\"}}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":0}}\n\n",
+                "data: [DONE]\n\n"), 0));
+        runWithUsage(Protocol.OPENAI_COMPATIBLE);
+        TokenUsage usage = usages.get(0);
+        assertEquals(0, usage.input());
+        assertEquals(TokenUsage.Source.SERVER, usage.inputSource());
+        assertTrue(usage.output() > 0);
+        assertEquals(TokenUsage.Source.ESTIMATE, usage.outputSource());
+        assertEquals(TokenUsage.Source.MIXED, usage.contextSource());
+    }
+
+    @Test
     void usageWithoutServerDataIsEstimated() throws Exception {
         server = FakeModelServer.http().handler(this::oneToolCallThenText);
 

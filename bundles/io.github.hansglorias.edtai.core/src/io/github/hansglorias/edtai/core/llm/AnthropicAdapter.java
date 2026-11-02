@@ -125,7 +125,7 @@ final class AnthropicAdapter extends ProtocolAdapter {
         long input = input(usage);
         long output = tokens(usage, new Object[] { "output_tokens" });
         return new ModelReply(ThinkFilter.strip(text.toString()), calls, "max_tokens".equals(Json.stringAt(json, "stop_reason")),
-                input < 0 && output < 0 ? null : TokenUsage.step(Math.max(0, input), Math.max(0, output), false));
+                input < 0 && output < 0 ? null : TokenUsage.serverStep(input, output));
     }
 
     /** Вход с кэшем подсказок: кэшированные токены тоже занимают окно. */

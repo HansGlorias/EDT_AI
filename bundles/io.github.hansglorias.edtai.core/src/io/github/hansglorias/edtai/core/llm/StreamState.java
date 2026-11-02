@@ -79,7 +79,7 @@ final class StreamState {
             }
         }
         TokenUsage usage = inputTokens < 0 && outputTokens < 0 ? null
-                : TokenUsage.step(Math.max(0, inputTokens), Math.max(0, outputTokens), false);
+                : TokenUsage.serverStep(inputTokens, outputTokens);
         return new ModelReply(ThinkFilter.strip(text.toString()), result, truncated, usage);
     }
 

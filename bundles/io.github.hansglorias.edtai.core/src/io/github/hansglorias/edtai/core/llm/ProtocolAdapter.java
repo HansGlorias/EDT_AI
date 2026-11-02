@@ -45,7 +45,7 @@ abstract class ProtocolAdapter {
     static long tokens(Object json, Object[]... paths) {
         long sum = -1;
         for (Object[] path : paths) {
-            if (Json.at(json, path) instanceof Number number) {
+            if (Json.at(json, path) instanceof Number number && number.longValue() >= 0) {
                 sum = Math.max(sum, 0) + number.longValue();
             }
         }

@@ -98,7 +98,7 @@ final class OpenAiAdapter extends ProtocolAdapter {
         long output = tokens(usage, new Object[] { "completion_tokens" });
         return new ModelReply(ThinkFilter.strip(text != null ? text : ""), result,
                 "length".equals(Json.stringAt(json, "choices", 0, "finish_reason")),
-                input < 0 && output < 0 ? null : TokenUsage.step(Math.max(0, input), Math.max(0, output), false));
+                input < 0 && output < 0 ? null : TokenUsage.serverStep(input, output));
     }
 
     @Override
