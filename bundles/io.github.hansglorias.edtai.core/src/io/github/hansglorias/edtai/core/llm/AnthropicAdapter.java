@@ -29,7 +29,7 @@ final class AnthropicAdapter extends ProtocolAdapter {
 
     @Override
     Map<String, Object> body(ModelConnection connection, List<ChatMessage> history, List<Object> extra, List<Tool> tools) {
-        int maxTokens = connection.maxTokens() > 0 ? connection.maxTokens() : ModelConnection.ANTHROPIC_DEFAULT_MAX_TOKENS;
+        int maxTokens = OutputPolicy.maxTokens(connection).orElseThrow();
         Map<String, Object> body = mutable("model", connection.model(), "max_tokens", maxTokens);
         if (!connection.systemPrompt().isEmpty()) {
             body.put("system", connection.systemPrompt());

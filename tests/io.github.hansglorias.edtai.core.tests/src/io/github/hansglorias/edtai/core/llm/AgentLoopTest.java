@@ -532,7 +532,7 @@ class AgentLoopTest {
         });
         // Малое окно: старые страницы заменяются ссылками, последний результат ограничен страницей.
         ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
-                new TrustSettings(false, Optional.empty()), 1000);
+                new TrustSettings(false, Optional.empty()), 2400);
         ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(big),
                 ToolApprover.ALLOW_ALL);
 

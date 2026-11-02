@@ -33,9 +33,7 @@ final class OpenAiAdapter extends ProtocolAdapter {
         messages.addAll(extra);
         Map<String, Object> body = mutable("model", connection.model(), "messages", messages, "stream", true);
         // Без явного ограничения не передаём: часть моделей OpenAI не принимает max_tokens.
-        if (connection.maxTokens() > 0) {
-            body.put("max_tokens", connection.maxTokens());
-        }
+        OutputPolicy.maxTokens(connection).ifPresent(value -> body.put("max_tokens", value));
         if (!tools.isEmpty()) {
             List<Object> definitions = new ArrayList<>();
             for (Tool tool : tools) {

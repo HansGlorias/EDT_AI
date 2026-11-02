@@ -105,7 +105,10 @@ public final class ModelClient {
     CompletableFuture<ModelReply> request(ModelConnection connection, List<ChatMessage> history, List<Object> extra,
             List<Tool> tools, Consumer<String> onText) {
         try {
+            RequestBudget.requireInputSpace(connection);
             return request(connection, PreparedRequest.prepare(connection, history, extra, tools), onText);
+        } catch (ModelException e) {
+            return CompletableFuture.failedFuture(e);
         } catch (RuntimeException e) {
             return CompletableFuture.failedFuture(preparationError(connection, e));
         }
@@ -116,6 +119,11 @@ public final class ModelClient {
     }
 
     CompletableFuture<ModelReply> request(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText) {
+        try {
+            RequestBudget.requireFits(connection, prepared);
+        } catch (ModelException e) {
+            return CompletableFuture.failedFuture(e);
+        }
         CompletableFuture<ModelReply> result = new CompletableFuture<>();
         Exchange exchange = new Exchange(connection, prepared, onText, result);
         Thread thread = new Thread(exchange::run, "EDT AI: запрос к модели");

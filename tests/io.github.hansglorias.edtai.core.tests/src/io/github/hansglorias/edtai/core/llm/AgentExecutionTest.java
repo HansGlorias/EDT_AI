@@ -111,14 +111,19 @@ class AgentExecutionTest {
                 return new Tool.Result(original, "изменено", Attachment.review("[]"));
             });
             Tool read = tool("read", true, () -> new Tool.Result("other-" + "ю".repeat(7000), "прочитано"));
-            FakeModelServer server = script(protocol, List.of(calls(call("a", "write")), calls(call("b", "read")),
-                    calls(call("c", "write")), ModelReply.text("done")));
-            run(protocol, server, List.of(write, read), 1000, ToolApprover.ALLOW_ALL, uses::add).get(10, TimeUnit.SECONDS);
+            // Реальное малое окно: сначала накапливаем страницы, чтобы старый результат пришлось скрыть.
+            List<ModelReply> replies = new ArrayList<>();
+            replies.add(calls(call("a", "write")));
+            for (int i = 0; i < 8; i++) replies.add(calls(new ToolCall("other" + i, "read", "{\"part\":" + i + "}")));
+            replies.add(calls(call("c", "write")));
+            replies.add(ModelReply.text("done"));
+            FakeModelServer server = script(protocol, replies);
+            run(protocol, server, List.of(write, read), 8192, ToolApprover.ALLOW_ALL, uses::add).get(10, TimeUnit.SECONDS);
             assertEquals(1, writes.get(), protocol.name());
-            assertTrue(server.requests().get(2).body().contains("result_id"));
-            assertFalse(server.requests().get(2).body().contains("receipt-"));
-            assertTrue(server.requests().get(3).body().contains("receipt-"), "исходный результат не уничтожен");
-            assertTrue(server.requests().get(3).body().contains("не проверка текущего состояния"));
+            assertTrue(server.requests().get(9).body().contains("result_id"));
+            assertFalse(server.requests().get(9).body().contains("receipt-"));
+            assertTrue(server.requests().get(10).body().contains("receipt-"), "исходный результат не уничтожен");
+            assertTrue(server.requests().get(10).body().contains("не проверка текущего состояния"));
             assertEquals(1, uses.stream().filter(use -> use.file() != null).count());
         }
     }
@@ -151,13 +156,18 @@ class AgentExecutionTest {
             return new Tool.Result("read-attempt=" + attempt + "я".repeat(200), "прочитано");
         });
         Tool other = tool("other", true, () -> new Tool.Result("ю".repeat(7000), "прочитано"));
-        FakeModelServer server = script(Protocol.OPENAI_COMPATIBLE, List.of(calls(call("a", "read")),
-                calls(call("b", "other")), calls(call("c", "read")), calls(call("d", "read")), ModelReply.text("done")));
-        run(Protocol.OPENAI_COMPATIBLE, server, List.of(read, other), 1000, ToolApprover.ALLOW_ALL, use -> { })
+        List<ModelReply> replies = new ArrayList<>();
+        replies.add(calls(call("a", "read")));
+        for (int i = 0; i < 8; i++) replies.add(calls(new ToolCall("other" + i, "other", "{\"part\":" + i + "}")));
+        replies.add(calls(call("c", "read")));
+        replies.add(calls(call("d", "read")));
+        replies.add(ModelReply.text("done"));
+        FakeModelServer server = script(Protocol.OPENAI_COMPATIBLE, replies);
+        run(Protocol.OPENAI_COMPATIBLE, server, List.of(read, other), 8192, ToolApprover.ALLOW_ALL, use -> { })
                 .get(10, TimeUnit.SECONDS);
-        assertTrue(server.requests().get(2).body().contains(AgentTranscript.OMITTED));
+        assertTrue(server.requests().get(9).body().contains(AgentTranscript.OMITTED));
         assertEquals(3, reads.get(), "успешное прежнее чтение не расходует лимит восстановления после нового сбоя");
-        assertTrue(server.requests().get(4).body().contains("read-attempt=3"));
+        assertTrue(server.requests().get(11).body().contains("read-attempt=3"));
     }
 
     @Test

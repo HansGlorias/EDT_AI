@@ -128,9 +128,12 @@ public final class ModelChatProvider implements ChatProvider {
             RequestBudget.Fitted fitted;
             PreparedRequest prepared;
             try {
+                RequestBudget.requireInputSpace(plain);
                 fitted = RequestBudget.fit(history,
                         part -> RequestBudget.size(plain, part, List.of(), List.of()), RequestBudget.chars(plain));
                 prepared = PreparedRequest.prepare(plain, fitted.history(), List.of(), List.of());
+            } catch (ModelException e) {
+                return CompletableFuture.failedFuture(e);
             } catch (RuntimeException e) {
                 return CompletableFuture.failedFuture(ModelClient.preparationError(plain, e));
             }
@@ -195,7 +198,7 @@ public final class ModelChatProvider implements ChatProvider {
             return 0;
         }
         int budget = RequestBudget.chars(connection);
-        if (history.size() < 3 || RequestBudget.size(connection, history, List.of(), List.of()) <= budget / 2) {
+        if (budget == 0 || history.size() < 3 || RequestBudget.size(connection, history, List.of(), List.of()) <= budget / 2) {
             return 0;
         }
         int keep = history.size() - 1;
@@ -216,9 +219,10 @@ public final class ModelChatProvider implements ChatProvider {
         } catch (Exception e) {
             return CompletableFuture.failedFuture(e);
         }
-        String transcript = transcript(messages, RequestBudget.chars(connection) * 6 / 10);
+        ModelConnection summary = connection.withMaxTokens(SUMMARY_TOKENS);
+        String transcript = transcript(messages, (int) ((long) RequestBudget.chars(summary) * 6 / 10));
         ChatMessage prompt = ChatMessage.of(ChatRole.USER, SUMMARY_PROMPT + "\n\n" + transcript);
-        return client.stream(connection.withMaxTokens(SUMMARY_TOKENS), List.of(prompt), part -> { });
+        return client.stream(summary, List.of(prompt), part -> { });
     }
 
     /** Название по первому обмену: вопрос и начало ответа. */
