@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.chat.ContextGauge;
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
 
 /** Длинный ответ по частям: лента дописывает хвост, а не переписывает сообщение целиком. */
 class ChatStreamingTest extends AbstractChatTest {
@@ -77,6 +78,41 @@ class ChatStreamingTest extends AbstractChatTest {
 
         assertNull(view.session().usage(), "открыт заново: данных об ответе в памяти нет");
         assertEquals(answered.used(), view.contextRing().gauge().used());
+    }
+
+    /** /compact: пока сжимается — бегущая дуга, потом кольцо сразу меньше и плавно доходит до нового значения. */
+    @Test
+    void compactionShrinksRingWithAnimation() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (request.body().contains("Сожми переписку")) {
+                release.await(10, TimeUnit.SECONDS);
+                response.sse(List.of(openAiPart("Кратко: был вопрос."), "data: [DONE]\n\n"), 0);
+            } else {
+                response.sse(List.of(openAiPart("Подробный ответ. " + "слово ".repeat(1500)), "data: [DONE]\n\n"), 0);
+            }
+        });
+        configure(server);
+        ChatView view = showView();
+        ask(view, "Вопрос");
+        settle();
+        ContextGauge before = view.contextRing().gauge();
+
+        view.input().setText("/compact");
+        view.send();
+        waitUntil(() -> view.contextRing().isCompacting(), () -> view.status().getText());
+        assertTrue(view.contextRing().isAnimating(), "во время сжатия по кольцу бежит дуга");
+        Screenshots.capture(view.contextRing().getParent(), "context-ring-compacting");
+
+        release.countDown();
+        waitUntil(() -> !view.session().isBusy() && !view.contextRing().isCompacting(), () -> view.status().getText());
+        ContextGauge after = view.contextRing().gauge();
+        assertTrue(after.used() < before.used(), "сразу после сжатия — меньше: " + before + " → " + after);
+        waitUntil(() -> !view.contextRing().isAnimating());
+        assertEquals(after.ratio(), view.contextRing().shownRatio(), 0.001, "анимация дошла до нового значения");
+        // После уведомления «История сжата» — то же число, что у кольца, а не оценка одной истории.
+        waitUntil(() -> view.status().getText().contains(TokenUsage.describeEstimate(after.used(), after.window())),
+                () -> view.status().getText());
     }
 
     @Test
