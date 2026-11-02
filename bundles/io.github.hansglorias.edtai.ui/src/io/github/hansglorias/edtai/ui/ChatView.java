@@ -3261,6 +3261,7 @@ public class ChatView extends ViewPart {
             TokenUsage usage = session.usage();
             estimated = session.isBusy() || usage == null || usage.contextSource() != TokenUsage.Source.SERVER;
         }
+        contextRing.setCompacting(session.isCompacting());
         contextRing.setGauge(settings.isConfigured() && window > 0 ? new ContextGauge(used, window, estimated) : null);
     }
 
@@ -3281,6 +3282,9 @@ public class ChatView extends ViewPart {
                 parts.add(activity.describe(Instant.now()));
             } else if (usage != null) {
                 parts.add(usage.describe(window));
+            } else if (contextRing != null && contextRing.gauge() != null && contextRing.gauge().used() > 0) {
+                // То же число, что у кольца: после сжатия и перезапуска — с промптом и инструментами, не одна история.
+                parts.add(TokenUsage.describeEstimate(contextRing.gauge().used(), window));
             } else if (estimate() > 0) {
                 parts.add(TokenUsage.describeEstimate(estimate(), window));
             } else {

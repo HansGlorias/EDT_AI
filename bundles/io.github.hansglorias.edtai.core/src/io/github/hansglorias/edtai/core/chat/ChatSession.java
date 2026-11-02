@@ -32,6 +32,13 @@ public final class ChatSession {
     private Request current;
     /** Токены последнего ответа в этом диалоге; {@code null} — ответа ещё не было. */
     private volatile TokenUsage usage;
+    /**
+     * Сколько запрос занимает сверх истории, токенов: системный промпт, сведения о проекте, правила и
+     * описания инструментов. Замеряется по оценке первого запроса ответа; -1 — ещё не замерено.
+     */
+    private volatile long overhead = -1;
+    /** Окно после сжатия, до следующего запроса: сжатая история и {@link #overhead}; -1 — нет. */
+    private volatile long compacted = -1;
 
     public ChatSession(ChatProvider provider) {
         this.provider = provider;
@@ -74,7 +81,7 @@ public final class ChatSession {
         synchronized (lock) {
             TokenUsage known = usage;
             if (known == null || known.contextSource() == TokenUsage.Source.UNKNOWN) {
-                return -1;
+                return compacted;
             }
             Request request = current;
             return known.context() + (request == null || request.finished ? 0 : request.sinceUsage / STREAM_CHARS_PER_TOKEN);
@@ -88,6 +95,23 @@ public final class ChatSession {
             history = history();
         }
         return history.isEmpty() ? 0 : provider.estimateTokens(history);
+    }
+
+    /** Идёт сжатие истории: по команде или перед ответом. */
+    public boolean isCompacting() {
+        Request request = current;
+        return request != null && request.compacting && !request.finished;
+    }
+
+    /**
+     * История только что сжата: прежние данные об окне — о длинной истории. Дальше до запроса —
+     * оценка сжатой истории и того, что запрос несёт сверх неё. Под {@link #lock}.
+     */
+    private void afterCompaction() {
+        usage = null;
+        List<ChatMessage> history = history();
+        long tokens = history.isEmpty() ? 0 : provider.estimateTokens(history);
+        compacted = tokens + Math.max(0, overhead);
     }
 
     public void addListener(ChatListener listener) {
@@ -194,6 +218,7 @@ public final class ChatSession {
             List<ChatMessage> history = history();
             Request request = new Request();
             request.activity = new ReplyActivity(ReplyActivity.Phase.TOOL, "Сжимаю историю диалога", Instant.now());
+            request.compacting = true;
             current = request;
             listeners.forEach(listener -> listener.busyChanged(true));
             CompletableFuture<String> summary;
@@ -212,6 +237,7 @@ public final class ChatSession {
                     done = cause == null && text != null && !text.isBlank();
                     if (done) {
                         add(new ChatMessage(ChatRole.SUMMARY, text.strip(), Instant.now(), Status.DONE));
+                        afterCompaction();
                     } else if (!(cause instanceof CancellationException)) {
                         add(ChatMessage.of(ChatRole.ERROR, "Не удалось сжать историю: "
                                 + (cause == null ? "модель вернула пустой ответ" : describe(cause))));
@@ -247,6 +273,7 @@ public final class ChatSession {
         synchronized (lock) {
             messages.clear();
             usage = null;
+            compacted = -1;
         }
         listeners.forEach(ChatListener::historyChanged);
     }
@@ -308,6 +335,7 @@ public final class ChatSession {
             checkIdle();
             messages.clear();
             usage = null;
+            compacted = -1;
             for (ChatMessage message : saved) {
                 if (message.isEmptyAnswer()) {
                     continue;
@@ -362,6 +390,7 @@ public final class ChatSession {
 
     private CompletableFuture<String> reply(Request request, List<ChatMessage> history) {
         request.activity = request.activity.next(ReplyActivity.Phase.THINKING, "");
+        request.sent = history;
         CompletableFuture<String> reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use),
                 tokens -> onUsage(request, tokens), () -> onReasoning(request));
         request.inner = reply;
@@ -374,11 +403,13 @@ public final class ChatSession {
      */
     private CompletableFuture<String> compactThenReply(Request request, List<ChatMessage> history, int count) {
         ChatMessage last = history.get(count - 1);
+        request.compacting = true;
         onTool(request, new ToolUse(COMPACT_ID, "context", "Сжимаю историю диалога", "", ToolUse.Status.RUNNING));
         CompletableFuture<String> summary = provider.summarize(history.subList(0, count));
         request.inner = summary;
         return summary.handle((text, error) -> text).thenCompose(text -> {
             synchronized (lock) {
+                request.compacting = false;
                 if (request.finished) {
                     return CompletableFuture.<String>failedFuture(new CancellationException());
                 }
@@ -398,6 +429,7 @@ public final class ChatSession {
                     }
                     onTool(request, new ToolUse(COMPACT_ID, "context", "История сжата", "сообщений: " + count
                             + " — модель дальше видит их краткое содержание", ToolUse.Status.DONE));
+                    afterCompaction();
                     listeners.forEach(ChatListener::historyChanged);
                 }
                 return reply(request, history());
@@ -464,12 +496,26 @@ public final class ChatSession {
     }
 
     private void onUsage(Request request, TokenUsage tokens) {
+        List<ChatMessage> measure = null;
         synchronized (lock) {
             if (request.finished || tokens == null) {
                 return;
             }
             usage = tokens;
+            compacted = -1;
             request.sinceUsage = 0;
+            // Оценка первого запроса ответа (до шагов): история и то, что запрос несёт сверх неё.
+            if (!request.measured && tokens.inputSource() == TokenUsage.Source.UNKNOWN
+                    && tokens.contextSource() == TokenUsage.Source.ESTIMATE && request.sent != null) {
+                measure = request.sent;
+            }
+            request.measured = true;
+        }
+        if (measure != null) {
+            long history = provider.estimateTokens(measure);
+            if (history > 0 && tokens.context() > history) {
+                overhead = tokens.context() - history;
+            }
         }
         listeners.forEach(listener -> listener.usageChanged(tokens));
     }
@@ -565,6 +611,12 @@ public final class ChatSession {
         volatile CompletableFuture<String> inner;
         /** Знаков ответа после последних данных о токенах; под {@link ChatSession#lock}. */
         int sinceUsage;
+        /** История, отправленная провайдеру: по ней замеряется {@link ChatSession#overhead}. */
+        List<ChatMessage> sent;
+        /** Первые данные о токенах уже пришли. */
+        boolean measured;
+        /** Идёт сжатие истории. */
+        volatile boolean compacting;
         /** Под {@link ChatSession#lock}. */
         ReplyActivity activity = new ReplyActivity(ReplyActivity.Phase.PREPARING, "", Instant.now());
     }

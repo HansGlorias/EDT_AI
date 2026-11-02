@@ -766,6 +766,56 @@ class ChatSessionTest {
         }
     }
 
+    /** После сжатия окно сразу — сжатая история и то, что запрос несёт сверх неё, а не прежнее длинное. */
+    @Test
+    void compactionUpdatesLiveContextAtOnce() throws Exception {
+        CompletableFuture<String> summary = new CompletableFuture<>();
+        ChatProvider provider = new ChatProvider() {
+            @Override
+            public String name() {
+                return "окно";
+            }
+
+            @Override
+            public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText) {
+                return CompletableFuture.completedFuture("ответ");
+            }
+
+            @Override
+            public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
+                    Consumer<TokenUsage> onUsage) {
+                // Запрос — история и 100 токенов промпта и инструментов; после шагов окно выросло до 5000.
+                onUsage.accept(TokenUsage.sending(null, 10L * history.size() + 100));
+                onUsage.accept(new TokenUsage(4000, 1000, 5000, false));
+                return CompletableFuture.completedFuture("ответ");
+            }
+
+            @Override
+            public long estimateTokens(List<ChatMessage> history) {
+                return 10L * history.size();
+            }
+
+            @Override
+            public CompletableFuture<String> summarize(List<ChatMessage> history) {
+                return summary;
+            }
+        };
+        ChatSession session = new ChatSession(provider);
+        session.send("вопрос").get(TIMEOUT, TimeUnit.SECONDS);
+        assertEquals(5000, session.liveContext());
+
+        CompletableFuture<Boolean> compact = session.compact();
+        assertTrue(session.isCompacting());
+        assertEquals(5000, session.liveContext(), "пока сжимается — прежнее окно");
+        summary.complete("Краткое содержание");
+        assertTrue(compact.get(TIMEOUT, TimeUnit.SECONDS));
+
+        assertFalse(session.isCompacting());
+        assertNull(session.usage(), "данные об окне — о длинной истории, больше не годятся");
+        assertEquals(session.estimateTokens() + 100, session.liveContext(), "сжатая история и замеренные 100 сверх неё");
+        assertTrue(session.liveContext() < 5000);
+    }
+
     @Test
     void longHistoryIsCompactedIntoSummary() throws Exception {
         List<List<ChatMessage>> requests = new ArrayList<>();
