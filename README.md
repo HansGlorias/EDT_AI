@@ -346,11 +346,17 @@ Network Connections**).
    на GitHub Pages после каждого слияния в `main`). Обновления потом —
    **Help → Check for Updates**.
 
-   Без доступа к GitHub — zip:
-   - из GitHub Actions: последний успешный запуск **build**, артефакт
-     `edtai-update-site`;
-   - или соберите сами (см. ниже) и возьмите
-     `releng/io.github.hansglorias.edtai.repository/target/io.github.hansglorias.edtai.repository-<версия>.zip`.
+   **Сборку PR можно поставить до слияния:** в PR откройте проверку
+   **build / ubuntu-latest → Details**, перейдите к **Summary** запуска
+   и скачайте `edtai-update-site` из **Artifacts**. Дождитесь зелёных
+   проверок Ubuntu и Windows нужной версии PR. Для скачивания войдите в GitHub.
+   **Pages: skipped** у PR ожидаем: общий сайт обновляется только из `main`,
+   а zip уже собирается в PR.
+
+   [Подробно: сборка PR, ручной запуск для ветки и личная сборка Windows](docs/install-pr-build.md).
+   Для установки без доступа к GitHub заранее скачайте этот zip и перенесите
+   его разрешённым способом. Можно также собрать выбранную ветку локально и взять
+   `releng/io.github.hansglorias.edtai.repository/target/io.github.hansglorias.edtai.repository-<версия>.zip`.
 
    В **Add…** тогда **Archive…** и выберите zip.
 2. Нажмите **Add**.
@@ -425,11 +431,16 @@ Uninstall.**
 xvfb-run -a ./mvnw -B verify
 ```
 
-Сборка без тестов:
+Личная пробная сборка без запуска тестов (не заменяет обязательный CI
+Windows + Ubuntu перед merge):
 
 ```bash
 ./mvnw -B verify -DskipTests
 ```
+
+Для Windows с Java 17: `.\mvnw.cmd -B -ntp verify -DskipTests`.
+Где взять zip и как установить его через **Archive…** — в
+[инструкции пробных сборок](docs/install-pr-build.md).
 
 Структура проекта:
 

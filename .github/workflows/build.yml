@@ -66,12 +66,32 @@ jobs:
       # Выгружаем содержимое update-site, а не готовый zip: GitHub сам
       # упакует артефакт в zip, и скачанный файл сразу ставится в EDT.
       - name: Update site
+        id: update_site
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: edtai-update-site
           path: releng/io.github.hansglorias.edtai.repository/target/repository/
           if-no-files-found: error
+
+      - name: How to install this build
+        if: runner.os == 'Linux'
+        env:
+          BUILD_REF: ${{ github.ref }}
+          BUILD_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.head_ref || github.ref_name }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ARTIFACT_URL: ${{ steps.update_site.outputs.artifact-url }}
+        run: |
+          {
+            printf '### Установка сборки EDT AI\n\n'
+            printf 'Исходная ветка: `%s` · SHA: `%s`\n\n' "$SOURCE_REF" "$SOURCE_SHA"
+            printf 'Ref запуска: `%s` · собранный SHA: `%s`\n\n' "$BUILD_REF" "$BUILD_SHA"
+            printf 'ZIP для установки: [edtai-update-site](%s). Для скачивания войдите в GitHub.\n\n' "$ARTIFACT_URL"
+            printf 'Дождитесь зелёных проверок Ubuntu и Windows. В EDT: **Help → Install New Software… → Add… → Archive…** → скачанный zip.\n\n'
+            printf 'Pages обновляется только при push в main. Статус skipped у Pages в PR или ручном запуске не означает отсутствия zip.\n\n'
+            printf '[Подробная инструкция](%s/%s/blob/%s/docs/install-pr-build.md)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$SOURCE_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Update site на GitHub Pages: после каждого слияния в main EDT ставит и
   # обновляет плагин по адресу https://hansglorias.github.io/EDT_AI/
