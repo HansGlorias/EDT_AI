@@ -125,6 +125,7 @@ import io.github.hansglorias.edtai.core.chat.ChatListener;
 import io.github.hansglorias.edtai.core.chat.ChatMarkdown;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatModel;
+import io.github.hansglorias.edtai.core.chat.ContextGauge;
 import io.github.hansglorias.edtai.core.chat.ReplyActivity;
 import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
@@ -413,6 +414,8 @@ public class ChatView extends ViewPart {
     private Chip mcpButton;
     /** Выбор модели справа в поле ввода, рядом с «Отправить». */
     private Chip modelButton;
+    /** Кольцо у кнопки модели: сколько окна занято, по ходу ответа. */
+    private ContextRing contextRing;
     /** Режим модели и формат следующего вопроса: одна кнопка слева. */
     private Chip modeButton;
     /** Модели с сервера ({@code /models}); пока не загружены — пусто. */
@@ -958,7 +961,7 @@ public class ChatView extends ViewPart {
 
         actions = new Composite(composer, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(actions);
-        GridLayoutFactory.fillDefaults().numColumns(5).spacing(2, 0).applyTo(actions);
+        GridLayoutFactory.fillDefaults().numColumns(6).spacing(2, 0).applyTo(actions);
         Chip attachButton = Chip.plus(actions);
         GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.CENTER).applyTo(attachButton);
         attachButton.setToolTipText("Добавить файл или модуль проекта");
@@ -972,6 +975,9 @@ public class ChatView extends ViewPart {
         mcpButton = new Chip(actions, false);
         GridDataFactory.fillDefaults().grab(true, false).align(SWT.BEGINNING, SWT.CENTER).applyTo(mcpButton);
         mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
+
+        contextRing = new ContextRing(actions);
+        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(contextRing);
 
         modelButton = new Chip(actions, true);
         GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(modelButton);
@@ -3215,7 +3221,28 @@ public class ChatView extends ViewPart {
      * сколько секунд; потом — сколько окна занято и токены ответа (в чате
      * без ответов в этом сеансе — оценка по истории).
      */
+    /**
+     * Кольцо окна: по ходу ответа — оценка последнего запроса и пришедший после него текст, после
+     * ответа — данные сервера; в чате без ответов — оценка истории.
+     */
+    private void updateContextRing() {
+        if (contextRing == null || contextRing.isDisposed()) {
+            return;
+        }
+        long used = session.liveContext();
+        boolean estimated;
+        if (used < 0) {
+            used = estimate();
+            estimated = true;
+        } else {
+            TokenUsage usage = session.usage();
+            estimated = session.isBusy() || usage == null || usage.contextSource() != TokenUsage.Source.SERVER;
+        }
+        contextRing.setGauge(settings.isConfigured() && window > 0 ? new ContextGauge(used, window, estimated) : null);
+    }
+
     private void updateStatus() {
+        updateContextRing();
         String text;
         if (notice != null) {
             text = notice;
@@ -3481,6 +3508,10 @@ public class ChatView extends ViewPart {
 
     Chip modeButton() {
         return modeButton;
+    }
+
+    ContextRing contextRing() {
+        return contextRing;
     }
 
     Chip modelButton() {

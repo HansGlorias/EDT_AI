@@ -20,6 +20,8 @@ import io.github.hansglorias.edtai.core.context.ContextItem;
 public final class ChatSession {
 
     private static final String COMPACT_ID = "compact";
+    /** Как в оценке размера запроса ({@code RequestBudget}): кириллица и код — около трёх знаков на токен. */
+    static final int STREAM_CHARS_PER_TOKEN = 3;
 
     private final ChatProvider provider;
     private final List<ChatMessage> messages = new CopyOnWriteArrayList<>();
@@ -61,6 +63,22 @@ public final class ChatSession {
     /** Токены последнего ответа в этом диалоге; {@code null} — ответа ещё не было (после открытия чата тоже). */
     public TokenUsage usage() {
         return usage;
+    }
+
+    /**
+     * Сколько окна модели занято сейчас, в токенах: по последнему запросу к модели (перед ним —
+     * оценка его размера, после — данные сервера) и тексту ответа, пришедшему после него.
+     * Растёт по ходу ответа. -1 — неизвестно: в этом чате ещё не было запроса.
+     */
+    public long liveContext() {
+        synchronized (lock) {
+            TokenUsage known = usage;
+            if (known == null || known.contextSource() == TokenUsage.Source.UNKNOWN) {
+                return -1;
+            }
+            Request request = current;
+            return known.context() + (request == null || request.finished ? 0 : request.sinceUsage / STREAM_CHARS_PER_TOKEN);
+        }
     }
 
     /** Сколько токенов займёт диалог в запросе к модели, по оценке провайдера; 0 — неизвестно. */
@@ -396,6 +414,7 @@ public final class ChatSession {
                 return;
             }
             request.text.append(part);
+            request.sinceUsage += part.length();
             // Пробелы и переводы строк — ещё не ответ: Qwen шлёт их перед вызовом инструмента.
             if (request.activity.phase() != ReplyActivity.Phase.WRITING && !part.isBlank()) {
                 request.activity = request.activity.next(ReplyActivity.Phase.WRITING, "");
@@ -450,6 +469,7 @@ public final class ChatSession {
                 return;
             }
             usage = tokens;
+            request.sinceUsage = 0;
         }
         listeners.forEach(listener -> listener.usageChanged(tokens));
     }
@@ -543,6 +563,8 @@ public final class ChatSession {
         CompletableFuture<String> reply;
         /** Запрос, который идёт сейчас: сжатие истории или сам ответ. */
         volatile CompletableFuture<String> inner;
+        /** Знаков ответа после последних данных о токенах; под {@link ChatSession#lock}. */
+        int sinceUsage;
         /** Под {@link ChatSession#lock}. */
         ReplyActivity activity = new ReplyActivity(ReplyActivity.Phase.PREPARING, "", Instant.now());
     }

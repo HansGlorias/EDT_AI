@@ -129,7 +129,9 @@ class PreparedRequestTest {
                 List<TokenUsage> usages = new ArrayList<>();
                 new ModelChatProvider(() -> connection(protocol, server.url()), new ModelClient()).reply(
                         List.of(ChatMessage.of(ChatRole.USER, "вопрос")), part -> {}, tool -> {}, usages::add).get(10, TimeUnit.SECONDS);
-                TokenUsage usage = usages.get(0);
+                assertEquals(2, usages.size(), "перед запросом — оценка его размера, потом итог");
+                assertEquals(server.requests().get(0).body().length() / RequestBudget.CHARS_PER_TOKEN, usages.get(0).context());
+                TokenUsage usage = usages.get(1);
                 assertEquals(TokenUsage.Source.ESTIMATE, usage.inputSource());
                 assertEquals(server.requests().get(0).body().length() / RequestBudget.CHARS_PER_TOKEN, usage.input());
                 assertEquals(TokenUsage.Source.SERVER, usage.outputSource());
@@ -155,7 +157,7 @@ class PreparedRequestTest {
                     problems -> List.of(tool(schema, calls)), io.github.hansglorias.edtai.core.tools.ToolApprover.ALLOW_ALL)
                     .reply(List.of(ChatMessage.of(ChatRole.USER, "вопрос")), part -> {}, use -> {}, usages::add).get(10, TimeUnit.SECONDS);
             assertEquals(callsAtSend.get(), calls.get(), "после отправки схема больше не запрашивается");
-            assertEquals(server.requests().get(0).body().length() / RequestBudget.CHARS_PER_TOKEN, usages.get(0).input());
+            assertEquals(server.requests().get(0).body().length() / RequestBudget.CHARS_PER_TOKEN, usages.get(1).input());
         }
     }
 

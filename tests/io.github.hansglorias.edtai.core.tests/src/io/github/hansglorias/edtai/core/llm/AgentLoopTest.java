@@ -513,7 +513,12 @@ class AgentLoopTest {
 
         assertEquals("Готово.", runWithUsage(Protocol.ANTHROPIC));
 
-        assertEquals(List.of(new TokenUsage(150, 20, 170, false), new TokenUsage(350, 30, 210, false)), usages);
+        assertEquals(List.of(new TokenUsage(150, 20, 170, false), new TokenUsage(350, 30, 210, false)), steps());
+        TokenUsage beforeSecond = usages.get(2);
+        assertEquals(TokenUsage.Source.ESTIMATE, beforeSecond.contextSource(), "перед запросом — оценка его размера");
+        assertEquals(new TokenUsage(150, 20, beforeSecond.context(), TokenUsage.Source.SERVER, TokenUsage.Source.SERVER,
+                TokenUsage.Source.ESTIMATE), beforeSecond, "расход прежних шагов — тот же, окно — нового запроса");
+        assertTrue(beforeSecond.context() > 0);
         ToolUse call = uses.get(uses.size() - 1);
         assertEquals(new TokenUsage(150, 20, 170, false), call.usage(), "у вызова — токены шага, на котором он решён");
         assertTrue(call.label().endsWith(" · ↑150 ↓20"), call.label());
@@ -528,7 +533,8 @@ class AgentLoopTest {
 
         runWithUsage(Protocol.OPENAI_COMPATIBLE);
 
-        assertEquals(List.of(new TokenUsage(12, 3, 15, false)), usages);
+        assertEquals(List.of(new TokenUsage(12, 3, 15, false)), steps());
+        assertEquals(TokenUsage.Source.UNKNOWN, usages.get(0).inputSource(), "до первого ответа расход неизвестен");
     }
 
     @Test
@@ -538,7 +544,7 @@ class AgentLoopTest {
                 "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":0}}\n\n",
                 "data: [DONE]\n\n"), 0));
         runWithUsage(Protocol.OPENAI_COMPATIBLE);
-        TokenUsage usage = usages.get(0);
+        TokenUsage usage = steps().get(0);
         assertEquals(0, usage.input());
         assertEquals(TokenUsage.Source.SERVER, usage.inputSource());
         assertTrue(usage.output() > 0);
@@ -552,10 +558,10 @@ class AgentLoopTest {
 
         runWithUsage(Protocol.OPENAI_COMPATIBLE);
 
-        assertEquals(2, usages.size());
-        TokenUsage last = usages.get(1);
+        assertEquals(4, usages.size(), "перед каждым из двух шагов — оценка запроса");
+        TokenUsage last = steps().get(1);
         assertTrue(last.estimated());
-        assertTrue(last.input() > usages.get(0).input(), "второй шаг добавляет запрос целиком: " + usages);
+        assertTrue(last.input() > steps().get(0).input(), "второй шаг добавляет запрос целиком: " + usages);
         assertTrue(last.context() > 0 && last.context() < last.input());
     }
 
@@ -679,6 +685,15 @@ class AgentLoopTest {
     }
 
     /** Вызовы без токенов шага: для сравнения с ожидаемыми. */
+    /** Итоги шагов: перед каждым — оценка размера отправленного запроса. */
+    private List<TokenUsage> steps() {
+        List<TokenUsage> steps = new java.util.ArrayList<>();
+        for (int i = 1; i < usages.size(); i += 2) {
+            steps.add(usages.get(i));
+        }
+        return steps;
+    }
+
     private List<ToolUse> withoutUsage() {
         return uses.stream().map(use -> use.withUsage(null)).toList();
     }

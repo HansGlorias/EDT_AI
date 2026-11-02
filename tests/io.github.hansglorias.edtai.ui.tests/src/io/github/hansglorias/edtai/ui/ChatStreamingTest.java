@@ -1,12 +1,15 @@
 package io.github.hansglorias.edtai.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
+
+import io.github.hansglorias.edtai.core.chat.ContextGauge;
 
 /** Длинный ответ по частям: лента дописывает хвост, а не переписывает сообщение целиком. */
 class ChatStreamingTest extends AbstractChatTest {
@@ -34,15 +37,23 @@ class ChatStreamingTest extends AbstractChatTest {
         view.refresh();
         int at = view.history().getText().indexOf("Начало ответа");
         view.history().setSelection(at, at + "Начало".length());
+        ContextGauge during = view.contextRing().gauge();
+        assertNotNull(during, "кольцо окна видно уже во время ответа");
+        assertTrue(during.used() > 0 && during.estimated(), during.toString());
+        assertTrue(view.contextRing().getToolTipText().startsWith("Контекст ≈"), view.contextRing().getToolTipText());
 
         release.countDown();
         waitUntil(() -> !view.session().isBusy() && view.history().getText().contains("Абзац 59"), () -> view.history().getText());
         view.refresh();
         settle();
+        ContextGauge after = view.contextRing().gauge();
+        assertTrue(after.used() > during.used(), "кольцо растёт вместе с ответом: " + during + " → " + after);
+        assertEquals(after.window(), during.window());
 
         assertEquals("Начало", view.history().getSelectionText(), "начало ответа не переписывалось — выделение в нём цело");
         assertTrue(view.history().getText().contains("Абзац 59: текст"), view.history().getText());
         Screenshots.capture(view.control(), "long-answer-streamed");
+        Screenshots.capture(view.contextRing().getParent(), "context-ring");
     }
 
     @Test
