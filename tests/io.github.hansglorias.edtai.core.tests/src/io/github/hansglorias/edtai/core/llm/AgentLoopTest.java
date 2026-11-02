@@ -299,6 +299,27 @@ class AgentLoopTest {
 
         assertEquals(AgentLoop.MAX_STEPS, server.requests().size());
         assertTrue(answer.startsWith("_Остановлено: модель вызвала инструменты " + AgentLoop.MAX_STEPS + " раз подряд."), answer);
+        assertFalse(server.requests().get(AgentLoop.WRAP_UP_STEP - 1).body().contains("Служебная пометка"));
+        assertTrue(server.requests().get(AgentLoop.WRAP_UP_STEP).body().contains("30-й шаг с инструментами"),
+                "после 30-го шага — напоминание отвечать");
+        assertTrue(server.requests().get(AgentLoop.MAX_STEPS - 1).body().contains("это был последний шаг с инструментами"),
+                "перед лимитом — просьба дать итог");
+    }
+
+    /** Модель послушалась пометки о последнем шаге: вместо «Остановлено» — её итог. */
+    @Test
+    void lastStepNoteLetsModelAnswer() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (request.body().contains("это был последний шаг")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Итог: нашёл А.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            } else {
+                response.sse(List.of(toolCalls("{\"index\":0,\"id\":\"x\",\"function\":{\"name\":\"read_module\","
+                        + "\"arguments\":\"{\\\"module\\\":\\\"А\\\"}\"}}"), "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        assertEquals("Итог: нашёл А.", run(Protocol.OPENAI_COMPATIBLE));
+        assertEquals(AgentLoop.MAX_STEPS, server.requests().size());
     }
 
     @Test
