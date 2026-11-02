@@ -40,7 +40,8 @@ class ContextRing extends Canvas {
     /** Новое значение; перерисовка — только если сменился процент или цвет. */
     void setGauge(ContextGauge value) {
         String tip = value == null ? null
-                : value.describe() + (value.estimated() ? "\n≈ — оценка: точное число сервер сообщает после ответа" : "");
+                : value.describe() + "\nПоследний запрос к модели: история, системный промпт, инструменты и результаты"
+                        + " вызовов текущего ответа" + (value.estimated() ? "\n≈ — оценка: точное число сервер сообщает после ответа" : "");
         if (!Objects.equals(tip, getToolTipText())) {
             setToolTipText(tip);
         }

@@ -2,8 +2,10 @@ package io.github.hansglorias.edtai.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -54,6 +56,27 @@ class ChatStreamingTest extends AbstractChatTest {
         assertTrue(view.history().getText().contains("Абзац 59: текст"), view.history().getText());
         Screenshots.capture(view.control(), "long-answer-streamed");
         Screenshots.capture(view.contextRing().getParent(), "context-ring");
+    }
+
+    /** Чат открыли заново (как после перезапуска EDT): кольцо — окно последнего запроса, а не одна история. */
+    @Test
+    void reopenedChatShowsLastRequestWindow() throws Exception {
+        answering(List.of("Ответ."));
+        ChatView view = showView();
+        ask(view, "Вопрос");
+        settle();
+        ContextGauge answered = view.contextRing().gauge();
+        String id = view.chats().list().get(0).id();
+        assertTrue(answered.used() > view.session().estimateTokens(),
+                "запрос больше истории: в нём ещё системный промпт и инструменты");
+
+        view.newChatForTest();
+        settle();
+        view.openChatForTest(id);
+        settle();
+
+        assertNull(view.session().usage(), "открыт заново: данных об ответе в памяти нет");
+        assertEquals(answered.used(), view.contextRing().gauge().used());
     }
 
     @Test
