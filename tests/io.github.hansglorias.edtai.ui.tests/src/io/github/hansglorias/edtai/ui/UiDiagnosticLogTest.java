@@ -45,11 +45,13 @@ class UiDiagnosticLogTest {
     @Test void disabledAndLateCallbacksDoNotCreateFiles() throws Exception {
         Path file = temporary.resolve("off/requests.jsonl");
         var log = controller(file);
+        assertFalse(log.isEnabled());
         log.accept(event());
         settle(log, false);
         log.close();
         log.accept(event());
         settle(log, true);
+        assertFalse(log.isEnabled(), "закрытый владелец не включается повторно");
         assertFalse(Files.exists(file.getParent()));
     }
 
@@ -57,6 +59,7 @@ class UiDiagnosticLogTest {
         Path file = temporary.resolve("requests.jsonl");
         var first = controller(file);
         settle(first, true);
+        assertTrue(first.isEnabled());
         // Foreground and background callbacks share this single owner.
         Thread background = new Thread(() -> first.accept(event()));
         background.start();
@@ -64,6 +67,7 @@ class UiDiagnosticLogTest {
         background.join();
         awaitLines(file, 2);
         settle(first, false);
+        assertFalse(first.isEnabled());
         long size = Files.size(file);
         first.accept(event());
         settle(first, false);
