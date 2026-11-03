@@ -22,6 +22,8 @@ import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.viewers.TableViewerColumn;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.ScrolledComposite;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
@@ -85,6 +87,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Button checkServer;
     private Label serverResult;
     private Combo mcpInterval;
+    private Button localDiagnostics;
+    private ScrolledComposite scroll;
 
     @Override
     public void init(IWorkbench workbench) {
@@ -93,18 +97,44 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     @Override
     protected Control createContents(Composite parent) {
-        Composite page = new Composite(parent, SWT.NONE);
+        scroll = new ScrolledComposite(parent, SWT.V_SCROLL | SWT.H_SCROLL) {
+            @Override
+            public Point computeSize(int widthHint, int heightHint, boolean changed) {
+                var preferred = super.computeSize(widthHint, heightHint, changed);
+                if (widthHint == SWT.DEFAULT) preferred.x = Math.min(preferred.x, 850);
+                if (heightHint == SWT.DEFAULT) preferred.y = Math.min(preferred.y, 600);
+                return preferred;
+            }
+        };
+        scroll.setExpandHorizontal(true);
+        scroll.setExpandVertical(true);
+        scroll.setShowFocusedControl(true);
+        Composite page = new Composite(scroll, SWT.NONE);
         GridLayoutFactory.fillDefaults().applyTo(page);
 
         createConnectionGroup(page);
         createCertificatesGroup(page);
         createMcpGroup(page);
+        Group diagnostics = group(page, "Локальная диагностика", 1);
+        localDiagnostics = new Button(diagnostics, SWT.CHECK);
+        localDiagnostics.setText("Вести локальный диагностический журнал запросов");
+        localDiagnostics.setSelection(UiDiagnosticLog.preference());
+        Label diagnosticInfo = new Label(diagnostics, SWT.WRAP);
+        diagnosticInfo.setText("Только числовые метрики, без содержимого запросов и ответов. "
+                + "Ничего не отправляется автоматически. До трёх файлов по 1 МиБ.\n" + UiDiagnosticLog.location()
+                + "\nСостояние журнала — в подсказке строки состояния чата.");
+        GridDataFactory.fillDefaults().grab(true, false).hint(400, SWT.DEFAULT).applyTo(diagnosticInfo);
 
         fill(store.load());
         updateTokenState();
         validate();
         Dialog.applyDialogFont(page);
-        return page;
+        scroll.setContent(page);
+        Runnable resize = () -> scroll.setMinSize(page.computeSize(
+                Math.max(650, scroll.getClientArea().width), SWT.DEFAULT));
+        scroll.addListener(SWT.Resize, event -> resize.run());
+        resize.run();
+        return scroll;
     }
 
     private void createConnectionGroup(Composite page) {
@@ -623,6 +653,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     @Override
     protected void performDefaults() {
         fill(AiSettings.defaults());
+        localDiagnostics.setSelection(false);
         validate();
         super.performDefaults();
     }
@@ -636,6 +667,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         }
         try {
             store.save(settings);
+            var preferences = org.eclipse.core.runtime.preferences.InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
+            preferences.putBoolean(UiDiagnosticLog.ENABLED, localDiagnostics.getSelection());
+            preferences.flush();
             if (!token.getText().isEmpty()) {
                 store.saveToken(token.getText());
                 token.setText("");
@@ -651,6 +685,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
             return false;
         }
     }
+
+    Button localDiagnosticsField() { return localDiagnostics; }
 
     private void column(String title, int width, Function<McpServer, String> text) {
         TableViewerColumn column = new TableViewerColumn(serverViewer, SWT.NONE);

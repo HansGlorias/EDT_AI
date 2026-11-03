@@ -46,23 +46,28 @@ class RequestBudgetGuardTest {
 
     @Test
     void reservesActualOutputForBothProtocolsAndWindows() throws Exception {
-        for (Protocol protocol : Protocol.values()) {
-            for (int window : List.of(8192, 16384, 32768)) {
-                for (int max : List.of(0, 512, window, window + 1)) {
-                    try (FakeModelServer server = FakeModelServer.http()) {
-                        server.handler((request, response) -> answer(protocol, response));
+        // Один слушатель на всю матрицу: Windows может быстро переиспользовать
+        // ephemeral port прежнего сервера при ещё живом HTTP-соединении.
+        try (FakeModelServer server = FakeModelServer.http()) {
+            int sent = 0;
+            for (Protocol protocol : Protocol.values()) {
+                server.handler((request, response) -> answer(protocol, response));
+                for (int window : List.of(8192, 16384, 32768)) {
+                    for (int max : List.of(0, 512, window, window + 1)) {
                         ModelConnection connection = connection(protocol, server.url(), window, max);
                         PreparedRequest request = PreparedRequest.prepare(connection, QUESTION, List.of(), List.of());
                         int reserve = max > 0 ? max : protocol == Protocol.ANTHROPIC ? 8192 : Math.min(4096, window / 4);
                         assertEquals((window - Math.min(window, reserve)) * 3, RequestBudget.chars(connection));
                         if (reserve >= window) {
                             localFailure(new ModelClient().request(connection, request, text -> {}));
-                            assertEquals(0, server.requests().size());
+                            assertEquals(sent, server.requests().size());
                         } else {
                             assertEquals("готово", new ModelClient().request(connection, request, text -> {}).get(10, TimeUnit.SECONDS).text());
-                            assertEquals(request.body(), server.requests().get(0).body());
+                            assertEquals(++sent, server.requests().size());
+                            FakeModelServer.Request actual = server.requests().get(sent - 1);
+                            assertEquals(request.body(), actual.body());
                             assertEquals(max > 0 ? Integer.valueOf(max) : protocol == Protocol.ANTHROPIC ? Integer.valueOf(8192) : null,
-                                    Json.at(Json.parse(server.requests().get(0).body()), "max_tokens") instanceof Number n ? n.intValue() : null);
+                                    Json.at(Json.parse(actual.body()), "max_tokens") instanceof Number n ? n.intValue() : null);
                         }
                     }
                 }

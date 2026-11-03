@@ -42,6 +42,18 @@ class DiagnosticLogTest {
     Path temp;
 
     @Test
+    void unknownByteSizesAreNullInVersionOne() throws Exception {
+        DiagnosticEvent event = new DiagnosticEvent(Id.random(), Id.random(), RequestType.CHECK, Status.FAILED,
+                0L, (Long) null, (Long) null, 0L, 0L, Tokens.unknown(), Tokens.unknown());
+        Path file = temp.resolve("unknown-bytes.jsonl");
+        try (DiagnosticLog log = DiagnosticLog.open(file)) { assertEquals(State.AVAILABLE, log.write(event)); }
+        Object json = Json.parse(Files.readString(file));
+        assertEquals(1L, Json.at(json, "version"));
+        assertEquals(null, Json.at(json, "request_bytes"));
+        assertEquals(null, Json.at(json, "response_bytes"));
+    }
+
+    @Test
     void defaultIsOffAndDoesNotCreateFiles() throws Exception {
         try (DiagnosticLog log = new DiagnosticLog()) {
             assertEquals(State.DISABLED, log.state());
@@ -54,7 +66,7 @@ class DiagnosticLogTest {
 
     @Test
     void schemaHasOnlyFixedFieldsAndTypesAndRandomIds() throws Exception {
-        Set<Class<?>> allowed = Set.of(Id.class, RequestType.class, Status.class, long.class, Tokens.class);
+        Set<Class<?>> allowed = Set.of(Id.class, RequestType.class, Status.class, long.class, Long.class, Tokens.class);
         for (var component : DiagnosticEvent.class.getRecordComponents()) {
             assertTrue(allowed.contains(component.getType()), component.getName());
         }

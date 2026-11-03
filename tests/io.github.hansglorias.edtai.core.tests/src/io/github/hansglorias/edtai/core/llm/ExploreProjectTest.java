@@ -46,6 +46,7 @@ class ExploreProjectTest {
             List<ToolUse> progress = new CopyOnWriteArrayList<>();
             List<TokenUsage> usage = new CopyOnWriteArrayList<>();
             List<Throwable> errors = new CopyOnWriteArrayList<>();
+            List<io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent> diagnostics = new CopyOnWriteArrayList<>();
             try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
                 try {
                     int step = calls.getAndIncrement();
@@ -76,12 +77,17 @@ class ExploreProjectTest {
             })) {
                 ModelConnection connection = connection(server, protocol);
                 ToolSource source = source(reads);
-                String result = new ModelChatProvider(() -> connection, new ModelClient(), source, ToolApprover.ALLOW_ALL)
+                String result = new ModelChatProvider(() -> connection, new ModelClient(diagnostics::add), source, ToolApprover.ALLOW_ALL)
                         .reply(List.of(ChatMessage.of(ChatRole.USER, "parent-private-history")), part -> { }, progress::add, usage::add)
                         .get(15, TimeUnit.SECONDS);
                 assertEquals(List.of(), errors);
                 assertEquals("PARENT_FINAL", result);
                 assertEquals(4, calls.get());
+                assertEquals(4, diagnostics.size(), "родительские и дочерние физические запросы учтены один раз");
+                assertEquals(2, diagnostics.stream().map(event -> event.runId()).distinct().count());
+                assertEquals(4, diagnostics.stream().map(event -> event.requestId()).distinct().count());
+                assertTrue(diagnostics.stream().allMatch(event -> event.status()
+                        == io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent.Status.SUCCESS));
                 TokenUsage total = usage.get(usage.size() - 1);
                 assertEquals(420, total.input());
                 assertEquals(44, total.output());
