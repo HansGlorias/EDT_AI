@@ -123,6 +123,8 @@ import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.chat.ChatHistoryFile;
 import io.github.hansglorias.edtai.core.chat.ChatListener;
 import io.github.hansglorias.edtai.core.chat.ChatMarkdown;
+import io.github.hansglorias.edtai.core.chat.ChatAnalysisExport;
+import io.github.hansglorias.edtai.core.chat.ExportRedactor;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatModel;
 import io.github.hansglorias.edtai.core.chat.ContextGauge;
@@ -625,6 +627,11 @@ public class ChatView extends ViewPart {
             @Override
             public void export(String id) {
                 exportChat(id);
+            }
+
+            @Override
+            public void exportAnalysis(String id) {
+                exportAnalysisChat(id);
             }
 
             @Override
@@ -1160,6 +1167,12 @@ public class ChatView extends ViewPart {
                 exportChat(chatId);
             }
         });
+        menu.add(new Action("Выгрузка этого чата для разбора (ZIP)…") {
+            @Override
+            public void run() {
+                exportAnalysisChat(chatId);
+            }
+        });
         menu.add(new Action("Удалить этот чат") {
             @Override
             public void run() {
@@ -1380,6 +1393,79 @@ public class ChatView extends ViewPart {
             showNotice("Не удалось сохранить чат: " + e.getMessage());
         }
     }
+
+    /** Снимок только выбранного чата. Глобальная диагностика не имеет связи с chat ID. */
+    private void exportAnalysisChat(String id) {
+        List<ChatMessage> messages = messagesOf(id);
+        if (messages == null) return;
+        AnalysisExportDialog.Options options = askAnalysisOptions.get();
+        if (options == null) return;
+        Path target = chooseAnalysisFile.apply("chat-analysis.zip");
+        if (target == null) return;
+        // За время модальных диалогов фоновый ответ мог измениться.
+        messages = messagesOf(id);
+        if (messages == null) return;
+        Live live = lives.get(id);
+        AiSettings loaded = SettingsStore.workspace().load();
+        ChatModel bound = live == null ? chats.model(id) : live.model;
+        AiSettings profile = bound.apply(loaded);
+        var config = new ChatAnalysisExport.Configuration(FrameworkUtil.getBundle(ChatView.class).getVersion().toString(),
+                live != null && live.session.isBusy() ? live.responseMode : agentMode(), profile.protocol().name(),
+                profile.model(), profile.modelWindow(), profile.maxTokens(), profile.contextLimit(), profile.toolsEnabled());
+        List<ChatAnalysisExport.Change> snapshots = new ArrayList<>();
+        for (int index = 0; index < messages.size(); index++) {
+            if (messages.get(index).role() != ChatRole.ASSISTANT) continue;
+            String key = changeKey(id, messages.get(index));
+            for (EditTools.Change change : changes.getOrDefault(key, List.of())) {
+                snapshots.add(new ChatAnalysisExport.Change(index, change.path(), change.before(), change.after(), false));
+            }
+            for (IFile file : touchedByAnswer.getOrDefault(key, Set.of())) {
+                snapshots.add(new ChatAnalysisExport.Change(index, file.getProjectRelativePath().toString(), null, null, true));
+            }
+        }
+        var snapshot = new ChatAnalysisExport.Snapshot(chats.title(id, messages), messages, config, snapshots,
+                live == null ? null : live.session.usage(), live != null && (live.session.isBusy()
+                        || messages.stream().anyMatch(message -> message.status() == ChatMessage.Status.STREAMING)));
+        List<String> endpoints = new ArrayList<>();
+        endpoints.add(loaded.baseUrl());
+        endpoints.add(bound.baseUrl());
+        loaded.mcpServers().forEach(server -> endpoints.add(server.target()));
+        // Расшифровка нужна только для очистки, токен не становится полем Snapshot/ZIP/исключения.
+        final ExportRedactor redactor;
+        try {
+            redactor = new ExportRedactor(List.of(analysisToken.call()), endpoints);
+        } catch (Exception e) {
+            showNotice("Выгрузка не создана: не удалось получить известные секреты для очистки");
+            return;
+        }
+        showNotice("Подготовка выгрузки выбранного чата…");
+        CompletableFuture.runAsync(() -> {
+            try {
+                ChatAnalysisExport.write(target, snapshot, options.includeContent(), options.feedback(), redactor);
+                inUi(() -> showNotice("Выгрузка сохранена. Проверьте ZIP перед передачей"));
+            } catch (IOException | RuntimeException e) {
+                // Произвольное сообщение исключения может содержать путь/секрет: его не показываем и не логируем.
+                inUi(() -> showNotice("Не удалось сохранить выгрузку выбранного чата"));
+            }
+        });
+    }
+
+    java.util.function.Supplier<AnalysisExportDialog.Options> askAnalysisOptions = () -> {
+        AnalysisExportDialog dialog = new AnalysisExportDialog(getSite().getShell());
+        return dialog.open() == Window.OK ? dialog.result() : null;
+    };
+
+    java.util.concurrent.Callable<String> analysisToken = () -> SettingsStore.workspace().loadToken();
+
+    Function<String, Path> chooseAnalysisFile = name -> {
+        FileDialog dialog = new FileDialog(getSite().getShell(), SWT.SAVE);
+        dialog.setText("Выгрузка выбранного чата для разбора");
+        dialog.setFilterExtensions(new String[] { "*.zip" });
+        dialog.setFileName(name);
+        dialog.setOverwrite(true);
+        String path = dialog.open();
+        return path == null ? null : Path.of(path);
+    };
 
     /** Имя файла по названию чата: без символов, запрещённых в Windows. */
     static String exportName(String title) {
