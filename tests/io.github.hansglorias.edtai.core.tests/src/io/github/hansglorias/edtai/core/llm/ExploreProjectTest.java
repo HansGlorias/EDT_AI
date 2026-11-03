@@ -139,6 +139,37 @@ class ExploreProjectTest {
     }
 
     @Test
+    void childSearchesOnlyTheRequestedModuleWithTheUpdatedSchema() throws Exception {
+        List<Tool> reads = reads();
+        Path other = temp.resolve("src/CommonModules/Other/Module.bsl");
+        Files.createDirectories(other.getParent());
+        Files.writeString(other, "fixture-only other-module-marker\n");
+        AtomicInteger requests = new AtomicInteger();
+        List<Throwable> errors = new CopyOnWriteArrayList<>();
+        try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+            try {
+                if (requests.getAndIncrement() == 0) {
+                    Map<String, Object> schema = Json.asList(Json.parseObject(request.body()).get("tools")).stream()
+                            .filter(tool -> "search_code".equals(Json.stringAt(tool, "function", "name")))
+                            .map(tool -> Json.asObject(Json.at(tool, "function", "parameters"))).findFirst().orElseThrow();
+                    assertEquals("string", Json.stringAt(schema, "properties", "module", "type"));
+                    send(response, Protocol.OPENAI_COMPATIBLE, "", List.of(call("search_code", Map.of(
+                            "query", "fixture-only", "module", "src/CommonModules/Test/Module.bsl"))), 1, 1);
+                } else {
+                    assertTrue(request.body().contains("Test.Модуль:1: fixture-only"));
+                    assertFalse(request.body().contains("other-module-marker"));
+                    send(response, Protocol.OPENAI_COMPATIBLE, "Ссылки: CommonModule.Test:1. Другие модули не исследованы.", List.of(), 1, 1);
+                }
+            } catch (Throwable error) { errors.add(error); throw error; }
+        })) {
+            Tool.Result report = explorer(server, reads).call(Map.of("question", "Find fixture-only in Test"));
+            assertEquals(List.of(), errors);
+            assertEquals("complete", report.outcome());
+            assertEquals(2, requests.get());
+        }
+    }
+
+    @Test
     void childStepsAreBoundedAndReportIsPartialAtLimit() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
