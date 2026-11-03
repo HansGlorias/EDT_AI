@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.eclipse.jface.preference.PreferenceDialog;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.ScrolledComposite;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.dialogs.PreferencesUtil;
@@ -24,6 +26,18 @@ class AiPreferencePageTest extends AbstractChatTest {
         PreferenceDialog dialog = openPreferences();
         try {
             var settings = (AiPreferencePage) dialog.getSelectedPage();
+            dialog.getShell().setSize(900, 700);
+            dialog.getShell().layout(true, true);
+            var scroll = assertInstanceOf(ScrolledComposite.class, settings.localDiagnosticsField().getParent().getParent().getParent());
+            waitUntil(() -> scroll.getClientArea().height > 0);
+            assertTrue(scroll.getVerticalBar().getVisible(), "настройки доступны прокруткой в небольшом окне");
+            scroll.showControl(settings.localDiagnosticsField());
+            var bounds = scroll.getDisplay().map(settings.localDiagnosticsField(), scroll,
+                    new Rectangle(0, 0, settings.localDiagnosticsField().getSize().x,
+                            settings.localDiagnosticsField().getSize().y));
+            assertTrue(scroll.getClientArea().contains(bounds.x, bounds.y));
+            assertTrue(scroll.getClientArea().contains(bounds.x + bounds.width - 1, bounds.y + bounds.height - 1));
+            Screenshots.capture(dialog.getShell(), "preferences-diagnostics");
             assertFalse(settings.localDiagnosticsField().getSelection());
             settings.localDiagnosticsField().setSelection(true);
             assertTrue(settings.performOk());
