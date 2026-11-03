@@ -42,6 +42,11 @@ public final class ProjectTools {
         return List.of(tools.new ProjectInfo(), tools.new ListObjects(), tools.new ReadModule(), tools.new SearchCode());
     }
 
+    /** Проверка происхождения: одно имя read_module не делает MCP-инструмент встроенным чтением. */
+    public static boolean isBuiltInRead(Tool tool) {
+        return tool instanceof ProjectTools.ReadingTool;
+    }
+
     // ---- инструменты ----
 
     private abstract class ReadingTool implements Tool {

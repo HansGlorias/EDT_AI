@@ -74,6 +74,78 @@ class ChatToolsTest extends AbstractChatTest {
     }
 
     @Test
+    void exploreProjectShowsChildProgressAndOnlyFinalParentText() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger step = new java.util.concurrent.atomic.AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int index = step.getAndIncrement();
+            String part = switch (index) {
+                case 0 -> explorationCall("explore_project", Json.object("question", "Найди метод в модуле Тест", "scope", PROJECT));
+                case 1 -> explorationCall("read_module", Json.object("project", PROJECT, "module", "src/CommonModules/Тест/Module.bsl"));
+                case 2 -> openAiPart("Выводы: найден метод. Ссылки: ОбщийМодуль.Тест.Модуль:1. Неизвестное: другие модули не исследованы.");
+                default -> openAiPart("Исследование завершено, найден метод Тест.");
+            };
+            response.sse(List.of(part, "data: [DONE]\n\n"), 1);
+        });
+        configure(server);
+        ChatView view = showView();
+        ask(view, "Разведай проект отдельным разведчиком");
+        assertEquals(4, step.get());
+        assertTrue(view.history().getText().contains("Исследование завершено, найден метод Тест."));
+        var uses = view.session().messages().get(1).tools();
+        assertTrue(uses.stream().anyMatch(use -> use.id().contains("/child/") && use.summary().startsWith("Разведка:")));
+        assertTrue(uses.stream().allMatch(use -> use.status() == ToolUse.Status.DONE));
+        assertTrue(server.requests().get(3).body().contains("status: complete"));
+        assertFalse(server.requests().get(3).body().contains("Сообщить"), "родителю не возвращается прочитанный ребёнком модуль");
+        view.control().setSize(720, 650);
+        view.control().layout(true, true);
+        view.history().setTopIndex(0);
+        Screenshots.render(view.control(), "explore-project");
+    }
+
+    private static String explorationCall(String name, Map<String, Object> input) {
+        return "data: " + Json.write(Json.object("choices", List.of(Json.object("delta", Json.object("tool_calls", List.of(
+                Json.object("index", 0, "id", "call-" + name, "type", "function", "function",
+                        Json.object("name", name, "arguments", Json.write(input))))))))) + "\n\n";
+    }
+
+    @Test
+    void stopDuringExplorationDoesNotRestartParentOrOpenQuestions() throws Exception {
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var finished = new java.util.concurrent.CountDownLatch(1);
+        var step = new java.util.concurrent.atomic.AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (step.getAndIncrement() == 0) {
+                response.sse(List.of(explorationCall("explore_project", Map.of("question", "Исследуй проект")), "data: [DONE]\n\n"), 0);
+            } else {
+                entered.countDown();
+                try {
+                    release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                    response.sse(List.of(openAiPart("Поздний итог"), "data: [DONE]\n\n"), 0);
+                } finally { finished.countDown(); }
+            }
+        });
+        configure(server);
+        ChatView view = showView();
+        try {
+            view.input().setText("Разведай проект");
+            view.send();
+            waitUntil(() -> entered.getCount() == 0);
+            assertTrue(view.session().isBusy());
+            view.sendButton().notifyListeners(SWT.Selection, new Event());
+            waitUntil(() -> !view.session().isBusy());
+            release.countDown();
+            waitUntil(() -> finished.getCount() == 0);
+            view.refresh();
+            assertEquals(2, step.get());
+            assertFalse(view.questionsBar().isShown());
+            assertFalse(view.history().getText().contains("Поздний итог"));
+            assertEquals(io.github.hansglorias.edtai.core.chat.ChatMessage.Status.STOPPED,
+                    view.session().messages().get(1).status());
+        } finally { release.countDown(); }
+    }
+
+    @Test
     void reviewFindingsShowAsCardAndMarkers() throws Exception {
         String findings = "{\"findings\":[{\"module\":\"ОбщийМодуль.Тест\",\"line\":2,\"severity\":\"error\","
                 + "\"title\":\"Сообщить в общем модуле\",\"fix\":\"ОбщегоНазначения.СообщитьПользователю\"}]}";
@@ -269,7 +341,7 @@ class ChatToolsTest extends AbstractChatTest {
 
         Map<String, Object> first = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(first.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
-        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "skill", "save_skill", "report_review", "attach_file", "ask_user", "git_status", "git_diff", "git_log", "git_restore"), names);
+        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "skill", "save_skill", "report_review", "attach_file", "ask_user", "git_status", "git_diff", "git_log", "git_restore", "explore_project"), names);
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
         String result = Json.stringAt(messages.get(messages.size() - 1), "content");
         assertTrue(result.contains("ОбщийМодуль.Тест.Модуль (проект " + PROJECT + ", src/CommonModules/Тест/Module.bsl)"), result);
@@ -340,7 +412,7 @@ class ChatToolsTest extends AbstractChatTest {
         Map<String, Object> request = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(request.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
         assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "skill", "save_skill", "report_review", "attach_file", "ask_user", "git_status", "git_diff",
-                "git_log"), names, "скиллы проект не меняют — остаются");
+                "git_log", "explore_project"), names, "скиллы и разведка проект не меняют — остаются");
         String system = Json.stringAt(Json.asList(request.get("messages")).get(0), "content");
         assertTrue(system.contains(ProjectBrief.READ_ONLY_RULES), system);
         assertTrue(view.session().messages().get(0).attachments().isEmpty(), "«Вопросы» — без инструкции плана");

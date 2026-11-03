@@ -19,6 +19,11 @@ public interface ToolSource {
      */
     List<Tool> tools(Consumer<ToolUse> problems);
 
+    /** Только исходные встроенные чтения ProjectTools для изолированной разведки; MCP не наследуется. */
+    default List<Tool> explorationTools() {
+        return List.of();
+    }
+
     /**
      * Сведения о проекте для системного промпта: см. {@link ProjectBrief}.
      * Вызывается перед каждым ответом, в UI-потоке; пустая строка — нет.
