@@ -298,7 +298,7 @@ public class ChatView extends ViewPart {
 
     private ChatSession newSession(Live chat) {
         return new ChatSession(
-            ModelChatProvider.forStore(SettingsStore.workspace(), loaded -> chat.model.apply(loaded), new ModelClient(), new ToolSource() {
+            ModelChatProvider.forStore(SettingsStore.workspace(), loaded -> chat.model.apply(loaded), new ModelClient(diagnostics, diagnostics::isEnabled), new ToolSource() {
                 @Override
                 public List<Tool> tools(Consumer<ToolUse> problems) {
                     return ChatView.this.tools(chat, problems);
@@ -577,8 +577,15 @@ public class ChatView extends ViewPart {
 
     /** Настройки для подсказок и строки состояния; запросы к модели читают их сами. */
     private AiSettings settings = AiSettings.defaults();
+    private final UiDiagnosticLog diagnostics = new UiDiagnosticLog(stateLocation.resolve("diagnostics")
+            .resolve("requests.jsonl"), () -> inUi(() -> {
+                if (status != null && !status.isDisposed()) {
+                    updateStatus();
+                }
+            }));
 
     private final IPreferenceChangeListener preferenceListener = event -> inUi(() -> {
+        diagnostics.setEnabled(UiDiagnosticLog.preference());
         AiSettings previous = settings;
         settings = SettingsStore.workspace().load();
         if (current != null && !previous.model().equals(settings.model())) {
@@ -712,6 +719,7 @@ public class ChatView extends ViewPart {
         preferences().addPreferenceChangeListener(preferenceListener);
         ResourcesPlugin.getWorkspace().addResourceChangeListener(resourceListener, IResourceChangeEvent.POST_CHANGE);
         settings = SettingsStore.workspace().load();
+        diagnostics.setEnabled(UiDiagnosticLog.preference());
         contextBar.setLimit(settings.contextLimit());
         updateModelButton();
         restoreHistory();
@@ -3407,9 +3415,10 @@ public class ChatView extends ViewPart {
             }
             text = String.join(" · ", parts);
         }
+        status.setToolTipText((settings.isConfigured() ? chatSettings().model() + " · " + settings.baseUrl() + "\n" : "")
+                + diagnostics.description());
         if (!text.equals(status.getText())) {
             status.setText(text);
-            status.setToolTipText(settings.isConfigured() ? chatSettings().model() + " · " + settings.baseUrl() : null);
             // Строка и так во всю ширину: перекомпоновка всего вида раз в секунду (счётчик секунд) дёргала ленту.
             if (status.computeSize(SWT.DEFAULT, SWT.DEFAULT).y != status.getSize().y) {
                 root.layout(new Control[] { status });
@@ -3605,6 +3614,7 @@ public class ChatView extends ViewPart {
     @Override
     public void dispose() {
         viewDisposed = true;
+        diagnostics.close();
         mcpMonitor.close();
         markTabBusy(false);
         contextBar.clear();

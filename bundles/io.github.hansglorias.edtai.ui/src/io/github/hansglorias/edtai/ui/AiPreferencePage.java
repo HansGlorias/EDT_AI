@@ -85,6 +85,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Button checkServer;
     private Label serverResult;
     private Combo mcpInterval;
+    private Button localDiagnostics;
 
     @Override
     public void init(IWorkbench workbench) {
@@ -99,6 +100,15 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         createConnectionGroup(page);
         createCertificatesGroup(page);
         createMcpGroup(page);
+        Group diagnostics = group(page, "Локальная диагностика", 1);
+        localDiagnostics = new Button(diagnostics, SWT.CHECK);
+        localDiagnostics.setText("Вести локальный диагностический журнал запросов");
+        localDiagnostics.setSelection(UiDiagnosticLog.preference());
+        Label diagnosticInfo = new Label(diagnostics, SWT.WRAP);
+        diagnosticInfo.setText("Только числовые метрики, без содержимого запросов и ответов. "
+                + "Ничего не отправляется автоматически. До трёх файлов по 1 МиБ.\n" + UiDiagnosticLog.location()
+                + "\nСостояние журнала — в подсказке строки состояния чата.");
+        GridDataFactory.fillDefaults().grab(true, false).hint(400, SWT.DEFAULT).applyTo(diagnosticInfo);
 
         fill(store.load());
         updateTokenState();
@@ -623,6 +633,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     @Override
     protected void performDefaults() {
         fill(AiSettings.defaults());
+        localDiagnostics.setSelection(false);
         validate();
         super.performDefaults();
     }
@@ -636,6 +647,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         }
         try {
             store.save(settings);
+            var preferences = org.eclipse.core.runtime.preferences.InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
+            preferences.putBoolean(UiDiagnosticLog.ENABLED, localDiagnostics.getSelection());
+            preferences.flush();
             if (!token.getText().isEmpty()) {
                 store.saveToken(token.getText());
                 token.setText("");
@@ -651,6 +665,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
             return false;
         }
     }
+
+    Button localDiagnosticsField() { return localDiagnostics; }
 
     private void column(String title, int width, Function<McpServer, String> text) {
         TableViewerColumn column = new TableViewerColumn(serverViewer, SWT.NONE);

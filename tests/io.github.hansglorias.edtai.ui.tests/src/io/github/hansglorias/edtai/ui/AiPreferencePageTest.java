@@ -18,6 +18,27 @@ import io.github.hansglorias.edtai.core.settings.SettingsStore;
 
 class AiPreferencePageTest extends AbstractChatTest {
 
+    @Test void localDiagnosticsIsOptInAndPersists() throws Exception {
+        var preferences = org.eclipse.core.runtime.preferences.InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
+        preferences.remove(UiDiagnosticLog.ENABLED);
+        PreferenceDialog dialog = openPreferences();
+        try {
+            var settings = (AiPreferencePage) dialog.getSelectedPage();
+            assertFalse(settings.localDiagnosticsField().getSelection());
+            settings.localDiagnosticsField().setSelection(true);
+            assertTrue(settings.performOk());
+            assertTrue(UiDiagnosticLog.preference());
+            settings.performDefaults();
+            assertFalse(settings.localDiagnosticsField().getSelection());
+            assertTrue(settings.performOk());
+            assertFalse(UiDiagnosticLog.preference());
+        } finally {
+            preferences.remove(UiDiagnosticLog.ENABLED);
+            dialog.close();
+        }
+    }
+
+
     @Test void mcpIntervalIsEditableAndPersists() throws Exception {
         PreferenceDialog dialog = openPreferences();
         try {

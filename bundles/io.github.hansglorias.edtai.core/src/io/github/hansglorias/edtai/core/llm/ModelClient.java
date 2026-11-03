@@ -23,12 +23,17 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.BooleanSupplier;
 
 import javax.net.ssl.SSLContext;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.json.Json;
+import io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent;
+import io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent.Id;
+import io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent.RequestType;
+import io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent.Status;
 import io.github.hansglorias.edtai.core.tls.TlsContextFactory;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
 import io.github.hansglorias.edtai.core.tools.Tool;
@@ -65,16 +70,55 @@ public final class ModelClient {
     private final Duration responseTimeout;
     private final Duration idleTimeout;
 
+    private final Consumer<DiagnosticEvent> diagnostics;
+    private final BooleanSupplier diagnosticsEnabled;
+
     private CachedClient cached;
 
     public ModelClient() {
-        this(DEFAULT_CONNECT_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT, DEFAULT_IDLE_TIMEOUT);
+        this(DEFAULT_CONNECT_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT, DEFAULT_IDLE_TIMEOUT, null);
+    }
+
+    /** Callback может выполняться в caller или worker; должен быть неблокирующим. Ошибки изолированы. */
+    public ModelClient(Consumer<DiagnosticEvent> diagnostics) {
+        this(DEFAULT_CONNECT_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT, DEFAULT_IDLE_TIMEOUT, diagnostics);
+    }
+
+    /** Включение фиксируется при создании run/standalone-запроса; predicate не должен блокировать. */
+    public ModelClient(Consumer<DiagnosticEvent> diagnostics, BooleanSupplier diagnosticsEnabled) {
+        this(DEFAULT_CONNECT_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT, DEFAULT_IDLE_TIMEOUT, diagnostics, diagnosticsEnabled);
     }
 
     public ModelClient(Duration connectTimeout, Duration responseTimeout, Duration idleTimeout) {
+        this(connectTimeout, responseTimeout, idleTimeout, null);
+    }
+
+    public ModelClient(Duration connectTimeout, Duration responseTimeout, Duration idleTimeout, Consumer<DiagnosticEvent> diagnostics) {
+        this(connectTimeout, responseTimeout, idleTimeout, diagnostics, () -> true);
+    }
+
+    private ModelClient(Duration connectTimeout, Duration responseTimeout, Duration idleTimeout,
+            Consumer<DiagnosticEvent> diagnostics, BooleanSupplier diagnosticsEnabled) {
         this.connectTimeout = connectTimeout;
         this.responseTimeout = responseTimeout;
         this.idleTimeout = idleTimeout;
+        this.diagnostics = diagnostics;
+        this.diagnosticsEnabled = Objects.requireNonNull(diagnosticsEnabled);
+    }
+
+    private boolean diagnosticsEnabled() {
+        if (diagnostics == null) return false;
+        try { return diagnosticsEnabled.getAsBoolean(); } catch (Throwable ignored) { return false; }
+    }
+    Id newRunId() { return diagnosticsEnabled() ? Id.random() : null; }
+    RequestContext context(RequestType type) {
+        return diagnosticsEnabled() ? new RequestContext(Id.random(), type, 0) : null;
+    }
+    RequestDiagnostics begin(RequestContext context) {
+        return context == null ? null : new RequestDiagnostics(diagnostics, context);
+    }
+    void localFailure(RequestDiagnostics attempt, boolean rejected) {
+        if (attempt != null) attempt.finish(rejected ? Status.REJECTED : Status.FAILED, null, !rejected);
     }
 
     /**
@@ -84,7 +128,11 @@ public final class ModelClient {
      * @return полный текст ответа; завершается {@link ModelException} при ошибке
      */
     public CompletableFuture<String> stream(ModelConnection connection, List<ChatMessage> history, Consumer<String> onText) {
-        CompletableFuture<ModelReply> reply = request(connection, history, List.of(), List.of(), onText);
+        return stream(connection, history, onText, RequestType.ANSWER);
+    }
+
+    CompletableFuture<String> stream(ModelConnection connection, List<ChatMessage> history, Consumer<String> onText, RequestType type) {
+        CompletableFuture<ModelReply> reply = request(connection, history, List.of(), List.of(), onText, context(type));
         CompletableFuture<String> text = reply.thenApply(ModelReply::text);
         text.whenComplete((answer, error) -> {
             if (text.isCancelled()) {
@@ -104,12 +152,20 @@ public final class ModelClient {
      */
     CompletableFuture<ModelReply> request(ModelConnection connection, List<ChatMessage> history, List<Object> extra,
             List<Tool> tools, Consumer<String> onText) {
+        return request(connection, history, extra, tools, onText, context(RequestType.ANSWER));
+    }
+
+    private CompletableFuture<ModelReply> request(ModelConnection connection, List<ChatMessage> history, List<Object> extra,
+            List<Tool> tools, Consumer<String> onText, RequestContext context) {
+        RequestDiagnostics attempt = begin(context);
         try {
             RequestBudget.requireInputSpace(connection);
-            return request(connection, PreparedRequest.prepare(connection, history, extra, tools), onText);
+            return request(connection, PreparedRequest.prepare(connection, history, extra, tools), onText, attempt, null);
         } catch (ModelException e) {
+            localFailure(attempt, true);
             return CompletableFuture.failedFuture(e);
         } catch (RuntimeException e) {
+            localFailure(attempt, false);
             return CompletableFuture.failedFuture(preparationError(connection, e));
         }
     }
@@ -122,26 +178,64 @@ public final class ModelClient {
         return request(connection, prepared, onText, () -> { });
     }
 
-    /** @param onReasoning модель прислала часть рассуждения; из фонового потока */
     CompletableFuture<ModelReply> request(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText,
             Runnable onReasoning) {
+        return request(connection, prepared, onText, onReasoning, begin(context(RequestType.ANSWER)), null);
+    }
+
+    CompletableFuture<ModelReply> request(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText,
+            RequestDiagnostics attempt, Integer reducedBudget) {
+        return request(connection, prepared, onText, () -> { }, attempt, reducedBudget);
+    }
+
+    CompletableFuture<ModelReply> request(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText,
+            Runnable onReasoning, RequestDiagnostics attempt, Integer reducedBudget) {
+        if (attempt != null) attempt.prepared(prepared);
         try {
-            RequestBudget.requireFits(connection, prepared);
+            if (reducedBudget == null) RequestBudget.requireFits(connection, prepared);
+            else RequestBudget.requireFits(connection, prepared, reducedBudget);
         } catch (ModelException e) {
+            localFailure(attempt, true);
             return CompletableFuture.failedFuture(e);
         }
-        CompletableFuture<ModelReply> result = new CompletableFuture<>();
-        Exchange exchange = new Exchange(connection, prepared, onText, onReasoning, result);
+        RequestFuture result = new RequestFuture(attempt);
+        Exchange exchange = new Exchange(connection, prepared, onText, onReasoning, result, attempt);
         Thread thread = new Thread(exchange::run, "EDT AI: запрос к модели");
         thread.setDaemon(true);
         exchange.thread = thread;
         result.whenComplete((answer, error) -> {
-            if (result.isCancelled()) {
-                exchange.abort();
-            }
+            if (result.isCancelled()) exchange.abort();
         });
         thread.start();
         return result;
+    }
+
+    /** Terminal ownership сериализует cancel/success/failure, событие публикуется перед future. */
+    private static final class RequestFuture extends CompletableFuture<ModelReply> {
+        private final RequestDiagnostics attempt;
+        private boolean terminal;
+        RequestFuture(RequestDiagnostics attempt) { this.attempt = attempt; }
+        private synchronized boolean claim() {
+            if (terminal) return false;
+            terminal = true;
+            return true;
+        }
+        @Override public boolean complete(ModelReply reply) {
+            if (!claim()) return false;
+            if (attempt != null) attempt.finish(Status.SUCCESS, reply, false);
+            return super.complete(reply);
+        }
+        boolean fail(Throwable error, Status status) {
+            if (!claim()) return false;
+            if (attempt != null) attempt.finish(status, null, false);
+            return super.completeExceptionally(error);
+        }
+        @Override public boolean completeExceptionally(Throwable error) { return fail(error, Status.FAILED); }
+        @Override public boolean cancel(boolean interrupt) {
+            if (!claim()) return false;
+            if (attempt != null) attempt.finish(Status.CANCELLED, null, false);
+            return super.cancel(interrupt);
+        }
     }
 
     /**
@@ -153,7 +247,7 @@ public final class ModelClient {
         long start = System.nanoTime();
         List<ChatMessage> ping = List.of(ChatMessage.of(ChatRole.USER, "Ответь одним словом: готов"));
         // Запас на рассуждения: у reasoning-моделей (DeepSeek, o-серия) они тоже идут в max_tokens.
-        return stream(connection.withMaxTokens(SERVICE_TOKENS), ping, part -> { })
+        return stream(connection.withMaxTokens(SERVICE_TOKENS), ping, part -> { }, RequestType.CHECK)
                 .thenApply(answer -> {
                     long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
                     String shown = withoutNotice(answer).strip().replaceAll("\\s+", " ");
@@ -260,6 +354,14 @@ public final class ModelClient {
     private record CachedClient(TrustSettings trust, long modified, HttpClient client) {
     }
 
+    private static boolean timeout(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.net.http.HttpTimeoutException || cause instanceof java.net.SocketTimeoutException
+                    || cause instanceof java.util.concurrent.TimeoutException) return true;
+        }
+        return false;
+    }
+
     /** Один запрос: поток, в котором он выполняется, и ответ, который можно закрыть. */
     private final class Exchange {
 
@@ -267,7 +369,8 @@ public final class ModelClient {
         private final PreparedRequest prepared;
         private final Consumer<String> onText;
         private final Runnable onReasoning;
-        private final CompletableFuture<ModelReply> result;
+        private final RequestFuture result;
+        private final RequestDiagnostics attempt;
         private final ProtocolAdapter adapter;
 
         volatile Thread thread;
@@ -277,12 +380,13 @@ public final class ModelClient {
         private volatile long lastActivity;
 
         Exchange(ModelConnection connection, PreparedRequest prepared, Consumer<String> onText, Runnable onReasoning,
-                CompletableFuture<ModelReply> result) {
+                RequestFuture result, RequestDiagnostics attempt) {
             this.connection = connection;
             this.prepared = prepared;
             this.onText = onText;
             this.onReasoning = onReasoning;
             this.result = result;
+            this.attempt = attempt;
             this.adapter = ProtocolAdapter.of(connection.protocol());
         }
 
@@ -290,6 +394,7 @@ public final class ModelClient {
             URI uri = null;
             ScheduledFuture<?> watchdog = null;
             try {
+                if (result.isCancelled()) return;
                 uri = connection.endpoint();
                 if (connection.model().isEmpty()) {
                     throw new ModelException("Не задана модель в настройках EDT AI.");
@@ -305,7 +410,7 @@ public final class ModelClient {
                 }
                 HttpResponse<InputStream> response = client(connection.trust())
                         .send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
-                body = response.body();
+                body = attempt == null ? response.body() : attempt.response(response.body());
                 if (aborted) {
                     body.close();
                     return;
@@ -334,8 +439,9 @@ public final class ModelClient {
                             : ModelErrors.of(e, Objects.requireNonNullElse(uri, URI.create("http://localhost")),
                                     connectTimeout, responseTimeout, idleExpired ? idleTimeout : null);
                     String message = ModelErrors.redact(error.getMessage(), connection.token());
-                    result.completeExceptionally(error.contextOverflow() ? ModelException.overflow(message)
-                            : new ModelException(message, error.getCause(), error.rejectsTools()));
+                    Status status = idleExpired || timeout(e) ? Status.TIMEOUT : Status.FAILED;
+                    result.fail(error.contextOverflow() ? ModelException.overflow(message)
+                            : new ModelException(message, error.getCause(), error.rejectsTools()), status);
                 }
             } finally {
                 if (watchdog != null) {

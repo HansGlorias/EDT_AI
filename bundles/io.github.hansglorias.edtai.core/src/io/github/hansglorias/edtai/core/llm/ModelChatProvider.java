@@ -13,6 +13,7 @@ import io.github.hansglorias.edtai.core.chat.ChatProvider;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
+import io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent.RequestType;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
 import io.github.hansglorias.edtai.core.tools.ToolApprover;
@@ -146,6 +147,7 @@ public final class ModelChatProvider implements ChatProvider {
                 onTool.accept(new ToolUse("tools", "tools", "Инструменты", WITHOUT_TOOLS, ToolUse.Status.FAILED));
             }
             ModelConnection plain = connection;
+            RequestDiagnostics attempt = client.begin(client.context(RequestType.ANSWER));
             RequestBudget.Fitted fitted;
             PreparedRequest prepared;
             try {
@@ -154,15 +156,17 @@ public final class ModelChatProvider implements ChatProvider {
                         part -> RequestBudget.size(plain, part, List.of(), List.of()), RequestBudget.chars(plain));
                 prepared = PreparedRequest.prepare(plain, fitted.history(), List.of(), List.of());
             } catch (ModelException e) {
+                client.localFailure(attempt, true);
                 return CompletableFuture.failedFuture(e);
             } catch (RuntimeException e) {
+                client.localFailure(attempt, false);
                 return CompletableFuture.failedFuture(ModelClient.preparationError(plain, e));
             }
             if (fitted.trimmed()) {
                 onTool.accept(fitted.notice());
             }
             onUsage.accept(TokenUsage.sending(null, prepared.estimatedInputTokens()));
-            CompletableFuture<ModelReply> request = client.request(plain, prepared, onText, onReasoning);
+            CompletableFuture<ModelReply> request = client.request(plain, prepared, onText, onReasoning, attempt, null);
             CompletableFuture<String> text = request.thenApply(reply -> {
                 TokenUsage estimate = AgentLoop.estimate(prepared.estimatedInputChars(), reply);
                 onUsage.accept(reply.usage() == null ? estimate : reply.usage().fillMissing(estimate));
@@ -245,7 +249,7 @@ public final class ModelChatProvider implements ChatProvider {
         ModelConnection summary = connection.withMaxTokens(SUMMARY_TOKENS);
         String transcript = transcript(messages, (int) ((long) RequestBudget.chars(summary) * 6 / 10));
         ChatMessage prompt = ChatMessage.of(ChatRole.USER, SUMMARY_PROMPT + "\n\n" + transcript);
-        return client.stream(summary, List.of(prompt), part -> { });
+        return client.stream(summary, List.of(prompt), part -> { }, RequestType.SUMMARY);
     }
 
     /** Название по первому обмену: вопрос и начало ответа. */
@@ -260,7 +264,7 @@ public final class ModelChatProvider implements ChatProvider {
         List<ChatMessage> start = messages.stream().filter(message -> message.role() == ChatRole.USER
                 || message.role() == ChatRole.ASSISTANT).limit(2).toList();
         ChatMessage prompt = ChatMessage.of(ChatRole.USER, TITLE_PROMPT + "\n\n" + transcript(start, TITLE_TRANSCRIPT));
-        return client.stream(connection.withMaxTokens(TITLE_TOKENS), List.of(prompt), part -> { })
+        return client.stream(connection.withMaxTokens(TITLE_TOKENS), List.of(prompt), part -> { }, RequestType.TITLE)
                 .thenApply(ModelChatProvider::cleanTitle);
     }
 

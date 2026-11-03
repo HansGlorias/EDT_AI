@@ -11,6 +11,8 @@ import java.util.function.Consumer;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
+import io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent.Id;
+import io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent.RequestType;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.JsonException;
 import io.github.hansglorias.edtai.core.settings.Protocol;
@@ -104,6 +106,7 @@ final class AgentLoop {
     private TokenUsage usage;
     /** Токены последнего запроса к модели. */
     private TokenUsage lastStep;
+    private final Id diagnosticRun;
 
     /**
      * @param source   инструменты; запрашиваются в фоновом потоке перед первым запросом
@@ -117,6 +120,7 @@ final class AgentLoop {
     AgentLoop(ModelClient client, ModelConnection connection, List<ChatMessage> history, ToolSource source, ToolApprover approver,
             Consumer<String> onText, Consumer<ToolUse> onTool, Consumer<TokenUsage> onUsage, int maxSteps, boolean exploration) {
         this.client = client;
+        this.diagnosticRun = client.newRunId();
         this.base = connection;
         this.history = history;
         this.source = source;
@@ -271,22 +275,23 @@ final class AgentLoop {
             tools = new ArrayList<>(tools);
             tools.add(resultReader);
         }
+        RequestContext context = diagnosticRun == null ? null : new RequestContext(diagnosticRun, RequestType.ANSWER, 0);
         while (true) {
             checkCancelled();
             if (exploration && ++requests > maxSteps) {
                 incomplete = true;
                 throw new ModelException("Лимит физических запросов разведки исчерпан");
             }
+            RequestDiagnostics attempt = client.begin(context);
             try {
                 FittedRequest fitted = prepare();
                 ModelConnection connection = connection();
                 PreparedRequest request = PreparedRequest.prepare(connection, fitted.history(), fitted.extra(), tools);
-                RequestBudget.requireFits(connection, request, RequestBudget.chars(connection) >> shrink);
                 TokenUsage sending = TokenUsage.sending(usage, request.estimatedInputTokens());
                 publishUsage(exploration ? uncertain(sending) : sending);
                 ModelReply reply;
                 try {
-                    reply = await(client.request(connection, request, this::text, onReasoning));
+                    reply = await(client.request(connection, request, this::text, onReasoning, attempt, RequestBudget.chars(connection) >> shrink));
                 } catch (Exception e) {
                     // Без usage прерванного/ошибочного запроса известна только часть расхода ребёнка.
                     if (exploration) uncertainChildUsage = true;
@@ -299,9 +304,11 @@ final class AgentLoop {
                 publishUsage(usage);
                 return reply;
             } catch (ModelException e) {
+                client.localFailure(attempt, true);
                 // Сервер говорит «не помещается» (окно угадали или задали больше настоящего): урезаем и повторяем.
                 if (e.contextOverflow() && shrink < MAX_SHRINK) {
                     shrink++;
+                    context = RequestContext.retry(context);
                     continue;
                 }
                 if (!e.rejectsTools() || tools.isEmpty() || !transcript.isEmpty()) {
@@ -324,6 +331,10 @@ final class AgentLoop {
                     onTool.accept(new ToolUse("tools", "tools", "Инструменты", TOOLS_UNSUPPORTED + " Причина: " + e.getMessage(),
                             ToolUse.Status.FAILED));
                 }
+                context = RequestContext.retry(context);
+            } catch (RuntimeException e) {
+                client.localFailure(attempt, false);
+                throw e;
             }
         }
     }
