@@ -62,6 +62,8 @@ final class ChatHistoryPanel {
 
         void export(String id);
 
+        void exportAnalysis(String id);
+
         void delete(String id);
 
         /** Запрос поиска изменился — показать найденное. */
@@ -162,7 +164,8 @@ final class ChatHistoryPanel {
         create.addListener(SWT.Selection, event -> callbacks.newChat());
         new MenuItem(menu, SWT.SEPARATOR);
         List<MenuItem> items = List.of(item(menu, "Открыть", callbacks::open), item(menu, "Переименовать…\tF2", callbacks::rename),
-                item(menu, "Экспорт в Markdown…", callbacks::export), item(menu, "Удалить", callbacks::delete));
+                item(menu, "Экспорт в Markdown…", callbacks::export),
+                item(menu, "Выгрузка для разбора (ZIP)…", callbacks::exportAnalysis), item(menu, "Удалить", callbacks::delete));
         menu.addListener(SWT.Show, event -> items.forEach(item -> item.setEnabled(selected() != null)));
         table.setMenu(menu);
     }
