@@ -31,12 +31,19 @@ class AiPreferencePageTest extends AbstractChatTest {
             var scroll = assertInstanceOf(ScrolledComposite.class, settings.localDiagnosticsField().getParent().getParent().getParent());
             waitUntil(() -> scroll.getClientArea().height > 0);
             assertTrue(scroll.getVerticalBar().getVisible(), "настройки доступны прокруткой в небольшом окне");
+            settings.localDiagnosticsField().setFocus();
             scroll.showControl(settings.localDiagnosticsField());
+            settle();
             var bounds = scroll.getDisplay().map(settings.localDiagnosticsField(), scroll,
                     new Rectangle(0, 0, settings.localDiagnosticsField().getSize().x,
                             settings.localDiagnosticsField().getSize().y));
             assertTrue(scroll.getClientArea().contains(bounds.x, bounds.y));
             assertTrue(scroll.getClientArea().contains(bounds.x + bounds.width - 1, bounds.y + bounds.height - 1));
+            var onShell = scroll.getDisplay().map(settings.localDiagnosticsField(), dialog.getShell(),
+                    new Rectangle(0, 0, settings.localDiagnosticsField().getSize().x,
+                            settings.localDiagnosticsField().getSize().y));
+            assertTrue(dialog.getShell().getClientArea().contains(onShell.x, onShell.y));
+            assertTrue(dialog.getShell().getClientArea().contains(onShell.x + onShell.width - 1, onShell.y + onShell.height - 1));
             Screenshots.capture(dialog.getShell(), "preferences-diagnostics");
             assertFalse(settings.localDiagnosticsField().getSelection());
             settings.localDiagnosticsField().setSelection(true);
