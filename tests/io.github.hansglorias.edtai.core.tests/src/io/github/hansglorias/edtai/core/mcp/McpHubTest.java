@@ -80,6 +80,7 @@ class McpHubTest {
         assertEquals(List.of(), problems);
         assertFalse(read.modifies(), "по имени: читающий глагол");
         assertFalse(read.repeatableRead(), "имя не доказывает безопасность повторного выполнения");
+        assertFalse(read.safeInPlan(), "в плане одного имени read недостаточно");
         assertFalse(tools.get("get_edt_version").modifies());
         assertTrue(tools.get("broken").modifies(), "незнакомое имя — правка");
     }
@@ -94,6 +95,8 @@ class McpHubTest {
         assertTrue(tools.get("get_and_fix").modifies(), "сервер сказал: меняет");
         assertTrue(tools.get("update_index").repeatableRead());
         assertFalse(tools.get("get_and_fix").repeatableRead());
+        assertTrue(tools.get("update_index").safeInPlan());
+        assertFalse(tools.get("get_and_fix").safeInPlan());
     }
 
     @Test

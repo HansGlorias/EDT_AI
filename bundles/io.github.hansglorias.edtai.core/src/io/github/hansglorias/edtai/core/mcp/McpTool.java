@@ -68,6 +68,11 @@ final class McpTool implements Tool {
         return Boolean.TRUE.equals(info.readOnly());
     }
 
+    @Override
+    public boolean safeInPlan() {
+        return Boolean.TRUE.equals(info.readOnly());
+    }
+
     /** «MCP «EDT»: read_module_source (ОбщийМодуль.Х)» — значения первых двух аргументов. */
     @Override
     public String summary(Map<String, Object> input) {

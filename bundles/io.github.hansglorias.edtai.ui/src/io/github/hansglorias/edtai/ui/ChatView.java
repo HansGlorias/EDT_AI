@@ -126,6 +126,7 @@ import io.github.hansglorias.edtai.core.chat.ChatMarkdown;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatModel;
 import io.github.hansglorias.edtai.core.chat.ContextGauge;
+import io.github.hansglorias.edtai.core.chat.PlanApproval;
 import io.github.hansglorias.edtai.core.chat.ReplyActivity;
 import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
@@ -164,6 +165,7 @@ import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolActivity;
 import io.github.hansglorias.edtai.core.tools.ToolApprover.Decision;
 import io.github.hansglorias.edtai.core.tools.ToolSource;
+import io.github.hansglorias.edtai.core.tools.UserQuestions;
 
 /**
  * Вид «EDT AI»: лента диалога, панель прикреплённых фрагментов кода и
@@ -260,6 +262,9 @@ public class ChatView extends ViewPart {
         volatile List<ChatMessage> saved = List.of();
         /** Вопрос о разрешении инструмента, пока чат в фоне: задаётся, когда чат откроют. */
         Runnable approval;
+        volatile UserQuestionsBar.Pending questions;
+        /** Режим фиксируется при начале ответа, включая фоновые чаты. */
+        volatile AgentMode responseMode = AgentMode.AGENT;
         /** Ввод припаркованного чата; правка никогда не меняет историю до отправки. */
         Draft draft = Draft.empty();
         MessageEdit edit;
@@ -303,7 +308,7 @@ public class ChatView extends ViewPart {
                     if (SettingsStore.workspace().load().toolsEnabled()) {
                         brief = (brief + "\n\n" + skills.prompt()).strip();
                     }
-                    return isReadOnly() ? (brief + "\n\n" + ProjectBrief.READ_ONLY_RULES).strip() : brief;
+                    return chat.responseMode.readOnly() ? (brief + "\n\n" + ProjectBrief.READ_ONLY_RULES).strip() : brief;
                 }
             }, (use, arguments) -> approve(chat, use, arguments)));
     }
@@ -317,6 +322,7 @@ public class ChatView extends ViewPart {
             @Override
             public void busyChanged(boolean busy) {
                 if (busy) {
+                    chat.responseMode = agentMode();
                     // Первая отправка закрепляет за чатом модель, которой он отвечает.
                     bindModel(chat, chat.model.isEmpty() ? ChatModel.of(SettingsStore.workspace().load()) : chat.model);
                     chat.touched.clear();
@@ -325,9 +331,13 @@ public class ChatView extends ViewPart {
                 }
                 if (!busy) {
                     rememberContext(chat);
+                    UserQuestionsBar.Pending pending = chat.questions;
+                    chat.questions = null;
+                    if (pending != null) pending.future.cancel(true);
                 }
                 inUi(() -> {
                     if (!busy) {
+                        if (chat == current && questionsBar != null && !chat.session.isBusy()) questionsBar.show(null);
                         attachChanges(chat);
                         if (chat != current) {
                             unread.add(chat.id);
@@ -387,6 +397,10 @@ public class ChatView extends ViewPart {
     private Label emptyText;
     private Link emptyLink;
     private ApprovalBar approvalBar;
+    private UserQuestionsBar questionsBar;
+    private Button approvePlan;
+    private Live displayedPlanChat;
+    private ChatMessage displayedPlan;
     private ContextBar contextBar;
     /** Сообщения, набранные во время ответа. */
     private QueueBar queueBar;
@@ -656,6 +670,12 @@ public class ChatView extends ViewPart {
         createHistory(top);
         createEmptyState(top);
         approvalBar = new ApprovalBar(column, this::approvalChanged);
+        questionsBar = new UserQuestionsBar(column, this::approvalChanged);
+        approvePlan = new Button(column, SWT.PUSH);
+        approvePlan.setText("Утвердить план и выполнить");
+        GridDataFactory.fillDefaults().grab(true, false).exclude(true).applyTo(approvePlan);
+        approvePlan.setVisible(false);
+        approvePlan.addListener(SWT.Selection, event -> executePlan());
         queueBar = new QueueBar(column, new QueueBar.Callbacks() {
             @Override
             public void edit(QueueBar.Queued message) {
@@ -1229,6 +1249,7 @@ public class ChatView extends ViewPart {
             notice = null;
             previous.session.removeListener(chatListener);
             previous.approval = approvalBar.park();
+            questionsBar.show(null);
             if (!queueBar.isEmpty()) {
                 queueBar.drain().forEach(this::returnToInput);
                 showNotice("Сообщения из очереди вернулись в поле ввода");
@@ -1275,6 +1296,7 @@ public class ChatView extends ViewPart {
             if (approval != null) {
                 approval.run();
             }
+            questionsBar.show(chat.questions);
         }
     }
 
@@ -1671,7 +1693,7 @@ public class ChatView extends ViewPart {
         }
         root.layout(true, true);
         updateStatus();
-        if (approvalBar.isShown()) {
+        if (approvalBar.isShown() || questionsBar != null && questionsBar.isShown()) {
             IWorkbenchSiteProgressService progress = getSite().getService(IWorkbenchSiteProgressService.class);
             if (progress != null) {
                 progress.warnOfContentChange();
@@ -1986,6 +2008,7 @@ public class ChatView extends ViewPart {
     void setAgentMode(AgentMode value) {
         CompletableFuture<Void> saved = AgentModeStore.workspace().select(value);
         updateModeButton();
+        updatePlanApproval();
         showNotice("Режим «" + value.label() + "»: " + lowerFirst(value.description()));
         saved.whenComplete((unused, error) -> {
             if (error != null) {
@@ -2587,10 +2610,6 @@ public class ChatView extends ViewPart {
         }));
     }
 
-    private static boolean isReadOnly() {
-        return agentMode().readOnly();
-    }
-
     /** Добавляет фрагмент на панель над полем ввода и ставит фокус в поле. */
     /**
      * Кнопка в окне коммита: вопрос «Сообщение коммита»; когда ответ готов,
@@ -2886,6 +2905,7 @@ public class ChatView extends ViewPart {
      * последнее).
      */
     void refresh() {
+        updatePlanApproval();
         List<ChatMessage> messages = session.messages();
         boolean idle = !session.isBusy();
         ReplyActivity activity = session.activity();
@@ -3276,7 +3296,7 @@ public class ChatView extends ViewPart {
             List<String> parts = new ArrayList<>(List.of(chatSettings().model()));
             ReplyActivity activity = session.activity();
             TokenUsage usage = session.usage();
-            if (approvalBar != null && approvalBar.isShown()) {
+            if (approvalBar != null && approvalBar.isShown() || questionsBar != null && questionsBar.isShown()) {
                 parts.add("ждёт вашего решения");
             } else if (activity != null) {
                 parts.add(activity.describe(Instant.now()));
@@ -3384,6 +3404,7 @@ public class ChatView extends ViewPart {
         tools.addAll(SkillTools.create(skills));
         tools.addAll(ReviewTools.create(files, ReviewMarkers::show));
         tools.addAll(FileTools.create());
+        tools.add(UserQuestions.tool(request -> askUser(chat, request)));
         try {
             tools.addAll(GitTools.create(files, current::contextLimit));
         } catch (LinkageError e) {
@@ -3393,8 +3414,11 @@ public class ChatView extends ViewPart {
         // Сервер не подключился — это видно на кнопке MCP, а не строкой в каждом ответе.
         tools.addAll(mcp.tools(current.mcpServers(), TrustSettings.from(current), builtIn, current::contextLimit, problem -> { }));
         inUi(this::updateMcpButton);
-        if (isReadOnly()) {
+        if (chat.responseMode.readOnly()) {
             tools.removeIf(Tool::modifies);
+        }
+        if (chat.responseMode == AgentMode.PLAN) {
+            tools.removeIf(tool -> !tool.safeInPlan());
         }
         // Встроенные читающие инструменты файлов не меняют: изменения во время их вызова — не модели.
         return chat.toolActivity.track(tools, tool -> !builtIn.contains(tool.name()) || tool.modifies());
@@ -3405,7 +3429,8 @@ public class ChatView extends ViewPart {
      * полем ввода; чат в фоне — вопрос ждёт, пока его откроют.
      */
     private CompletableFuture<Decision> approve(Live chat, ToolUse use, String arguments) {
-        if (chat.allowed.contains(use.name()) || isAutoApprove()) {
+        if (chat.allowed.contains(use.name()) || chat.responseMode.autoApprove()
+                || chat.responseMode != AgentMode.PLAN && isAutoApprove()) {
             return CompletableFuture.completedFuture(Decision.ALLOW);
         }
         CompletableFuture<Decision> decision = new CompletableFuture<>();
@@ -3425,6 +3450,48 @@ public class ChatView extends ViewPart {
             }
         });
         return decision;
+    }
+
+    private CompletableFuture<List<UserQuestions.Answer>> askUser(Live chat, UserQuestions.Request request) {
+        UserQuestionsBar.Pending pending = new UserQuestionsBar.Pending(request);
+        chat.questions = pending;
+        inUi(() -> {
+            if (!pending.future.isDone() && chat.session.isBusy()) {
+                if (chat == current) {
+                    notice = null;
+                    questionsBar.show(pending);
+                }
+                else showNotice("Чат «" + chats.title(chat.id, chat.session.messages()) + "» ждёт ответов на уточнения");
+            }
+        });
+        return pending.future;
+    }
+
+    private void updatePlanApproval() {
+        if (approvePlan == null || approvePlan.isDisposed()) return;
+        ChatMessage plan = !session.isBusy() && current.edit == null && agentMode() == AgentMode.PLAN
+                ? PlanApproval.candidate(session.messages()).orElse(null) : null;
+        displayedPlan = plan;
+        displayedPlanChat = current;
+        boolean visible = plan != null;
+        if (approvePlan.getVisible() != visible) {
+            approvePlan.setVisible(visible);
+            ((GridData) approvePlan.getLayoutData()).exclude = !visible;
+            root.layout(true, true);
+        }
+    }
+
+    private void executePlan() {
+        if (current != displayedPlanChat || session.isBusy() || current.edit != null || displayedPlan == null
+                || agentMode() != AgentMode.PLAN || !PlanApproval.candidate(session.messages()).filter(displayedPlan::equals).isPresent()) return;
+        ChatMessage plan = displayedPlan;
+        current.allowed.clear();
+        setAgentMode(AgentMode.AGENT);
+        // Ответы на уточнения сохранены в вызовах; повторяем решения в явном поручении на выполнение.
+        String decisions = plan.tools().stream().filter(use -> use.name().equals("ask_user")
+                && use.status() == ToolUse.Status.DONE).map(ToolUse::outcome).collect(Collectors.joining("\n"));
+        session.send(PlanApproval.EXECUTE + (decisions.isEmpty() ? "" : "\nОтветы на уточнения:\n" + decisions));
+        updatePlanApproval();
     }
 
     private static void background(String name, Runnable runnable) {
@@ -3520,6 +3587,9 @@ public class ChatView extends ViewPart {
     ApprovalBar approvalBar() {
         return approvalBar;
     }
+
+    UserQuestionsBar questionsBar() { return questionsBar; }
+    Button approvePlanButton() { return approvePlan; }
 
     StyledText history() {
         return history;

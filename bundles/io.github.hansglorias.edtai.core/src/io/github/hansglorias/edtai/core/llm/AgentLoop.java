@@ -325,6 +325,8 @@ final class AgentLoop {
             ledger.succeeded(key, projected);
             onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));
             return new ProtocolAdapter.ToolResult(call, projected, false);
+        } catch (CancellationException e) {
+            throw e;
         } catch (ToolException | RuntimeException e) {
             String error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             ToolUse.Problem problem = e instanceof ToolException failure ? failure.problem() : ToolUse.Problem.FAILED;
