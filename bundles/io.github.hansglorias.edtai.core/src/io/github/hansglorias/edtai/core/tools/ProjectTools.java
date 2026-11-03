@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +14,7 @@ import java.util.Optional;
 import java.util.function.IntSupplier;
 import java.util.stream.Stream;
 
+import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.context.BslModulePath;
 import io.github.hansglorias.edtai.core.json.Json;
 
@@ -238,13 +240,15 @@ public final class ProjectTools {
 
         @Override
         public String description() {
-            return "Поиск строки в модулях BSL проекта без учёта регистра (не регулярное выражение). Возвращает модуль,"
-                    + " номер строки и саму строку. type ограничивает поиск типом объектов (Справочник, ОбщийМодуль…).";
+            return "Поиск подстроки в BSL без учёта регистра: модуль, строка, текст. Если модуль известен — задай module"
+                    + " (как read_module); глобальный поиск — для обнаружения. type ограничивает тип объектов;"
+                    + " module и type несовместимы.";
         }
 
         @Override
         public Map<String, Object> inputSchema() {
             return schema(Json.object("query", string("Что искать: имя процедуры, переменной, часть текста"),
+                    "module", string("Один модуль: нотация 1С или путь в проекте, как read_module; без type"),
                     "type", string("Искать только в объектах этого типа"),
                     "max_results", integer("Сколько совпадений вернуть, по умолчанию " + DEFAULT_SEARCH_RESULTS),
                     "project", PROJECT), List.of("query"));
@@ -252,23 +256,62 @@ public final class ProjectTools {
 
         @Override
         public String summary(Map<String, Object> input) {
+            String module = text(input, "module");
             String type = text(input, "type");
-            return "Ищет «" + text(input, "query") + "»" + (type.isEmpty() ? "" : " в «" + type + "»");
+            return "Ищет «" + text(input, "query") + "»" + (!module.isEmpty() ? " в модуле «" + module + "»"
+                    : type.isEmpty() ? "" : " в «" + type + "»");
         }
 
         @Override
         public Result call(Map<String, Object> input) throws ToolException {
+            boolean scoped = input.containsKey("module");
+            String module = "";
+            if (scoped) {
+                if (input.containsKey("type")) {
+                    throw new ToolException(ToolUse.Problem.BAD_ARGUMENTS, "module и type нельзя задавать вместе");
+                }
+                if (!(input.get("module") instanceof String value) || value.isBlank()) {
+                    throw new ToolException(ToolUse.Problem.BAD_ARGUMENTS, "module должен быть непустой строкой");
+                }
+                module = text(input, "module");
+            }
             String query = text(input, "query");
             if (query.isBlank()) {
                 throw new ToolException("Не задано, что искать (query)");
             }
             String project = project(input);
             Path root = root(project);
-            Path where = root.resolve("src");
-            String type = text(input, "type");
-            if (!type.isEmpty()) {
-                where = where.resolve(BslModulePath.typeDirectory(type).orElseThrow(() -> new ToolException(
-                        "Неизвестный тип «" + type + "». Типы: " + String.join(", ", typeNames()))));
+            checkSearchCancelled();
+            List<Path> candidates;
+            if (scoped) {
+                String path;
+                Path file;
+                try {
+                    path = modulePath(project, module);
+                    file = root.resolve(path).normalize();
+                } catch (ToolException e) {
+                    throw new ToolException(ToolUse.Problem.BAD_ARGUMENTS, e.getMessage());
+                } catch (InvalidPathException e) {
+                    throw new ToolException(ToolUse.Problem.BAD_ARGUMENTS, "Некорректный путь модуля (module)");
+                }
+                if (!file.startsWith(root)) {
+                    throw new ToolException(ToolUse.Problem.BAD_ARGUMENTS, "Путь вне проекта: " + path);
+                }
+                if (!path.endsWith(".bsl")) {
+                    throw new ToolException(ToolUse.Problem.BAD_ARGUMENTS, "module должен указывать на файл .bsl");
+                }
+                if (!Files.isRegularFile(file)) {
+                    throw new ToolException(ToolUse.Problem.BAD_ARGUMENTS, missingModule(root, path));
+                }
+                candidates = List.of(file);
+            } else {
+                Path where = root.resolve("src");
+                String type = text(input, "type");
+                if (!type.isEmpty()) {
+                    where = where.resolve(BslModulePath.typeDirectory(type).orElseThrow(() -> new ToolException(
+                            "Неизвестный тип «" + type + "». Типы: " + String.join(", ", typeNames()))));
+                }
+                candidates = bslFiles(where);
             }
             int max = Math.max(1, Math.min(MAX_SEARCH_RESULTS, number(input, "max_results", DEFAULT_SEARCH_RESULTS)));
             String needle = normalize(query);
@@ -277,17 +320,18 @@ public final class ProjectTools {
             int modules = 0;
             int unreadable = 0;
             // Открытые в редакторе модули — с несохранёнными правками, как в read_module.
-            Map<String, String> unsaved = files.unsavedTexts(project);
-            for (Path file : bslFiles(where)) {
-                if (Thread.currentThread().isInterrupted()) {
-                    throw new ToolException("Поиск прерван");
-                }
+            Map<String, String> unsaved = scoped ? Map.of() : files.unsavedTexts(project);
+            for (Path file : candidates) {
+                checkSearchCancelled();
                 String path = root.relativize(file).toString().replace('\\', '/');
-                String content = unsaved.get(path);
+                String content = scoped ? files.unsavedText(project, path).orElse(null) : unsaved.get(path);
                 if (content == null) {
                     try {
                         content = read(file);
                     } catch (IOException e) {
+                        if (scoped) {
+                            throw new ToolException("Не удалось прочитать модуль " + path + ": " + e.getMessage());
+                        }
                         unreadable++;
                         continue;
                     }
@@ -295,6 +339,7 @@ public final class ProjectTools {
                 List<String> lines = List.of(content.split("\r\n|\r|\n", -1));
                 boolean matched = false;
                 for (int i = 0; i < lines.size(); i++) {
+                    checkSearchCancelled();
                     if (normalize(lines.get(i)).contains(needle)) {
                         total++;
                         matched = true;
@@ -312,6 +357,10 @@ public final class ProjectTools {
                 }
             }
             StringBuilder text = new StringBuilder("«" + query + "»: совпадений — " + total + ", модулей — " + modules);
+            if (scoped) {
+                String path = root.relativize(candidates.get(0)).toString().replace('\\', '/');
+                text.append(", область — ").append(BslModulePath.metadataName(path).orElse(path));
+            }
             if (total > found.size()) {
                 text.append(", показаны первые ").append(found.size());
             }
@@ -331,6 +380,12 @@ public final class ProjectTools {
     }
 
     // ---- общее ----
+
+    private static void checkSearchCancelled() throws ToolException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new ToolException(ToolUse.Problem.INTERRUPTED, "Поиск прерван");
+        }
+    }
 
     static final Map<String, Object> PROJECT = string("Имя проекта, если в рабочей области их несколько");
 

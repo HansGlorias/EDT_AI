@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.tools;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.Json;
 
 class ProjectToolsTest {
@@ -46,6 +48,8 @@ class ProjectToolsTest {
     private String preferred;
     private int limit = 40_000;
     private Map<String, Tool> tools;
+    private int bulkBufferReads;
+    private boolean interruptOnBufferRead;
 
     @BeforeEach
     void createProjects() throws Exception {
@@ -75,11 +79,13 @@ class ProjectToolsTest {
 
             @Override
             public Optional<String> unsavedText(String project, String path) {
+                if (interruptOnBufferRead) Thread.currentThread().interrupt();
                 return Optional.ofNullable(unsaved.get(project + "/" + path));
             }
 
             @Override
             public Map<String, String> unsavedTexts(String project) {
+                bulkBufferReads++;
                 Map<String, String> texts = new HashMap<>();
                 unsaved.forEach((key, text) -> {
                     if (key.startsWith(project + "/")) {
@@ -100,6 +106,8 @@ class ProjectToolsTest {
         assertEquals(List.of("list_objects", "project_info", "read_module", "search_code"), tools.keySet().stream().sorted().toList());
         assertEquals(List.of("module"), tools.get("read_module").inputSchema().get("required"));
         assertEquals("object", tools.get("project_info").inputSchema().get("type"));
+        assertEquals("string", Json.stringAt(tools.get("search_code").inputSchema(), "properties", "module", "type"));
+        assertEquals(List.of("query"), tools.get("search_code").inputSchema().get("required"));
     }
 
     @Test
@@ -187,6 +195,96 @@ class ProjectToolsTest {
         assertEquals("«изредактора»: совпадений — 1, модулей — 1\nОбщийМодуль.Общий.Модуль:2: Новое = ИзРедактора;",
                 call("search_code", "query", "изредактора").text());
         assertEquals("найдено 1", call("search_code", "query", "сообщить(").outcome(), "старый текст модуля не ищется");
+    }
+
+    @Test
+    void searchCodeInOneModuleSupportsNotationAndProjectPaths() throws Exception {
+        write(temp.resolve("Демо"), "src/CommonModules/Первый/Module.bsl", "needle first\n");
+        write(temp.resolve("Демо"), "src/CommonModules/Второй/Module.bsl", "needle second\n");
+        for (String module : List.of("ОбщийМодуль.Первый", "src/CommonModules/Первый/Module.bsl",
+                "Демо/src/CommonModules/Первый/Module.bsl", "src\\CommonModules\\Первый\\Module.bsl")) {
+            Tool.Result result = call("search_code", "query", "NEEDLE", "module", module);
+            assertEquals("найдено 1", result.outcome());
+            assertTrue(result.text().contains("ОбщийМодуль.Первый.Модуль:1: needle first"), result.text());
+            assertFalse(result.text().contains("Второй"));
+            assertTrue(tools.get("search_code").summary(Json.object("query", "needle", "module", module)).contains(module));
+        }
+        assertEquals(0, bulkBufferReads, "адресному поиску не нужны все открытые буферы");
+        assertEquals("найдено 2", call("search_code", "query", "needle").outcome());
+        assertEquals("найдено 2", call("search_code", "query", "needle", "type", "ОбщийМодуль").outcome());
+        assertTrue(call("search_code", "query", "absent", "module", "ОбщийМодуль.Первый").text()
+                .contains("совпадений — 0, модулей — 0, область — ОбщийМодуль.Первый.Модуль"));
+    }
+
+    @Test
+    void scopedSearchReadsTheSameUnsavedModuleAsReadModule() throws Exception {
+        unsaved.put("Демо/src/CommonModules/Общий/Module.bsl", "draft needle\r\nnext needle\rthird needle\n");
+        assertEquals("найдено 3", call("search_code", "query", "needle", "module", "ОбщийМодуль.Общий").outcome());
+        Tool.Result result = call("search_code", "query", "next", "module", "Демо/src/CommonModules/Общий/Module.bsl");
+        assertTrue(result.text().contains("ОбщийМодуль.Общий.Модуль:2: next needle"));
+        assertFalse(result.text().contains("Сообщить"), "сохранённый текст не участвует");
+        assertTrue(call("read_module", "module", "ОбщийМодуль.Общий").text().contains("2  next needle"));
+        assertEquals(0, bulkBufferReads);
+    }
+
+    @Test
+    void scopedSearchRejectsInvalidMissingAndEscapingModules() throws Exception {
+        write(temp.resolve("Альфа"), "outside.bsl", "private needle\n");
+        for (Object value : java.util.Arrays.asList(null, "", " ", 7, List.of("ОбщийМодуль.Общий"))) {
+            assertEquals(ToolUse.Problem.BAD_ARGUMENTS, assertThrows(ToolException.class,
+                    () -> call("search_code", "query", "needle", "module", value)).problem());
+        }
+        for (String module : List.of("Что-то", "ОбщийМодуль.Несуществующий", "src/CommonModules/Общий/Missing.bsl",
+                "../Альфа/outside.bsl", "src/../../Альфа/outside.bsl", "src/Configuration/Configuration.mdo", "src/invalid\u0000.bsl")) {
+            assertEquals(ToolUse.Problem.BAD_ARGUMENTS, assertThrows(ToolException.class,
+                    () -> call("search_code", "query", "needle", "module", module)).problem(), module);
+        }
+        assertEquals("Путь вне проекта: ../Альфа/outside.bsl",
+                message("search_code", "query", "needle", "module", "../Альфа/outside.bsl"));
+        assertEquals(0, bulkBufferReads, "неверный module не включает глобальный поиск");
+    }
+
+    @Test
+    void scopedSearchRejectsTypeEvenWhenItsValueIsEmpty() {
+        for (Object type : java.util.Arrays.asList("ОбщийМодуль", "", null)) {
+            ToolException error = assertThrows(ToolException.class,
+                    () -> call("search_code", "query", "needle", "module", "ОбщийМодуль.Общий", "type", type));
+            assertEquals(ToolUse.Problem.BAD_ARGUMENTS, error.problem());
+            assertTrue(error.getMessage().contains("module и type"));
+        }
+    }
+
+    @Test
+    void scopedSearchKeepsResultCountClampAndTextBudget() throws Exception {
+        write(temp.resolve("Демо"), "src/CommonModules/Первый/Module.bsl", "needle\n".repeat(250));
+        Tool.Result first = call("search_code", "query", "needle", "module", "ОбщийМодуль.Первый", "max_results", 1);
+        assertEquals("найдено 250", first.outcome());
+        assertTrue(first.text().contains("показаны первые 1"));
+        assertTrue(first.text().contains("Модуль:1: needle"));
+        assertFalse(first.text().contains("Модуль:2:"));
+        Tool.Result clamped = call("search_code", "query", "needle", "module", "ОбщийМодуль.Первый", "max_results", 999);
+        assertTrue(clamped.text().contains("показаны первые 200"));
+        assertTrue(clamped.text().contains("Модуль:200: needle"));
+        assertFalse(clamped.text().contains("Модуль:201:"));
+        limit = 1;
+        Tool.Result limited = call("search_code", "query", "needle", "module", "ОбщийМодуль.Первый");
+        assertTrue(limited.text().contains("дальше не поместилось в лимит"));
+        assertFalse(limited.text().contains("Модуль:1:"));
+    }
+
+    @Test
+    void scopedSearchChecksCancellationBeforeReadingAndAfterBufferRead() {
+        try {
+            Thread.currentThread().interrupt();
+            assertEquals(ToolUse.Problem.INTERRUPTED, assertThrows(ToolException.class,
+                    () -> call("search_code", "query", "needle", "module", "ОбщийМодуль.Общий")).problem());
+        } finally { Thread.interrupted(); }
+        unsaved.put("Демо/src/CommonModules/Общий/Module.bsl", "needle\n".repeat(500));
+        interruptOnBufferRead = true;
+        try {
+            assertEquals(ToolUse.Problem.INTERRUPTED, assertThrows(ToolException.class,
+                    () -> call("search_code", "query", "needle", "module", "ОбщийМодуль.Общий")).problem());
+        } finally { Thread.interrupted(); }
     }
 
     @Test
