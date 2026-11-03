@@ -73,6 +73,7 @@ final class AgentLoop {
     private final boolean exploration;
     private int requests;
     private boolean incomplete;
+    private boolean uncertainChildUsage;
     private final Map<String, TokenUsage> childUsage = new HashMap<>();
     private TokenUsage displayedUsage;
     private final CompletableFuture<String> result = new CompletableFuture<>();
@@ -144,10 +145,16 @@ final class AgentLoop {
     }
 
     private synchronized void publishUsage(TokenUsage parent) {
+        if (exploration && uncertainChildUsage) parent = uncertain(parent);
         displayedUsage = parent;
         TokenUsage total = parent;
         for (TokenUsage child : childUsage.values()) total = total == null ? child : child.plus(total);
         if (total != null && !result.isDone()) onUsage.accept(total);
+    }
+
+    private static TokenUsage uncertain(TokenUsage value) {
+        return new TokenUsage(value.input(), value.output(), value.context(), TokenUsage.Source.UNKNOWN,
+                TokenUsage.Source.UNKNOWN, value.contextSource());
     }
 
     private synchronized void childUsage(String id, TokenUsage value) {
@@ -275,8 +282,16 @@ final class AgentLoop {
                 ModelConnection connection = connection();
                 PreparedRequest request = PreparedRequest.prepare(connection, fitted.history(), fitted.extra(), tools);
                 RequestBudget.requireFits(connection, request, RequestBudget.chars(connection) >> shrink);
-                publishUsage(TokenUsage.sending(usage, request.estimatedInputTokens()));
-                ModelReply reply = await(client.request(connection, request, this::text, onReasoning));
+                TokenUsage sending = TokenUsage.sending(usage, request.estimatedInputTokens());
+                publishUsage(exploration ? uncertain(sending) : sending);
+                ModelReply reply;
+                try {
+                    reply = await(client.request(connection, request, this::text, onReasoning));
+                } catch (Exception e) {
+                    // Без usage прерванного/ошибочного запроса известна только часть расхода ребёнка.
+                    if (exploration) uncertainChildUsage = true;
+                    throw e;
+                }
                 TokenUsage estimate = estimate(request.estimatedInputChars(), reply);
                 TokenUsage step = reply.usage() == null ? estimate : reply.usage().fillMissing(estimate);
                 lastStep = step;

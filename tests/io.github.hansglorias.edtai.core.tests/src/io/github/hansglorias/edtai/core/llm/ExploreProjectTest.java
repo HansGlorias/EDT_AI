@@ -205,6 +205,25 @@ class ExploreProjectTest {
     }
 
     @Test
+    void failedChildRequestDoesNotMakeKnownPartialCostLookComplete() throws Exception {
+        List<TokenUsage> usage = new CopyOnWriteArrayList<>();
+        AtomicInteger requests = new AtomicInteger();
+        try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+            if (requests.getAndIncrement() == 0) send(response, Protocol.OPENAI_COMPATIBLE, "", List.of(call("read_module",
+                    Map.of("module", "src/CommonModules/Test/Module.bsl"))), 200, 20);
+            else response.send(500, "application/json", "{}");
+        })) {
+            ExploreProject explore = new ExploreProject(new ModelClient(), connection(server, Protocol.OPENAI_COMPATIBLE),
+                    reads(), use -> { }, (id, value) -> usage.add(value));
+            explore.call(Map.of("question", "Read"));
+            TokenUsage partial = usage.get(usage.size() - 1);
+            assertEquals(200, partial.input(), "сохраняем известную часть, но не выдаём её за полный расход");
+            assertEquals(TokenUsage.Source.UNKNOWN, partial.inputSource());
+            assertEquals(TokenUsage.Source.UNKNOWN, partial.outputSource());
+        }
+    }
+
+    @Test
     void childCanPageItsOwnSnapshotButCannotExportItsIdentifier() throws Exception {
         List<Tool> reads = reads();
         Files.writeString(temp.resolve("src/CommonModules/Test/Module.bsl"), "large-fixture-line\n".repeat(1500));
@@ -246,6 +265,13 @@ class ExploreProjectTest {
                 send(response, Protocol.OPENAI_COMPATIBLE, "x".repeat(20_000), List.of(), 1, 1))) {
             Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read"));
             assertEquals("partial", result.outcome());
+            assertTrue(result.text().length() <= ExploreProject.MAX_REPORT);
+        }
+        try (FakeModelServer server = FakeModelServer.http().handler((request, response) ->
+                send(response, Protocol.OPENAI_COMPATIBLE, "result_id ".repeat(350), List.of(), 1, 1))) {
+            Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read"));
+            assertTrue(result.text().contains("Итог обрезан"), "удаление ссылок тоже может увеличить текст");
+            assertTrue(result.text().contains("Перед правкой ведущий обязан перечитать модуль"));
             assertTrue(result.text().length() <= ExploreProject.MAX_REPORT);
         }
     }

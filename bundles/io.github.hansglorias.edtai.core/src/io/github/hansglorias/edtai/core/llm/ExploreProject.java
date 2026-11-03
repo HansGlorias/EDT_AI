@@ -136,11 +136,14 @@ final class ExploreProject implements Tool {
     }
 
     private static Result report(String status, String text, List<String> checked, boolean truncated) {
+        String safeText = clean(text);
+        String safeChecked = clean(String.join("\n", checked));
+        truncated |= safeText.length() > 3700 || safeChecked.length() > 1500;
         if (truncated && status.equals("complete")) status = "partial";
         String body = "Исследование проекта\nstatus: " + status
-                + "\nВыводы модели (не доказательство выполнения и не проверка актуальности кода):\n" + limit(clean(text), 3700)
+                + "\nВыводы модели (не доказательство выполнения и не проверка актуальности кода):\n" + limit(safeText, 3700)
                 + "\nПроверенная область (успешные вызовы чтения; не гарантия полноты):\n"
-                + (checked.isEmpty() ? "Чтения не подтверждены." : clean(String.join("\n", checked)))
+                + (checked.isEmpty() ? "Чтения не подтверждены." : limit(safeChecked, 1500))
                 + "\nНеизвестное: выводы и ссылки требуют проверки; scope — ориентир, а не ограничение доступа."
                 + (truncated ? " Итог обрезан." : "")
                 + "\nПеред правкой ведущий обязан перечитать модуль. Дочерние снимки недоступны.";
