@@ -90,6 +90,11 @@ public final class ToolActivity {
         }
 
         @Override
+        public boolean safeInPlan() {
+            return tool.safeInPlan();
+        }
+
+        @Override
         public String summary(Map<String, Object> input) {
             return tool.summary(input);
         }

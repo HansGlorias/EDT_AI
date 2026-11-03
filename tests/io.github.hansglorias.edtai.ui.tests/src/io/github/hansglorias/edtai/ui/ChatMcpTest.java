@@ -32,6 +32,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.github.hansglorias.edtai.core.json.Json;
+import io.github.hansglorias.edtai.core.chat.AgentMode;
 import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 import io.github.hansglorias.edtai.core.settings.McpServer;
@@ -52,6 +53,7 @@ class ChatMcpTest extends AbstractChatTest {
     private final List<String> calls = new CopyOnWriteArrayList<>();
     /** Что делает инструмент на сервере, кроме ответа: например, правит файл, как EDT-MCP. */
     private volatile ThrowingRunnable onCall = () -> { };
+    private boolean planTools;
 
     private interface ThrowingRunnable {
         void run() throws Exception;
@@ -76,6 +78,39 @@ class ChatMcpTest extends AbstractChatTest {
     @AfterEach
     void stopMcp() throws IOException {
         mcp.close();
+    }
+
+    @Test
+    void planRejectsMcpWritesAndUnannotatedReadsEvenIfModelCallsThem() throws Exception {
+        planTools = true;
+        server.handler((request, response) -> {
+            if (request.body().contains("\"role\":\"tool\"")) {
+                response.sse(List.of(openAiPart("План без записи"), "data: [DONE]\n\n"), 0);
+            } else {
+                List<Object> requested = List.of("get_edt_version", "delete_project", "get_and_fix", "edit_module", "save_skill").stream()
+                        .map(name -> (Object) Json.object("id", name, "type", "function", "function",
+                                Json.object("name", name, "arguments", "{}"))).toList();
+                response.send(200, "application/json", Json.write(Json.object("choices", List.of(Json.object("message",
+                        Json.object("role", "assistant", "tool_calls", requested))))));
+            }
+        });
+        SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, "", 0,
+                true, false, "", new ArrayList<>(List.of(new McpServer("EDT", McpTransport.HTTP, mcp.url() + "/mcp", true)))));
+        ChatView view = showView();
+        view.setAgentMode(AgentMode.PLAN);
+        ask(view, "Составь план проверки версии");
+        assertEquals(List.of(), calls, "не предлагается и не исполняется по выдуманному вызову модели");
+        assertFalse(view.approvalBar().isShown());
+        List<Object> tools = Json.asList(Json.parseObject(server.requests().get(0).body()).get("tools"));
+        assertFalse(tools.stream().anyMatch(tool -> "get_edt_version".equals(Json.stringAt(tool, "function", "name"))));
+        assertTrue(tools.stream().anyMatch(tool -> "safe_read".equals(Json.stringAt(tool, "function", "name"))),
+                "явно объявленное чтение доступно");
+        for (String forbidden : List.of("delete_project", "get_and_fix", "edit_module", "save_skill")) {
+            assertFalse(tools.stream().anyMatch(tool -> forbidden.equals(Json.stringAt(tool, "function", "name"))));
+            assertTrue(server.requests().get(1).body().contains("Инструмента «" + forbidden + "» нет"));
+        }
+        assertTrue(server.requests().get(1).body().contains("Инструмента «get_edt_version» нет"));
+        assertEquals(AgentMode.PLAN, ChatView.agentMode());
     }
 
     @Test
@@ -357,7 +392,11 @@ class ChatMcpTest extends AbstractChatTest {
                 response.send(202, "text/plain", "");
                 return;
             }
-            case "tools/list" -> result = Json.object("tools", List.of(
+            case "tools/list" -> result = Json.object("tools", planTools ? List.of(
+                    Json.object("name", "get_edt_version", "inputSchema", Json.object("type", "object")),
+                    Json.object("name", "delete_project", "inputSchema", Json.object("type", "object")),
+                    Json.object("name", "get_and_fix", "inputSchema", Json.object("type", "object"), "annotations", Json.object("readOnlyHint", false)),
+                    Json.object("name", "safe_read", "inputSchema", Json.object("type", "object"), "annotations", Json.object("readOnlyHint", true))) : List.of(
                     Json.object("name", "get_edt_version", "description", "Версия 1C:EDT", "inputSchema", Json.object("type", "object")),
                     Json.object("name", "delete_project", "description", "Удаляет проект", "inputSchema", Json.object("type", "object"))));
             case "tools/call" -> {
