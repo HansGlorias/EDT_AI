@@ -15,6 +15,7 @@ import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.JsonException;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
+import io.github.hansglorias.edtai.core.tools.ProjectTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolApprover;
 import io.github.hansglorias.edtai.core.tools.ToolException;
@@ -68,6 +69,12 @@ final class AgentLoop {
     private final ProtocolAdapter adapter;
     private final ToolSource source;
     private final ToolApprover approver;
+    private final int maxSteps;
+    private final boolean exploration;
+    private int requests;
+    private boolean incomplete;
+    private final Map<String, TokenUsage> childUsage = new HashMap<>();
+    private TokenUsage displayedUsage;
     private final CompletableFuture<String> result = new CompletableFuture<>();
 
     private List<Tool> tools = List.of();
@@ -103,6 +110,11 @@ final class AgentLoop {
      */
     AgentLoop(ModelClient client, ModelConnection connection, List<ChatMessage> history, ToolSource source, ToolApprover approver,
             Consumer<String> onText, Consumer<ToolUse> onTool, Consumer<TokenUsage> onUsage) {
+        this(client, connection, history, source, approver, onText, onTool, onUsage, MAX_STEPS, false);
+    }
+
+    AgentLoop(ModelClient client, ModelConnection connection, List<ChatMessage> history, ToolSource source, ToolApprover approver,
+            Consumer<String> onText, Consumer<ToolUse> onTool, Consumer<TokenUsage> onUsage, int maxSteps, boolean exploration) {
         this.client = client;
         this.base = connection;
         this.history = history;
@@ -111,6 +123,8 @@ final class AgentLoop {
         this.onText = onText;
         this.onTool = onTool;
         this.onUsage = onUsage;
+        this.maxSteps = maxSteps;
+        this.exploration = exploration;
         this.adapter = ProtocolAdapter.of(connection.protocol());
         this.resultStore = new ToolResultStore(Math.max(512, Math.min(6000, RequestBudget.chars(connection) / 8)), 1_000_000);
         this.resultReader = resultStore.tool();
@@ -123,6 +137,22 @@ final class AgentLoop {
 
     boolean toolsRejected() {
         return toolsRejected;
+    }
+
+    boolean incomplete() {
+        return incomplete || toolsRejected;
+    }
+
+    private synchronized void publishUsage(TokenUsage parent) {
+        displayedUsage = parent;
+        TokenUsage total = parent;
+        for (TokenUsage child : childUsage.values()) total = total == null ? child : child.plus(total);
+        if (total != null && !result.isDone()) onUsage.accept(total);
+    }
+
+    private synchronized void childUsage(String id, TokenUsage value) {
+        childUsage.put(id, value);
+        publishUsage(displayedUsage);
     }
 
     CompletableFuture<String> start() {
@@ -152,6 +182,15 @@ final class AgentLoop {
     private String loop() throws Exception {
         try {
             tools = List.copyOf(source.tools(onTool));
+            if (!exploration) {
+                List<Tool> reads = source.explorationTools().stream().filter(ProjectTools::isBuiltInRead).toList();
+                if (!reads.isEmpty()) {
+                    tools = new ArrayList<>(tools);
+                    tools.add(new ExploreProject(client, base, reads, use -> {
+                        if (!result.isDone()) onTool.accept(use);
+                    }, this::childUsage));
+                }
+            }
         } catch (RuntimeException e) {
             onTool.accept(new ToolUse("tools", "tools", "Инструменты", "не удалось получить список: " + e.getMessage(),
                     ToolUse.Status.FAILED));
@@ -163,9 +202,13 @@ final class AgentLoop {
             checkCancelled();
             ModelReply reply = request();
             if (reply.calls().isEmpty()) {
+                incomplete |= reply.truncated();
+                if (exploration) return ChatMessage.stripTrace(ThinkFilter.strip(reply.text())).strip();
                 return ChatMessage.stripTrace(ThinkFilter.strip(answer.toString())).strip();
             }
-            if (step >= MAX_STEPS) {
+            if (step >= maxSteps) {
+                incomplete = true;
+                if (exploration) return "Лимит запросов разведки исчерпан; итог не завершён.";
                 text("_Остановлено: модель вызвала инструменты " + MAX_STEPS + " раз подряд. Напишите «продолжай»,"
                         + " чтобы она продолжила, или уточните задачу._");
                 return answer.toString().strip();
@@ -178,7 +221,7 @@ final class AgentLoop {
                 results.add(execute(call, tokens));
                 tokens = null;
             }
-            String note = step == MAX_STEPS - 1 ? LAST_STEP : step == WRAP_UP_STEP ? WRAP_UP : "";
+            String note = step == maxSteps - 1 ? LAST_STEP : step == WRAP_UP_STEP ? WRAP_UP : "";
             if (!note.isEmpty() && !results.isEmpty()) {
                 ProtocolAdapter.ToolResult last = results.get(results.size() - 1);
                 results.set(results.size() - 1, new ProtocolAdapter.ToolResult(last.call(), last.text() + "\n\n" + note, last.error()));
@@ -223,18 +266,22 @@ final class AgentLoop {
         }
         while (true) {
             checkCancelled();
+            if (exploration && ++requests > maxSteps) {
+                incomplete = true;
+                throw new ModelException("Лимит физических запросов разведки исчерпан");
+            }
             try {
                 FittedRequest fitted = prepare();
                 ModelConnection connection = connection();
                 PreparedRequest request = PreparedRequest.prepare(connection, fitted.history(), fitted.extra(), tools);
                 RequestBudget.requireFits(connection, request, RequestBudget.chars(connection) >> shrink);
-                onUsage.accept(TokenUsage.sending(usage, request.estimatedInputTokens()));
+                publishUsage(TokenUsage.sending(usage, request.estimatedInputTokens()));
                 ModelReply reply = await(client.request(connection, request, this::text, onReasoning));
                 TokenUsage estimate = estimate(request.estimatedInputChars(), reply);
                 TokenUsage step = reply.usage() == null ? estimate : reply.usage().fillMissing(estimate);
                 lastStep = step;
                 usage = usage == null ? step : usage.plus(step);
-                onUsage.accept(usage);
+                publishUsage(usage);
                 return reply;
             } catch (ModelException e) {
                 // Сервер говорит «не помещается» (окно угадали или задали больше настоящего): урезаем и повторяем.
@@ -275,7 +322,7 @@ final class AgentLoop {
 
     /** Подключение; если есть инструменты — с правилами работы с ними в системном промпте. */
     private ModelConnection connection() {
-        return tools.isEmpty() ? base : base.withSystemPromptPart(ProjectBrief.TOOL_RULES);
+        return exploration || tools.isEmpty() ? base : base.withSystemPromptPart(ProjectBrief.TOOL_RULES);
     }
 
     private ProtocolAdapter.ToolResult execute(ToolCall call, TokenUsage tokens) {
@@ -320,7 +367,8 @@ final class AgentLoop {
         checkCancelled();
         ledger.started(key, tool, transcript.size());
         try {
-            Tool.Result output = tool.call(input);
+            Tool.Result output = tool instanceof ExploreProject explore ? explore.call(input, call.id()) : tool.call(input);
+            if (tool instanceof ExploreProject) checkCancelled();
             String projected = tool == resultReader ? output.text() : capture(call, key, output.text(), false);
             ledger.succeeded(key, projected);
             onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));
