@@ -21,7 +21,7 @@ public interface TextChange {
      * Замена единственного вхождения {@code oldText} на {@code newText}.
      * Переводы строк — как в файле: модель пишет {@code \n}, а файл может быть
      * с {@code \r\n}. Точного вхождения нет — ищутся те же целые строки без учёта
-     * пробельных различий ({@link LooseMatch}).
+     * различий в отступах ({@link LooseMatch}).
      */
     static TextChange replace(String oldText, String newText) {
         return current -> {
@@ -33,7 +33,7 @@ public interface TextChange {
             }
             int first = current.indexOf(from);
             if (first < 0) {
-                // Точного нет: те же строки без учёта пробелов (табы/пробелы, номера строк), отступы — как в модуле.
+                // Точного нет: те же строки без учёта отступов (табы/пробелы, номера строк), отступы — как в модуле.
                 return LooseMatch.replace(current, normalize(oldText, "\n"), normalize(newText, "\n"), delimiter);
             }
             int count = 0;

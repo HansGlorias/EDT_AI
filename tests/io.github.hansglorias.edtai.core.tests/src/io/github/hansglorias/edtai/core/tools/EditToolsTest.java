@@ -76,7 +76,7 @@ class EditToolsTest {
     @Test
     void ambiguousMissingAndForbiddenEdits() {
         assertTrue(message(Map.of("module", MODULE, "old_text", "\tВозврат;", "new_text", "")).contains("встречается в модуле 2 раз"));
-        assertTrue(message(Map.of("module", MODULE, "old_text", "2  \tВозврат;", "new_text", "")).contains("2 раз (без учёта пробелов)"),
+        assertTrue(message(Map.of("module", MODULE, "old_text", "2  \tВозврат;", "new_text", "")).contains("2 раз (без учёта отступов)"),
                 "номер строки из read_module снимается, но фрагмент всё равно неуникален");
         assertTrue(message(Map.of("module", MODULE, "old_text", "Процедура В()", "new_text", "")).contains("«Процедура В()» в модуле нет"));
         assertTrue(message(Map.of("module", "src/Configuration.mdo", "old_text", "<x/>", "new_text", "")).startsWith(
@@ -135,7 +135,7 @@ class EditToolsTest {
     @Test
     void spacesInsteadOfTabsAreMatchedAndReindentedToModuleStyle() throws Exception {
         Path file = temp.resolve("Демо").resolve(MODULE);
-        // Модель пишет отступы 4 пробелами, в модуле — табы; в конце строки модуля лишний пробел.
+        // Модель пишет отступы 4 пробелами, в модуле — табы.
         edit.call(Map.of("module", MODULE, "old_text", "Процедура Б()\n    Возврат;\nКонецПроцедуры",
                 "new_text", "Процедура Б()\n    Если Истина Тогда\n        Сообщить(\"Б\");\n    КонецЕсли;\n    Возврат;\nКонецПроцедуры"));
         assertEquals("\uFEFFПроцедура А()\r\n\tВозврат;\r\nКонецПроцедуры\r\n\r\nПроцедура Б()\r\n\tЕсли Истина Тогда\r\n"
@@ -145,7 +145,7 @@ class EditToolsTest {
     @Test
     void lineNumbersAndLostIndentFromReadModuleAreTolerated() throws Exception {
         Path file = temp.resolve("Демо").resolve(MODULE);
-        Files.writeString(file, "Процедура А()\n\tЗначение = 1;  \n\tВозврат;\nКонецПроцедуры\n");
+        Files.writeString(file, "Процедура А()\n\tЗначение = 1;\n\tВозврат;\nКонецПроцедуры\n");
         edit.call(Map.of("module", MODULE, "old_text", " 2  Значение = 1;\n 3  Возврат;",
                 "new_text", " 2  Значение = 2;\n 3  Возврат;"));
         assertEquals("Процедура А()\n\tЗначение = 2;\n\tВозврат;\nКонецПроцедуры\n", Files.readString(file));
@@ -156,6 +156,45 @@ class EditToolsTest {
         String error = message(Map.of("module", MODULE, "old_text", "Процедура Б()\n\tВозврат 1;", "new_text", ""));
         assertTrue(error.contains("Начало фрагмента совпало со строкой 5, но строка 6 отличается: в модуле «Возврат;», в old_text «Возврат 1;»"),
                 error);
+    }
+
+    @Test
+    void significantWhitespaceMismatchNeverChangesModule() throws Exception {
+        Path file = temp.resolve("Демо").resolve(MODULE);
+        for (String actual : List.of("А  Б", "А\u00a0Б", "А\u200bБ", "А\ufeffБ")) {
+            String before = "\tТекст = \"" + actual + "\";\n";
+            Files.writeString(file, before);
+            message(Map.of("module", MODULE, "old_text", "    Текст = \"А Б\";", "new_text", "    Возврат;"));
+            assertEquals(before, Files.readString(file));
+            assertTrue(changes.isEmpty());
+        }
+        for (String before : List.of("\tТекст = \"А  \n\t|Б\";\n", "\tТекст = \"А\n\t|Б  В\";\n")) {
+            Files.writeString(file, before);
+            String old = before.replace("\t", "    ").replace("А  ", "А").replace("Б  В", "Б В");
+            message(Map.of("module", MODULE, "old_text", old, "new_text", "    Возврат;"));
+            assertEquals(before, Files.readString(file));
+            assertTrue(changes.isEmpty());
+        }
+    }
+
+    @Test
+    void tolerantReplacementKeepsLiteralContentsAndBlankLines() throws Exception {
+        Path file = temp.resolve("Демо").resolve(MODULE);
+        for (String delimiter : List.of("\n", "\r\n")) {
+            Files.writeString(file, "Начало;" + delimiter + "\tВозврат;" + delimiter + "Конец;" + delimiter);
+            String fresh = "\n    Текст = \"А  \n    |Б\u00a0\u200b  В\";  \n  \n\n";
+            edit.call(Map.of("module", MODULE, "old_text", "    Возврат;\n", "new_text", fresh));
+            String expected = "Начало;\n\n\tТекст = \"А  \n\t|Б\u00a0\u200b  В\";  \n  \n\nКонец;\n";
+            assertEquals(expected.replace("\n", delimiter), Files.readString(file));
+        }
+    }
+
+    @Test
+    void tolerantReplacementIncludesRequestedEmptyBoundaryLines() throws Exception {
+        Path file = temp.resolve("Демо").resolve(MODULE);
+        Files.writeString(file, "Начало;\n\n\tВозврат;\n\nКонец;\n");
+        edit.call(Map.of("module", MODULE, "old_text", "\n    Возврат;\n\n", "new_text", "\n    Сообщить(1);\n\n"));
+        assertEquals("Начало;\n\n\tСообщить(1);\n\nКонец;\n", Files.readString(file));
     }
 
     private Map<String, Object> validInput() {

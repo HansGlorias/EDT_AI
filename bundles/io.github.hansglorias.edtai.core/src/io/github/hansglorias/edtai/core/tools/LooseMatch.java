@@ -6,8 +6,8 @@ import java.util.regex.Pattern;
 
 /**
  * Поиск фрагмента для правки, когда точного совпадения нет: модель пишет отступы пробелами вместо
- * табов модуля, теряет пробелы в концах строк или копирует номера строк из вывода read_module.
- * Сравниваются целые строки без учёта пробельных различий; совпасть должно ровно одно место. Отступы
+ * табов модуля, копирует номера строк из вывода read_module.
+ * Сравниваются целые строки без учёта различий в отступах; совпасть должно ровно одно место. Отступы
  * нового текста приводятся к стилю модуля. Не нашлось — ошибка с первой несовпавшей строкой.
  */
 final class LooseMatch {
@@ -35,22 +35,12 @@ final class LooseMatch {
                 fresh.replaceAll(LooseMatch::unnumber);
             }
         }
-        int leading = 0;
-        while (!old.isEmpty() && old.get(0).isBlank()) {
-            old.remove(0);
-            leading++;
-        }
-        while (!old.isEmpty() && old.get(old.size() - 1).isBlank()) {
+        boolean finalNewline = oldText.endsWith("\n");
+        if (finalNewline) {
             old.remove(old.size() - 1);
         }
-        if (old.isEmpty()) {
+        if (old.isEmpty() || old.stream().allMatch(String::isBlank)) {
             throw notFound("");
-        }
-        for (int i = 0; i < leading && fresh.size() > 1 && fresh.get(0).isBlank(); i++) {
-            fresh.remove(0);
-        }
-        while (fresh.size() > 1 && fresh.get(fresh.size() - 1).isBlank()) {
-            fresh.remove(fresh.size() - 1);
         }
 
         List<int[]> lines = lines(current);
@@ -64,15 +54,15 @@ final class LooseMatch {
             while (k < wanted.size() && canon.get(i + k).equals(wanted.get(k))) {
                 k++;
             }
-            if (k == wanted.size()) {
+            if (k == wanted.size() && (!finalNewline || lines.get(i + k - 1)[1] < current.length())) {
                 found.add(i);
-            } else if (k > bestLength) {
+            } else if (k < wanted.size() && k > bestLength) {
                 best = i;
                 bestLength = k;
             }
         }
         if (found.size() > 1) {
-            throw new ToolException("old_text встречается в модуле " + found.size() + " раз (без учёта пробелов): добавь соседние"
+            throw new ToolException("old_text встречается в модуле " + found.size() + " раз (без учёта отступов): добавь соседние"
                     + " строки, чтобы фрагмент был единственным");
         }
         if (found.isEmpty()) {
@@ -88,6 +78,9 @@ final class LooseMatch {
         int first = found.get(0);
         int start = lines.get(first)[0];
         int end = lines.get(first + old.size() - 1)[1];
+        if (finalNewline) {
+            end += current.startsWith("\r\n", end) ? 2 : 1;
+        }
         List<String> matched = lines.subList(first, first + old.size()).stream()
                 .map(range -> current.substring(range[0], range[1])).toList();
         return new TextChange.Replacement(start, end - start, String.join(delimiter, reindent(fresh, old, matched)));
@@ -113,19 +106,19 @@ final class LooseMatch {
         List<String> result = new ArrayList<>();
         for (String line : fresh) {
             if (line.isBlank()) {
-                result.add(line.strip());
+                result.add(line);
                 continue;
             }
             int width = Math.max(0, fileBase + columns(indent(line)) - base);
             String prefix = tabs ? "\t".repeat((width + TAB_WIDTH / 2) / TAB_WIDTH) : " ".repeat(width);
-            result.add(prefix + line.stripLeading());
+            result.add(prefix + line.substring(indent(line).length()));
         }
         return result;
     }
 
     private static String indent(String line) {
         int i = 0;
-        while (i < line.length() && (line.charAt(i) == ' ' || line.charAt(i) == '\t' || line.charAt(i) == ' ')) {
+        while (i < line.length() && (line.charAt(i) == ' ' || line.charAt(i) == '\t')) {
             i++;
         }
         return line.substring(0, i);
@@ -159,9 +152,9 @@ final class LooseMatch {
         return lines;
     }
 
-    /** Строка без различий в пробелах: неразрывный пробел — обычный, невидимые символы убраны. */
+    /** Только отступ из ASCII-пробелов и табов не влияет на сравнение. Содержимое и хвост строки точные. */
     static String canon(String line) {
-        return line.replace(' ', ' ').replace("​", "").replace("﻿", "").strip().replaceAll("\\s+", " ");
+        return line.substring(indent(line).length());
     }
 
     private static String unnumber(String line) {
