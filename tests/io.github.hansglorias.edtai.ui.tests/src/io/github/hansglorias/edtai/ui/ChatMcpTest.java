@@ -64,6 +64,8 @@ class ChatMcpTest extends AbstractChatTest {
         mcp = FakeModelServer.http().handler(this::mcp);
         server = FakeModelServer.http().handler((request, response) -> {
             if (!request.body().contains("\"role\":\"tool\"")) {
+                selectMcp(response, "get_edt_version");
+            } else if (!request.body().contains("\"tool_call_id\":\"call_1\"")) {
                 response.sse(List.of("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
                         + "\"function\":{\"name\":\"get_edt_version\",\"arguments\":\"{}\"}}]}}]}\n\n", "data: [DONE]\n\n"), 5);
             } else {
@@ -83,8 +85,14 @@ class ChatMcpTest extends AbstractChatTest {
     @Test
     void planRejectsMcpWritesAndUnannotatedReadsEvenIfModelCallsThem() throws Exception {
         planTools = true;
+        java.util.concurrent.atomic.AtomicInteger step = new java.util.concurrent.atomic.AtomicInteger();
         server.handler((request, response) -> {
-            if (request.body().contains("\"role\":\"tool\"")) {
+            int current = step.getAndIncrement();
+            if (current == 0) {
+                selectMcp(response, "get_edt_version");
+            } else if (current == 1) {
+                selectMcp(response, "safe_read");
+            } else if (current > 2) {
                 response.sse(List.of(openAiPart("План без записи"), "data: [DONE]\n\n"), 0);
             } else {
                 List<Object> requested = List.of("get_edt_version", "delete_project", "get_and_fix", "edit_module", "save_skill").stream()
@@ -103,13 +111,17 @@ class ChatMcpTest extends AbstractChatTest {
         assertFalse(view.approvalBar().isShown());
         List<Object> tools = Json.asList(Json.parseObject(server.requests().get(0).body()).get("tools"));
         assertFalse(tools.stream().anyMatch(tool -> "get_edt_version".equals(Json.stringAt(tool, "function", "name"))));
-        assertTrue(tools.stream().anyMatch(tool -> "safe_read".equals(Json.stringAt(tool, "function", "name"))),
-                "явно объявленное чтение доступно");
+        assertTrue(tools.stream().anyMatch(tool -> "discover_mcp_tools".equals(Json.stringAt(tool, "function", "name"))));
+        List<Object> selected = Json.asList(Json.parseObject(server.requests().get(2).body()).get("tools"));
+        assertTrue(selected.stream().anyMatch(tool -> "safe_read".equals(Json.stringAt(tool, "function", "name"))),
+                "явно объявленное чтение доступно после выбора");
+        assertTrue(server.requests().get(1).body().contains("Нет разрешённого инструмента: get_edt_version"),
+                "каталог не позволяет выбрать отфильтрованный инструмент");
         for (String forbidden : List.of("delete_project", "get_and_fix", "edit_module", "save_skill")) {
             assertFalse(tools.stream().anyMatch(tool -> forbidden.equals(Json.stringAt(tool, "function", "name"))));
-            assertTrue(server.requests().get(1).body().contains("Инструмента «" + forbidden + "» нет"));
+            assertTrue(server.requests().get(3).body().contains("Инструмента «" + forbidden + "» нет"));
         }
-        assertTrue(server.requests().get(1).body().contains("Инструмента «get_edt_version» нет"));
+        assertTrue(server.requests().get(3).body().contains("Инструмента «get_edt_version» нет"));
         assertEquals(AgentMode.PLAN, ChatView.agentMode());
     }
 
@@ -196,7 +208,7 @@ class ChatMcpTest extends AbstractChatTest {
         assertFalse(view.approvalBar().isShown());
         String transcript = withoutTokens(view.history().getText());
         assertTrue(transcript.contains(MessageRenderer.TOOL + "MCP «EDT»: get_edt_version — Версия EDT\nУ вас EDT 2026.1."), transcript);
-        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
+        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(2).body()).get("messages"));
         assertEquals("## Версия EDT\n2026.1.0", Json.stringAt(messages.get(messages.size() - 1), "content"));
         Screenshots.capture(view.control(), "mcp-answer");
     }
@@ -368,6 +380,14 @@ class ChatMcpTest extends AbstractChatTest {
 
     private static void click(Button button) {
         button.notifyListeners(SWT.Selection, new Event());
+    }
+
+    private static void selectMcp(FakeModelServer.Response response, String name) throws Exception {
+        Map<String, Object> function = Json.object("name", "discover_mcp_tools", "arguments",
+                Json.write(Json.object("action", "select", "names", List.of(name))));
+        Map<String, Object> delta = Json.object("tool_calls", List.of(Json.object("index", 0, "id", "select_mcp", "function", function)));
+        response.sse(List.of("data: " + Json.write(Json.object("choices", List.of(Json.object("delta", delta)))) + "\n\n",
+                "data: [DONE]\n\n"), 0);
     }
 
     /** MCP-сервер: initialize, tools/list с одним инструментом, tools/call. */

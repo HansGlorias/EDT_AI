@@ -54,6 +54,9 @@ final class McpTool implements Tool {
     }
 
     @Override
+    public boolean mcp() { return true; }
+
+    @Override
     public boolean needsApproval() {
         return true;
     }

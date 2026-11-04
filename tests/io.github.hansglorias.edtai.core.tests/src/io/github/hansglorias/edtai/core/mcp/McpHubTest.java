@@ -64,6 +64,7 @@ class McpHubTest {
         assertEquals(Set.of("get_edt_version", "read_module_source", "broken"), tools.keySet());
         assertEquals(List.of("initialize", "notifications/initialized", "tools/list", "tools/list"), server.methods);
         Tool read = tools.get("read_module_source");
+        assertTrue(read.mcp(), "обёртка MCP сохраняет происхождение для каталога");
         assertTrue(read.needsApproval());
         assertEquals("Текст модуля\n(инструмент MCP-сервера «EDT»)", read.description());
         assertEquals("object", read.inputSchema().get("type"));
@@ -160,6 +161,7 @@ class McpHubTest {
         List<Tool> second = hub.tools(List.of(edt("get_*"), new McpServer("Второй EDT", McpTransport.HTTP, server.url(), true, "get_*")),
                 TRUST, Set.of("read_module"), () -> limit, problems::add);
         assertEquals(List.of("get_edt_version", "EDT__get_edt_version"), second.stream().map(Tool::name).toList());
+        assertTrue(second.stream().allMatch(Tool::mcp), "переименование при коллизии сохраняет происхождение MCP");
         assertEquals("mcp__x", McpHub.exposedName(new McpServer("Рабочий", McpTransport.HTTP, "", true), "x", Set.of("x")));
         assertEquals("mcp__x_2", McpHub.exposedName(new McpServer("Рабочий", McpTransport.HTTP, "", true), "x", Set.of("x", "mcp__x")));
         assertEquals("get_module", McpHub.exposedName(edt(""), "get.module", Set.of()));

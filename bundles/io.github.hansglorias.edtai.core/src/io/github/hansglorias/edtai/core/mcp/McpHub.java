@@ -98,6 +98,7 @@ public final class McpHub implements AutoCloseable {
         Set<String> taken = new HashSet<>(reserved);
         // Этот встроенный инструмент появится лениво, после первого большого результата.
         taken.add("read_tool_result");
+        taken.add("discover_mcp_tools");
         for (McpServer server : servers) {
             if (!server.enabled()) {
                 continue;

@@ -19,6 +19,9 @@ public interface Tool {
     /** JSON Schema аргументов ({@code {"type":"object","properties":{…}}}). */
     Map<String, Object> inputSchema();
 
+    /** Реальный инструмент подключённого MCP-сервера; сохраняется обёртками. */
+    default boolean mcp() { return false; }
+
     /**
      * Спрашивать ли пользователя перед вызовом. Встроенные инструменты только
      * читают проект — без подтверждения; инструменты MCP-серверов могут
