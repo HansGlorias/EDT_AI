@@ -15,9 +15,11 @@ import io.github.hansglorias.edtai.core.context.ContextPrompt;
  * @param context фрагменты кода, прикреплённые к сообщению пользователя
  * @param tools   инструменты, которые модель вызвала, пока готовила этот ответ
  * @param attachments файлы и скриншоты, приложенные к сообщению пользователя
+ * @param stats   у ответа ассистента: сколько он шёл и на что ушло время и токены; {@code null} — не известно
+ *                (старые диалоги, вопросы)
  */
 public record ChatMessage(ChatRole role, String text, Instant time, Status status, List<ContextItem> context,
-        List<ToolUse> tools, List<Attachment> attachments) {
+        List<ToolUse> tools, List<Attachment> attachments, ReplyStats stats) {
 
     public enum Status {
         /** Сообщение целиком. */
@@ -38,6 +40,11 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         attachments = List.copyOf(Objects.requireNonNullElse(attachments, List.of()));
     }
 
+    public ChatMessage(ChatRole role, String text, Instant time, Status status, List<ContextItem> context, List<ToolUse> tools,
+            List<Attachment> attachments) {
+        this(role, text, time, status, context, tools, attachments, null);
+    }
+
     public ChatMessage(ChatRole role, String text, Instant time, Status status, List<ContextItem> context, List<ToolUse> tools) {
         this(role, text, time, status, context, tools, List.of());
     }
@@ -55,11 +62,11 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
     }
 
     public ChatMessage with(String newText, Status newStatus) {
-        return new ChatMessage(role, newText, time, newStatus, context, tools, attachments);
+        return new ChatMessage(role, newText, time, newStatus, context, tools, attachments, stats);
     }
 
     public ChatMessage withTools(List<ToolUse> newTools) {
-        return new ChatMessage(role, text, time, status, context, newTools, attachments);
+        return new ChatMessage(role, text, time, status, context, newTools, attachments, stats);
     }
 
     /** Только место для ответа в живой ленте; сохранять и передавать модели нечего. */
@@ -94,12 +101,16 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
     /** Так модель видит краткое содержание: как сообщение пользователя. */
     public static final String SUMMARY_PREFIX = "[Краткое содержание предыдущей части диалога — сообщения выше уже не передаются]\n";
 
+    public ChatMessage withStats(ReplyStats newStats) {
+        return new ChatMessage(role, text, time, status, context, tools, attachments, newStats);
+    }
+
     public ChatMessage withContext(List<ContextItem> newContext) {
-        return new ChatMessage(role, text, time, status, newContext, tools, attachments);
+        return new ChatMessage(role, text, time, status, newContext, tools, attachments, stats);
     }
 
     public ChatMessage withAttachments(List<Attachment> newAttachments) {
-        return new ChatMessage(role, text, time, status, context, tools, newAttachments);
+        return new ChatMessage(role, text, time, status, context, tools, newAttachments, stats);
     }
 
     /** Картинки вопроса: модель получает их отдельными блоками перед текстом. Файлы ответа модели не уходят. */

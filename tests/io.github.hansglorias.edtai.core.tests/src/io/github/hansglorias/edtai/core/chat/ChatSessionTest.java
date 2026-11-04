@@ -78,14 +78,16 @@ class ChatSessionTest {
 
         provider.part("При");
         assertEquals(pending.time(), last(session).time(), "первый текст заполняет ту же запись");
-        assertEquals(new ChatMessage(ChatRole.ASSISTANT, "При", last(session).time(), Status.STREAMING), last(session));
+        assertEquals(new ChatMessage(ChatRole.ASSISTANT, "При", last(session).time(), Status.STREAMING)
+                .withStats(last(session).stats()), last(session));
         provider.part("");
         provider.part("вет");
         assertEquals("Привет", last(session).text());
         assertEquals(Status.STREAMING, last(session).status());
         provider.complete("Привет");
 
-        assertEquals(new ChatMessage(ChatRole.ASSISTANT, "Привет", last(session).time(), Status.DONE), reply.get(TIMEOUT, TimeUnit.SECONDS));
+        assertEquals(new ChatMessage(ChatRole.ASSISTANT, "Привет", last(session).time(), Status.DONE)
+                .withStats(last(session).stats()), reply.get(TIMEOUT, TimeUnit.SECONDS));
         assertEquals(List.of("added:USER", "added:ASSISTANT/STREAMING:", "busy:true", "updated:1/STREAMING:При", "updated:1/STREAMING:Привет",
                 "updated:1/DONE:Привет", "busy:false"), events);
     }
@@ -179,7 +181,9 @@ class ChatSessionTest {
 
         session.send("раз");
         session.cancel();
-        assertEquals(new ChatMessage(ChatRole.ASSISTANT, "", last(session).time(), Status.STOPPED), last(session));
+        assertEquals(new ChatMessage(ChatRole.ASSISTANT, "", last(session).time(), Status.STOPPED)
+                .withStats(last(session).stats()), last(session));
+        assertTrue(last(session).stats().finished() != null, "остановленный ответ — со временем конца");
         assertFalse(session.isBusy());
         assertNull(session.activity());
         provider.part("поздний текст");
@@ -714,6 +718,44 @@ class ChatSessionTest {
             reply = new CompletableFuture<>();
             return reply;
         }
+    }
+
+    @Test
+    void finishedAnswerKnowsItsDurationPhasesCallsAndTokens() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> reply = session.send("вопрос");
+        ChatMessage question = session.messages().get(0);
+        provider.onReasoning.run();
+        provider.onTool.accept(new ToolUse("t1", "read_module", "Читает модуль", "", ToolUse.Status.RUNNING));
+        assertTrue(last(session).stats().active().containsKey("t1"), "идущий вызов виден с началом");
+        Thread.sleep(20);
+        provider.onTool.accept(new ToolUse("t1", "read_module", "Читает модуль", "строки 1–5", ToolUse.Status.DONE));
+        provider.onUsage.accept(TokenUsage.step(300, 40, false));
+        provider.part("Ответ");
+        assertNull(last(session).stats().finished(), "пока идёт — без конца");
+        provider.complete("Ответ");
+        ChatMessage answer = reply.get(TIMEOUT, TimeUnit.SECONDS);
+
+        ReplyStats stats = answer.stats();
+        assertTrue(stats.finished() != null && !stats.finished().isBefore(question.time()));
+        assertTrue(stats.call("t1", java.time.Instant.now()) >= 20);
+        assertEquals(TokenUsage.step(300, 40, false), stats.tokens());
+        assertTrue(stats.total(java.time.Instant.now()) >= stats.tools());
+        assertTrue(stats.active().isEmpty());
+    }
+
+    @Test
+    void stoppedAnswerClosesRunningCallsInStats() throws Exception {
+        ManualProvider provider = new ManualProvider();
+        ChatSession session = new ChatSession(provider);
+        CompletableFuture<ChatMessage> reply = session.send("вопрос");
+        provider.onTool.accept(new ToolUse("t1", "read_module", "Читает модуль", "", ToolUse.Status.RUNNING));
+        session.cancel();
+        ChatMessage answer = reply.get(TIMEOUT, TimeUnit.SECONDS);
+        assertEquals(Status.STOPPED, answer.status());
+        assertTrue(answer.stats().finished() != null);
+        assertTrue(answer.stats().calls().containsKey("t1"), "прерванный вызов — со временем до остановки");
     }
 
     private static final class ManualProvider implements ChatProvider {

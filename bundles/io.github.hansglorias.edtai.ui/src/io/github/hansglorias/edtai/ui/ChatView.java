@@ -35,6 +35,8 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.eclipse.compare.CompareUI;
+import org.eclipse.core.filesystem.EFS;
+import org.eclipse.core.filesystem.IFileStore;
 import org.eclipse.core.resources.IContainer;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
@@ -106,12 +108,15 @@ import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IEditorReference;
 import org.eclipse.ui.IMemento;
 import org.eclipse.ui.IViewSite;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.actions.ActionFactory;
 import org.eclipse.ui.dialogs.PreferencesUtil;
+import org.eclipse.ui.ide.FileStoreEditorInput;
+import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.progress.IWorkbenchSiteProgressService;
 import org.eclipse.ui.texteditor.ITextEditor;
@@ -129,6 +134,7 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatModel;
 import io.github.hansglorias.edtai.core.chat.ContextGauge;
 import io.github.hansglorias.edtai.core.chat.PlanApproval;
+import io.github.hansglorias.edtai.core.chat.PlanFile;
 import io.github.hansglorias.edtai.core.chat.ReplyActivity;
 import io.github.hansglorias.edtai.core.chat.SlashCommand;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
@@ -186,6 +192,10 @@ public class ChatView extends ViewPart {
     /** Единственный диалог до появления списка чатов: переносится в {@link #CHATS_DIRECTORY}. */
     static final String HISTORY_FILE = "chat.json";
     static final String CHATS_DIRECTORY = "chats";
+    /** Файлы планов режима «План» в папке состояния плагина. */
+    static final String PLANS_DIRECTORY = "plans";
+    /** Обычный текстовый редактор: .md иначе может открыться внешней программой. */
+    private static final String PLAN_EDITOR = "org.eclipse.ui.DefaultTextEditor";
     private static final int HISTORY_MENU = 30;
     private static final String MEMENTO_HISTORY = "historyShown";
     private static final String MEMENTO_HISTORY_WIDTH = "historyWidth";
@@ -414,6 +424,11 @@ public class ChatView extends ViewPart {
     private Link emptyLink;
     private ApprovalBar approvalBar;
     private UserQuestionsBar questionsBar;
+    private SubagentsPanel subagentsPanel;
+    /** Панель готового плана: подсказка, «Открыть план в редакторе», «Утвердить план и выполнить». */
+    private Composite planBar;
+    private Label planNote;
+    private Button openPlan;
     private Button approvePlan;
     private Live displayedPlanChat;
     private ChatMessage displayedPlan;
@@ -697,13 +712,12 @@ public class ChatView extends ViewPart {
         top.setLayout(topLayout);
         createHistory(top);
         createEmptyState(top);
+        subagentsPanel = new SubagentsPanel(column, () -> {
+            if (root != null && status != null) root.layout(true, true);
+        });
         approvalBar = new ApprovalBar(column, this::approvalChanged);
         questionsBar = new UserQuestionsBar(column, this::approvalChanged);
-        approvePlan = new Button(column, SWT.PUSH);
-        approvePlan.setText("Утвердить план и выполнить");
-        GridDataFactory.fillDefaults().grab(true, false).exclude(true).applyTo(approvePlan);
-        approvePlan.setVisible(false);
-        approvePlan.addListener(SWT.Selection, event -> executePlan());
+        createPlanBar(column);
         queueBar = new QueueBar(column, new QueueBar.Callbacks() {
             @Override
             public void edit(QueueBar.Queued message) {
@@ -3015,6 +3029,7 @@ public class ChatView extends ViewPart {
     void refresh() {
         updatePlanApproval();
         List<ChatMessage> messages = session.messages();
+        updateSubagents(messages);
         boolean idle = !session.isBusy();
         ReplyActivity activity = session.activity();
         String pending = activity == null ? "" : activity.describe(Instant.now());
@@ -3096,6 +3111,14 @@ public class ChatView extends ViewPart {
         updateEmptyState();
         updateSendButton();
         updateStatus();
+    }
+
+    /** Панель специалистов последнего ответа: со специалистами — видна, иначе скрыта. */
+    private void updateSubagents(List<ChatMessage> messages) {
+        if (subagentsPanel == null) return;
+        ChatMessage answer = io.github.hansglorias.edtai.core.chat.Subagents.latest(messages);
+        subagentsPanel.show(answer == null ? null : chatId + "@" + answer.time(),
+                io.github.hansglorias.edtai.core.chat.Subagents.of(answer, Instant.now()));
     }
 
     private static String pending(ChatMessage message, String activity) {
@@ -3585,10 +3608,87 @@ public class ChatView extends ViewPart {
         displayedPlan = plan;
         displayedPlanChat = current;
         boolean visible = plan != null;
-        if (approvePlan.getVisible() != visible) {
+        String note = plan == null ? "" : editedPlan(current, plan) != null
+                ? "План исправлен вручную — выполнится ваша редакция из файла."
+                : "План готов. Его можно открыть в редакторе, поправить и сохранить — или утвердить как есть.";
+        if (!note.equals(planNote.getText())) {
+            planNote.setText(note);
+            planBar.layout(true, true);
+        }
+        if (approvePlan.getVisible() != visible || planBar.getVisible() != visible) {
+            planBar.setVisible(visible);
             approvePlan.setVisible(visible);
-            ((GridData) approvePlan.getLayoutData()).exclude = !visible;
+            ((GridData) planBar.getLayoutData()).exclude = !visible;
             root.layout(true, true);
+        }
+    }
+
+    private void createPlanBar(Composite parent) {
+        planBar = new Composite(parent, SWT.BORDER);
+        GridDataFactory.fillDefaults().grab(true, false).exclude(true).applyTo(planBar);
+        GridLayoutFactory.swtDefaults().margins(8, 6).numColumns(3).spacing(8, 0).applyTo(planBar);
+        planNote = new Label(planBar, SWT.WRAP);
+        GridDataFactory.fillDefaults().grab(true, false).align(SWT.FILL, SWT.CENTER).hint(150, SWT.DEFAULT).applyTo(planNote);
+        openPlan = new Button(planBar, SWT.PUSH);
+        openPlan.setText("Открыть план в редакторе");
+        openPlan.setToolTipText("План откроется отдельным файлом Markdown: исправьте, сохраните (Ctrl+S) и утвердите");
+        openPlan.addListener(SWT.Selection, event -> openPlanEditor());
+        approvePlan = new Button(planBar, SWT.PUSH);
+        approvePlan.setText("Утвердить план и выполнить");
+        approvePlan.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
+        approvePlan.addListener(SWT.Selection, event -> executePlan());
+        planBar.setVisible(false);
+        approvePlan.setVisible(false);
+    }
+
+    /** Файл плана чата: в папке состояния плагина, по id чата. */
+    private PlanFile planFile(Live chat) {
+        return PlanFile.of(stateLocation.resolve(PLANS_DIRECTORY), chat.id);
+    }
+
+    /** Открывает план отдельным файлом в текстовом редакторе EDT; файл записывается заново, только если он для другого плана. */
+    private void openPlanEditor() {
+        ChatMessage plan = displayedPlan;
+        if (plan == null || current != displayedPlanChat) return;
+        PlanFile file = planFile(current);
+        try {
+            if (!file.matches(plan.text())) {
+                file.write(plan.text());
+            }
+            IFileStore store = EFS.getLocalFileSystem().getStore(file.path().toUri());
+            IEditorPart editor = IDE.openEditor(getSite().getPage(), new FileStoreEditorInput(store), PLAN_EDITOR);
+            if (editor != null) {
+                // Сохранили файл — подсказка панели плана сменится на «исправлен вручную».
+                editor.addPropertyListener((source, property) -> {
+                    if (property == IEditorPart.PROP_DIRTY) inUi(this::updatePlanApproval);
+                });
+            }
+        } catch (IOException | PartInitException e) {
+            showNotice("Не удалось открыть план: " + e.getMessage());
+        }
+    }
+
+    /** Исправленный пользователем план из файла; не исправлен, файла нет или он для другого плана — {@code null}. */
+    private String editedPlan(Live chat, ChatMessage plan) {
+        PlanFile file = planFile(chat);
+        try {
+            if (!file.matches(plan.text())) return null;
+            String text = file.read();
+            return PlanFile.edited(plan.text(), text) ? text : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** Несохранённые правки плана в открытом редакторе сохраняются перед выполнением: утверждают то, что видно. */
+    private void savePlanEditors(Live chat) {
+        java.net.URI uri = planFile(chat).path().toUri();
+        for (IEditorReference reference : getSite().getPage().getEditorReferences()) {
+            IEditorPart editor = reference.getEditor(false);
+            if (editor != null && editor.isDirty() && editor.getEditorInput() instanceof FileStoreEditorInput input
+                    && uri.equals(input.getURI())) {
+                editor.doSave(null);
+            }
         }
     }
 
@@ -3596,12 +3696,14 @@ public class ChatView extends ViewPart {
         if (current != displayedPlanChat || session.isBusy() || current.edit != null || displayedPlan == null
                 || agentMode() != AgentMode.PLAN || !PlanApproval.candidate(session.messages()).filter(displayedPlan::equals).isPresent()) return;
         ChatMessage plan = displayedPlan;
+        savePlanEditors(current);
+        String edited = editedPlan(current, plan);
         current.allowed.clear();
         setAgentMode(AgentMode.AGENT);
         // Ответы на уточнения сохранены в вызовах; повторяем решения в явном поручении на выполнение.
         String decisions = plan.tools().stream().filter(use -> use.name().equals("ask_user")
                 && use.status() == ToolUse.Status.DONE).map(ToolUse::outcome).collect(Collectors.joining("\n"));
-        session.send(PlanApproval.EXECUTE + (decisions.isEmpty() ? "" : "\nОтветы на уточнения:\n" + decisions));
+        session.send(PlanApproval.execute(decisions, edited));
         updatePlanApproval();
     }
 
@@ -3701,7 +3803,11 @@ public class ChatView extends ViewPart {
     }
 
     UserQuestionsBar questionsBar() { return questionsBar; }
+    SubagentsPanel subagentsPanel() { return subagentsPanel; }
     Button approvePlanButton() { return approvePlan; }
+    Button openPlanButton() { return openPlan; }
+    String planNoteText() { return planNote.getText(); }
+    PlanFile planFileForTest() { return planFile(current); }
 
     StyledText history() {
         return history;

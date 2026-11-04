@@ -8,12 +8,20 @@ import java.util.concurrent.CompletableFuture;
 
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
+import org.eclipse.jface.preference.JFacePreferences;
+import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.ScrolledComposite;
+import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
 
@@ -21,8 +29,16 @@ import io.github.hansglorias.edtai.core.tools.UserQuestions;
 import io.github.hansglorias.edtai.core.tools.UserQuestions.Answer;
 import io.github.hansglorias.edtai.core.tools.UserQuestions.Request;
 
-/** Одна форма для открытого чата. Черновики принадлежат Pending своего Live. */
+/**
+ * Форма уточнений модели над полем ввода. Каждый вопрос — карточкой с цветной полосой слева (синяя —
+ * ждёт ответа, зелёная — отвечен): номер, вопрос, варианты и поле своего ответа. В заголовке —
+ * сколько вопросов уже отвечено. Ctrl+Enter отправляет, Esc останавливает. Одна форма для
+ * открытого чата; черновики принадлежат Pending своего Live.
+ */
 final class UserQuestionsBar {
+    static final String TITLE = "Модель уточняет задачу";
+    static final String SUBMIT = "Отправить ответы";
+
     static final class Pending {
         final Request request;
         final CompletableFuture<List<Answer>> future = new CompletableFuture<>();
@@ -32,7 +48,11 @@ final class UserQuestionsBar {
         Pending(Request request) { this.request = request; }
     }
 
+    private static final int BADGE = 18;
+    private static final RGB ANSWERED = new RGB(46, 160, 67);
+
     private final Composite bar;
+    private final Label progress;
     private final ScrolledComposite scroll;
     private final Composite fields;
     private final Button submit;
@@ -40,31 +60,57 @@ final class UserQuestionsBar {
     private Pending pending;
     private final List<Text> inputs = new ArrayList<>();
     private final List<Button> options = new ArrayList<>();
+    /** Полосы карточек вопросов: перекрашиваются, когда вопрос отвечен. */
+    private final List<Canvas> strips = new ArrayList<>();
 
     UserQuestionsBar(Composite parent, Runnable changed) {
         this.changed = changed;
         bar = new Composite(parent, SWT.BORDER);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(bar);
-        GridLayoutFactory.swtDefaults().margins(6, 6).applyTo(bar);
-        Label title = new Label(bar, SWT.WRAP);
-        title.setText("Уточнения модели — ответьте на каждый вопрос. Свой текст заменяет выбранный вариант.");
-        GridDataFactory.fillDefaults().grab(true, false).hint(200, SWT.DEFAULT).applyTo(title);
+        GridLayoutFactory.swtDefaults().margins(8, 6).spacing(0, 6).applyTo(bar);
+
+        Composite header = new Composite(bar, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(header);
+        GridLayoutFactory.fillDefaults().numColumns(3).spacing(8, 0).applyTo(header);
+        Canvas badge = new Canvas(header, SWT.DOUBLE_BUFFERED);
+        GridDataFactory.swtDefaults().hint(BADGE, BADGE).align(SWT.CENTER, SWT.CENTER).applyTo(badge);
+        badge.addListener(SWT.Paint, event -> paintBadge(event.gc, badge));
+        Label title = new Label(header, SWT.NONE);
+        title.setText(TITLE);
+        title.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
+        GridDataFactory.fillDefaults().grab(true, false).align(SWT.FILL, SWT.CENTER).applyTo(title);
+        progress = new Label(header, SWT.NONE);
+        progress.setForeground(meta(header));
+        GridDataFactory.swtDefaults().align(SWT.END, SWT.CENTER).applyTo(progress);
+        Label hint = new Label(bar, SWT.WRAP);
+        hint.setText("Выберите вариант или напишите свой ответ — он заменит выбранный вариант.");
+        hint.setForeground(meta(bar));
+        GridDataFactory.fillDefaults().grab(true, false).hint(200, SWT.DEFAULT).applyTo(hint);
+
         scroll = new ScrolledComposite(bar, SWT.V_SCROLL);
-        GridDataFactory.fillDefaults().grab(true, false).hint(200, 260).applyTo(scroll);
+        GridDataFactory.fillDefaults().grab(true, false).hint(200, 300).applyTo(scroll);
         scroll.setExpandHorizontal(true);
         scroll.setExpandVertical(true);
         fields = new Composite(scroll, SWT.NONE);
-        GridLayoutFactory.fillDefaults().applyTo(fields);
+        GridLayoutFactory.fillDefaults().spacing(0, 10).applyTo(fields);
         scroll.setContent(fields);
         scroll.addListener(SWT.Resize, event -> resize());
+
         Composite actions = new Composite(bar, SWT.NONE);
-        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(actions);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(actions);
+        GridLayoutFactory.fillDefaults().numColumns(3).spacing(8, 0).applyTo(actions);
         submit = new Button(actions, SWT.PUSH);
-        submit.setText("Отправить ответы");
+        submit.setText(SUBMIT);
+        submit.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
         submit.addListener(SWT.Selection, event -> submit());
         Button cancel = new Button(actions, SWT.PUSH);
         cancel.setText("Остановить");
+        cancel.setToolTipText("Остановить ответ модели без уточнений (Esc)");
         cancel.addListener(SWT.Selection, event -> { if (pending != null) pending.future.cancel(true); });
+        Label keys = new Label(actions, SWT.NONE);
+        keys.setText("Ctrl+Enter — отправить · Esc — остановить");
+        keys.setForeground(meta(actions));
+        GridDataFactory.fillDefaults().grab(true, false).align(SWT.END, SWT.CENTER).applyTo(keys);
         visible(false);
     }
 
@@ -73,6 +119,7 @@ final class UserQuestionsBar {
         for (Control child : fields.getChildren()) child.dispose();
         inputs.clear();
         options.clear();
+        strips.clear();
         if (value == null || value.future.isDone()) {
             visible(false);
             return;
@@ -80,16 +127,28 @@ final class UserQuestionsBar {
         pending = value;
         int number = 0;
         for (var question : value.request.questions()) {
-            Composite group = new Composite(fields, SWT.NONE);
+            int index = number++;
+            Composite card = new Composite(fields, SWT.NONE);
+            GridDataFactory.fillDefaults().grab(true, false).applyTo(card);
+            GridLayoutFactory.fillDefaults().numColumns(2).spacing(8, 0).applyTo(card);
+            Canvas strip = new Canvas(card, SWT.DOUBLE_BUFFERED);
+            GridDataFactory.fillDefaults().hint(3, SWT.DEFAULT).grab(false, true).applyTo(strip);
+            strip.addListener(SWT.Paint, event -> {
+                event.gc.setBackground(answered(value, index) ? new Color(ANSWERED) : accent(strip));
+                event.gc.fillRectangle(strip.getClientArea());
+            });
+            strips.add(strip);
+            Composite group = new Composite(card, SWT.NONE);
             GridDataFactory.fillDefaults().grab(true, false).applyTo(group);
-            GridLayoutFactory.fillDefaults().applyTo(group);
+            GridLayoutFactory.fillDefaults().spacing(0, 3).applyTo(group);
             Label label = new Label(group, SWT.WRAP);
-            label.setText(++number + ". " + question.text());
+            label.setText((index + 1) + ". " + question.text());
+            label.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
             GridDataFactory.fillDefaults().grab(true, false).hint(200, SWT.DEFAULT).applyTo(label);
             for (var option : question.options()) {
                 Button radio = new Button(group, SWT.RADIO | SWT.WRAP);
                 radio.setText(option.text());
-                GridDataFactory.fillDefaults().grab(true, false).hint(200, SWT.DEFAULT).applyTo(radio);
+                GridDataFactory.fillDefaults().grab(true, false).indent(4, 0).hint(200, SWT.DEFAULT).applyTo(radio);
                 radio.setSelection(option.id().equals(value.selected.get(question.id())));
                 radio.addListener(SWT.Selection, event -> {
                     if (pending == value && radio.getSelection()) {
@@ -99,12 +158,10 @@ final class UserQuestionsBar {
                 });
                 options.add(radio);
             }
-            Label own = new Label(group, SWT.NONE);
-            own.setText(question.options().isEmpty() ? "Ответ:" : "Свой ответ (вместо варианта):");
             Text text = new Text(group, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
             text.setTextLimit(4000);
-            text.setMessage("Свой ответ");
-            GridDataFactory.fillDefaults().grab(true, false).hint(200, text.getLineHeight() * 2).applyTo(text);
+            text.setMessage(question.options().isEmpty() ? "Ваш ответ…" : "Свой вариант ответа…");
+            GridDataFactory.fillDefaults().grab(true, false).indent(4, 2).hint(200, text.getLineHeight() * 2).applyTo(text);
             text.setText(value.texts.getOrDefault(question.id(), ""));
             text.addModifyListener(event -> {
                 if (pending == value) {
@@ -115,6 +172,7 @@ final class UserQuestionsBar {
             text.addListener(SWT.Traverse, event -> {
                 if (event.detail == SWT.TRAVERSE_ESCAPE) { event.doit = false; value.future.cancel(true); }
             });
+            text.addListener(SWT.KeyDown, this::submitOnCtrlEnter);
             inputs.add(text);
         }
         value.future.whenComplete((answers, error) -> {
@@ -125,6 +183,20 @@ final class UserQuestionsBar {
         updateSubmit();
         visible(true);
         resize();
+    }
+
+    /** Ctrl+Enter (на Mac — Cmd+Enter) в поле ответа — отправить, если ответы на все вопросы есть. */
+    private void submitOnCtrlEnter(Event event) {
+        if ((event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR) && (event.stateMask & SWT.MOD1) != 0) {
+            event.doit = false;
+            submit();
+        }
+    }
+
+    private static boolean answered(Pending value, int index) {
+        var question = value.request.questions().get(index);
+        return !value.texts.getOrDefault(question.id(), "").isBlank()
+                || question.options().stream().anyMatch(option -> option.id().equals(value.selected.get(question.id())));
     }
 
     private List<Answer> answers() {
@@ -144,7 +216,19 @@ final class UserQuestionsBar {
         return answers;
     }
 
-    private void updateSubmit() { submit.setEnabled(!answers().isEmpty()); }
+    private void updateSubmit() {
+        submit.setEnabled(!answers().isEmpty());
+        if (pending != null) {
+            int total = pending.request.questions().size();
+            int done = 0;
+            for (int i = 0; i < total; i++) {
+                if (answered(pending, i)) done++;
+            }
+            progress.setText(total == 1 ? (done == 1 ? "ответ готов" : "нужен ответ") : "отвечено " + done + " из " + total);
+            progress.getParent().layout(new Control[] { progress });
+        }
+        strips.forEach(Canvas::redraw);
+    }
 
     private void submit() {
         Pending value = pending;
@@ -156,8 +240,41 @@ final class UserQuestionsBar {
     }
 
     private void resize() {
-        if (!scroll.isDisposed()) scroll.setMinSize(fields.computeSize(Math.max(100, scroll.getClientArea().width), SWT.DEFAULT));
+        if (scroll.isDisposed()) return;
+        Point size = fields.computeSize(Math.max(100, scroll.getClientArea().width), SWT.DEFAULT);
+        scroll.setMinSize(size);
+        // Короткая форма не занимает лишнего места, длинная — не выше 300 пикселей с прокруткой.
+        GridData data = (GridData) scroll.getLayoutData();
+        int height = Math.min(300, size.y);
+        if (data.heightHint != height) {
+            data.heightHint = height;
+            changed.run();
+        }
     }
+
+    /** Значок «?» в круге цвета ссылки. */
+    private static void paintBadge(GC gc, Canvas canvas) {
+        gc.setBackground(canvas.getParent().getBackground());
+        gc.fillRectangle(canvas.getClientArea());
+        gc.setAntialias(SWT.ON);
+        gc.setBackground(accent(canvas));
+        gc.fillOval(0, 0, BADGE - 1, BADGE - 1);
+        gc.setForeground(canvas.getDisplay().getSystemColor(SWT.COLOR_WHITE));
+        gc.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
+        Point size = gc.textExtent("?");
+        gc.drawText("?", (BADGE - 1 - size.x) / 2, (BADGE - 1 - size.y) / 2, true);
+    }
+
+    private static Color accent(Control control) {
+        Color color = JFaceResources.getColorRegistry().get(JFacePreferences.HYPERLINK_COLOR);
+        return color != null ? color : control.getDisplay().getSystemColor(SWT.COLOR_LINK_FOREGROUND);
+    }
+
+    private static Color meta(Control control) {
+        Color color = JFaceResources.getColorRegistry().get(JFacePreferences.QUALIFIER_COLOR);
+        return color != null ? color : control.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
+    }
+
     private void visible(boolean value) {
         bar.setVisible(value);
         ((GridData) bar.getLayoutData()).exclude = !value;

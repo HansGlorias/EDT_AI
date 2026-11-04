@@ -122,6 +122,10 @@ class ChatQuestionsTest extends AbstractChatTest {
         assertEquals(1, server.requests().size(), "выбор и набор текста ещё не отправка");
         assertEquals(AgentMode.PLAN, ChatView.agentMode());
         Screenshots.capture(view.control(), "user-questions");
+        view.control().setSize(720, 620);
+        view.control().layout(true, true);
+        settle();
+        Screenshots.render(view.control(), "user-questions-form");
 
         click(form.submitButton());
         click(form.submitButton());

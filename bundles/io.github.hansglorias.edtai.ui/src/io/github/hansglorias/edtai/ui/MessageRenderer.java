@@ -31,6 +31,9 @@ import io.github.hansglorias.edtai.core.chat.Attachment;
 import io.github.hansglorias.edtai.core.review.Finding;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.chat.ReplyStats;
+import io.github.hansglorias.edtai.core.chat.Subagents;
+import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.context.ContextItem;
 import io.github.hansglorias.edtai.core.markdown.CodeBlock;
@@ -62,6 +65,12 @@ final class MessageRenderer {
     static final String CHANGED = "Изменено: ";
     static final String SHOW_CALLS = "показать";
     static final String HIDE_CALLS = "свернуть";
+    static final String SHOW_STATS = "подробнее";
+    static final String HIDE_STATS = "скрыть";
+    /** «Группа» раскрытия карточки ответа: время по фазам, токены, специалисты, долгие вызовы. */
+    static final int STATS = -1;
+    /** Ширина полосы доли в карточке ответа, делений. */
+    private static final int BAR = 16;
     /** Больше стольких вызовов подряд — сворачиваются в одну строку. */
     static final int COLLAPSE = 3;
 
@@ -244,6 +253,9 @@ final class MessageRenderer {
             changedFiles(message, offset, text, styles);
             review(message, offset, text, styles, codeRanges);
             files(message, offset, text, styles, codeRanges);
+            if (finishedStats(message) != null && callbacks.expanded(message, STATS)) {
+                statsCard(message, offset, text, styles, codeRanges);
+            }
         } else {
             if (message.role() == ChatRole.ERROR) {
                 styles.add(style(offset + text.length(), body.length(), errorColor(), SWT.NORMAL));
@@ -265,11 +277,13 @@ final class MessageRenderer {
      * под пузырь). Без перевода строки в конце.
      */
     private void footer(ChatMessage message, int index, Set<Action> actions, int offset, StringBuilder text, List<StyleRange> styles) {
-        String meta = TIME.format(message.time()) + switch (message.status()) {
+        ReplyStats stats = finishedStats(message);
+        // Время ответа — когда он закончился, а не когда начался (тогда оно совпадало бы со временем вопроса).
+        String meta = TIME.format(stats != null ? stats.finished() : message.time()) + switch (message.status()) {
             case STREAMING -> message.text().isBlank() ? "" : " · пишет…";
             case STOPPED -> message.role() == ChatRole.ASSISTANT ? " · остановлено" : "";
             case DONE -> "";
-        };
+        } + (stats != null ? " · " + stats.summary() : "");
         boolean user = message.role() == ChatRole.USER;
         if (user) {
             styles.add(style(offset + text.length(), meta.length(), metaColor(), SWT.NORMAL));
@@ -304,9 +318,101 @@ final class MessageRenderer {
         if (!user) {
             char last = text.charAt(text.length() - 1);
             String gap = last == '\n' ? "" : last == OBJECT ? " " : "   ";
-            styles.add(style(offset + text.length() + gap.length(), meta.length(), metaColor(), SWT.NORMAL));
+            StyleRange range = style(offset + text.length() + gap.length(), meta.length(), metaColor(), SWT.NORMAL);
+            if (stats != null) {
+                range.data = new Hint(stats.hint(calls(message)));
+            }
+            styles.add(range);
             text.append(gap).append(meta);
+            if (stats != null) {
+                text.append("  ");
+                link(text, styles, offset, callbacks.expanded(message, STATS) ? HIDE_STATS : SHOW_STATS,
+                        () -> callbacks.toggle(message, STATS));
+            }
         }
+    }
+
+    /** Статистика законченного ответа; у вопросов, старых и идущих ответов — {@code null}. */
+    private static ReplyStats finishedStats(ChatMessage message) {
+        ReplyStats stats = message.stats();
+        return message.role() == ChatRole.ASSISTANT && message.status() != ChatMessage.Status.STREAMING && stats != null
+                && stats.finished() != null ? stats : null;
+    }
+
+    /** Вызовы инструментов ответа, без служебных строк и шагов специалистов. */
+    private static int calls(ChatMessage message) {
+        return (int) message.tools().stream().filter(use -> use.isCall() && !use.id().contains("/child/")).count();
+    }
+
+    /**
+     * Карточка ответа под ним: когда шёл, полосы времени по фазам, токены, специалисты и самые долгие
+     * вызовы. Моноширинным шрифтом, чтобы столбцы стояли ровно, с фоном, как у кода.
+     */
+    private void statsCard(ChatMessage message, int offset, StringBuilder text, List<StyleRange> styles, List<int[]> codeRanges) {
+        ReplyStats stats = message.stats();
+        java.time.Instant now = java.time.Instant.now();
+        List<ReplyStats.Line> phases = stats.phases(calls(message));
+        int width = Math.max(12, phases.stream().mapToInt(line -> line.label().length()).max().orElse(0) + 2);
+        text.append("\n\n");
+        int start = offset + text.length();
+        String head = "Ответ  " + stats.span() + " · " + ReplyStats.duration(stats.total(now));
+        cardLine(text, styles, offset, head, SWT.BOLD, null);
+        for (ReplyStats.Line line : phases) {
+            text.append('\n');
+            cardLine(text, styles, offset, pad(line.label(), width), SWT.NORMAL, metaColor());
+            cardLine(text, styles, offset, ReplyStats.bar(line.share(), BAR), SWT.NORMAL, linkColor());
+            cardLine(text, styles, offset, "  " + pad(ReplyStats.duration(line.millis()), 11)
+                    + pad(ReplyStats.percent(line.share()), 5) + (line.note().isEmpty() ? "" : " · " + line.note()), SWT.NORMAL, null);
+        }
+        TokenUsage tokens = stats.tokens();
+        if (tokens != null) {
+            text.append('\n');
+            cardLine(text, styles, offset, pad("Токены", width), SWT.NORMAL, metaColor());
+            cardLine(text, styles, offset, tokenLine(tokens), SWT.NORMAL, null);
+        }
+        List<Subagents.Run> runs = Subagents.of(message, now);
+        if (!runs.isEmpty()) {
+            text.append('\n');
+            cardLine(text, styles, offset, pad("Специалисты", width), SWT.NORMAL, metaColor());
+            cardLine(text, styles, offset, runs.stream().map(run -> run.role() + " — " + run.state().label()
+                    + (run.tokens() == null ? "" : " " + run.tokens().describeStep())).collect(Collectors.joining("; ")),
+                    SWT.NORMAL, null);
+        }
+        List<ToolUse> slow = message.tools().stream().filter(use -> use.isCall() && stats.call(use.id(), now) >= 1000)
+                .sorted((a, b) -> Long.compare(stats.call(b.id(), now), stats.call(a.id(), now))).limit(3).toList();
+        if (!slow.isEmpty()) {
+            text.append('\n');
+            cardLine(text, styles, offset, "Дольше всего", SWT.NORMAL, metaColor());
+            for (ToolUse use : slow) {
+                text.append('\n');
+                cardLine(text, styles, offset, "  " + pad(ReplyStats.duration(stats.call(use.id(), now)), 11)
+                        + shortLabel(use.summary(), 70), SWT.NORMAL, null);
+            }
+        }
+        codeRanges.add(new int[] { start, offset + text.length() });
+    }
+
+    /** «вход 45k · выход 2,1k», оценки — со знаком ≈. */
+    private static String tokenLine(TokenUsage tokens) {
+        return "вход " + (tokens.inputSource() == TokenUsage.Source.SERVER ? "" : "≈") + TokenUsage.format(tokens.input())
+                + " · выход " + (tokens.outputSource() == TokenUsage.Source.SERVER ? "" : "≈") + TokenUsage.format(tokens.output())
+                + " · всего " + TokenUsage.format(tokens.input() + tokens.output());
+    }
+
+    private void cardLine(StringBuilder text, List<StyleRange> styles, int offset, String part, int fontStyle, Color color) {
+        StyleRange range = new StyleRange(offset + text.length(), part.length(), color, null, fontStyle);
+        range.font = monospace(fontStyle == SWT.BOLD, false);
+        styles.add(range);
+        text.append(part);
+    }
+
+    private static String pad(String value, int width) {
+        return value.length() >= width ? value + " " : value + " ".repeat(width - value.length());
+    }
+
+    private static String shortLabel(String value, int max) {
+        String line = value.strip().replaceAll("\\s+", " ");
+        return line.length() <= max ? line : line.substring(0, max - 1).stripTrailing() + "…";
     }
 
     /**
@@ -337,7 +443,8 @@ final class MessageRenderer {
         uses = shown;
         for (int i = 0; i < uses.size(); i++) {
             ToolUse use = uses.get(i);
-            String line = TOOL + use.label();
+            long millis = message.stats() == null ? -1 : message.stats().calls().getOrDefault(use.id(), -1L);
+            String line = TOOL + use.label() + (millis >= 1000 ? " · " + ReplyStats.duration(millis) : "");
             StyleRange range = style(offset + text.length(), line.length(),
                     use.status() == ToolUse.Status.FAILED ? errorColor() : metaColor(), SWT.NORMAL);
             String details = use.details();

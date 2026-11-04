@@ -217,7 +217,7 @@ public final class ChatSession {
             }
             List<ChatMessage> history = history();
             Request request = new Request();
-            request.activity = new ReplyActivity(ReplyActivity.Phase.TOOL, "Сжимаю историю диалога", Instant.now());
+            activity(request, new ReplyActivity(ReplyActivity.Phase.TOOL, "Сжимаю историю диалога", Instant.now()));
             request.compacting = true;
             current = request;
             listeners.forEach(listener -> listener.busyChanged(true));
@@ -389,7 +389,7 @@ public final class ChatSession {
     }
 
     private CompletableFuture<String> reply(Request request, List<ChatMessage> history) {
-        request.activity = request.activity.next(ReplyActivity.Phase.THINKING, "");
+        activity(request, request.activity.next(ReplyActivity.Phase.THINKING, ""));
         request.sent = history;
         CompletableFuture<String> reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use),
                 tokens -> onUsage(request, tokens), () -> onReasoning(request));
@@ -449,7 +449,7 @@ public final class ChatSession {
             request.sinceUsage += part.length();
             // Пробелы и переводы строк — ещё не ответ: Qwen шлёт их перед вызовом инструмента.
             if (request.activity.phase() != ReplyActivity.Phase.WRITING && !part.isBlank()) {
-                request.activity = request.activity.next(ReplyActivity.Phase.WRITING, "");
+                activity(request, request.activity.next(ReplyActivity.Phase.WRITING, ""));
             }
             put(request, request.text.toString(), Status.STREAMING);
         }
@@ -461,7 +461,7 @@ public final class ChatSession {
             if (request.finished || request.activity.phase() != ReplyActivity.Phase.THINKING) {
                 return;
             }
-            request.activity = request.activity.next(ReplyActivity.Phase.REASONING, "");
+            activity(request, request.activity.next(ReplyActivity.Phase.REASONING, ""));
             put(request, request.text.toString(), Status.STREAMING);
         }
     }
@@ -488,9 +488,10 @@ public final class ChatSession {
                 use = use.withAt(request.text.length());
                 request.tools.add(use);
             }
+            request.clock.call(use, Instant.now());
             boolean working = use.status() == ToolUse.Status.RUNNING || use.status() == ToolUse.Status.AWAITING;
-            request.activity = request.activity.next(working ? ReplyActivity.Phase.TOOL : ReplyActivity.Phase.THINKING,
-                    working ? use.summary() : "");
+            activity(request, request.activity.next(working ? ReplyActivity.Phase.TOOL : ReplyActivity.Phase.THINKING,
+                    working ? use.summary() : ""));
             put(request, request.text.toString(), Status.STREAMING);
         }
     }
@@ -502,6 +503,7 @@ public final class ChatSession {
                 return;
             }
             usage = tokens;
+            request.clock.tokens(tokens);
             compacted = -1;
             request.sinceUsage = 0;
             // Оценка первого запроса ответа (до шагов): история и то, что запрос несёт сверх неё.
@@ -524,7 +526,15 @@ public final class ChatSession {
         ChatMessage result;
         synchronized (lock) {
             request.finished = true;
-            request.tools.replaceAll(ChatSession::interrupted);
+            Instant now = Instant.now();
+            request.tools.replaceAll(use -> {
+                ToolUse after = interrupted(use);
+                if (after != use) {
+                    request.clock.call(after, now);
+                }
+                return after;
+            });
+            request.clock.finish(now);
             Throwable cause = unwrap(error);
             String partial = request.text.toString();
             if (cause == null) {
@@ -560,17 +570,23 @@ public final class ChatSession {
     private ChatMessage put(Request request, String text, Status status) {
         if (request.index < 0 || request.index >= messages.size()) {
             ChatMessage message = new ChatMessage(ChatRole.ASSISTANT, text, Instant.now(), status, List.of(), request.tools,
-                    request.files);
+                    request.files, request.clock.snapshot());
             request.index = messages.size();
             add(message);
             return message;
         }
         ChatMessage message = messages.get(request.index).with(text, status).withTools(request.tools)
-                .withAttachments(request.files);
+                .withAttachments(request.files).withStats(request.clock.snapshot());
         messages.set(request.index, message);
         int index = request.index;
         listeners.forEach(listener -> listener.messageUpdated(index, message));
         return message;
+    }
+
+    /** Новая фаза ответа: часы ответа копят время прежней. Под {@link #lock}. */
+    private static void activity(Request request, ReplyActivity next) {
+        request.clock.enter(next.phase(), Instant.now());
+        request.activity = next;
     }
 
     private void add(ChatMessage message) {
@@ -617,7 +633,9 @@ public final class ChatSession {
         boolean measured;
         /** Идёт сжатие истории. */
         volatile boolean compacting;
-        /** Под {@link ChatSession#lock}. */
+        /** Время фаз и вызовов ответа; под {@link ChatSession#lock}. */
+        final ReplyStats.Clock clock = new ReplyStats.Clock(Instant.now());
+        /** Под {@link ChatSession#lock}; меняется только через {@link ChatSession#activity}. */
         ReplyActivity activity = new ReplyActivity(ReplyActivity.Phase.PREPARING, "", Instant.now());
     }
 }
