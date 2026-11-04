@@ -691,6 +691,12 @@ class AgentLoopTest {
         assertTrue(last.contains(AgentLoop.OMITTED), "старые результаты убраны раньше края окна");
         assertTrue(last.length() < working + 25_000, "запрос держится около рабочей части: " + last.length());
         assertTrue(last.contains("М13:"), "последний результат передан");
+        // Убирается пачкой: после первого убирания следующий шаг идёт с тем же началом запроса.
+        List<Integer> omitted = server.requests().stream()
+                .map(request -> request.body().split(java.util.regex.Pattern.quote(AgentLoop.OMITTED), -1).length - 1).toList();
+        int first = 0;
+        while (omitted.get(first) == 0) first++;
+        assertEquals(omitted.get(first), omitted.get(first + 1), "пачкой, не по шагу: " + omitted);
     }
 
     @Test

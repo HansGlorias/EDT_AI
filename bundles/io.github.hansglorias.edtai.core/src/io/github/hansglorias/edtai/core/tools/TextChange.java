@@ -20,7 +20,8 @@ public interface TextChange {
     /**
      * Замена единственного вхождения {@code oldText} на {@code newText}.
      * Переводы строк — как в файле: модель пишет {@code \n}, а файл может быть
-     * с {@code \r\n}.
+     * с {@code \r\n}. Точного вхождения нет — ищутся те же целые строки без учёта
+     * пробельных различий ({@link LooseMatch}).
      */
     static TextChange replace(String oldText, String newText) {
         return current -> {
@@ -32,8 +33,8 @@ public interface TextChange {
             }
             int first = current.indexOf(from);
             if (first < 0) {
-                throw new ToolException("old_text не найден в модуле. Нужен точный текст модуля (с отступами, без номеров строк"
-                        + " из read_module); прочитай модуль заново.");
+                // Точного нет: те же строки без учёта пробелов (табы/пробелы, номера строк), отступы — как в модуле.
+                return LooseMatch.replace(current, normalize(oldText, "\n"), normalize(newText, "\n"), delimiter);
             }
             int count = 0;
             for (int at = first; at >= 0; at = current.indexOf(from, at + 1)) {
