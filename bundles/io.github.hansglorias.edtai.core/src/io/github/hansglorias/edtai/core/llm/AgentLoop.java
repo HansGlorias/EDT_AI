@@ -196,17 +196,25 @@ final class AgentLoop {
         try {
             tools = List.copyOf(source.tools(onTool));
             if (!exploration) {
-                List<Tool> reads = source.explorationTools().stream().filter(ProjectTools::isBuiltInRead).toList();
+                List<Tool> reads = new ArrayList<>(source.explorationTools().stream().filter(tool -> ProjectTools.isBuiltInRead(tool)
+                        || io.github.hansglorias.edtai.core.tools.GitTools.isBuiltInRead(tool)).toList());
+                tools.stream().filter(tool -> tool.mcp() && tool.safeInPlan() && !tool.modifies()).forEach(reads::add);
                 if (!reads.isEmpty()) {
                     tools = new ArrayList<>(tools);
-                    tools.add(new ExploreProject(client, base, reads, use -> {
+                    ExploreProject runner = new ExploreProject(client, base, reads, use -> {
                         if (!result.isDone()) onTool.accept(use);
-                    }, this::childUsage));
+                    }, this::childUsage, approver);
+                    tools.add(runner);
+                    tools.add(new DelegateTask(runner));
                 }
             }
         } catch (RuntimeException e) {
             onTool.accept(new ToolUse("tools", "tools", "Инструменты", "не удалось получить список: " + e.getMessage(),
                     ToolUse.Status.FAILED));
+        }
+        if (tools.stream().anyMatch(tool -> (tool.name().equals("explore_project") && !(tool instanceof ExploreProject))
+                || (tool.name().equals("delegate_task") && !(tool instanceof DelegateTask)))) {
+            throw new IllegalStateException("Имена explore_project и delegate_task зарезервированы");
         }
         if (tools.stream().anyMatch(tool -> tool.name().equals(resultReader.name()))) {
             throw new IllegalStateException("Имя read_tool_result зарезервировано для чтения результатов");
@@ -455,8 +463,9 @@ final class AgentLoop {
         checkCancelled();
         if (!control) ledger.started(key, tool, transcript.size());
         try {
-            Tool.Result output = tool instanceof ExploreProject explore ? explore.call(input, call.id()) : tool.call(input);
-            if (tool instanceof ExploreProject) checkCancelled();
+            Tool.Result output = tool instanceof ExploreProject explore ? explore.call(input, call.id())
+                    : tool instanceof DelegateTask delegate ? delegate.call(input, call.id()) : tool.call(input);
+            if (tool instanceof ExploreProject || tool instanceof DelegateTask) checkCancelled();
             String projected = tool == resultReader || control ? output.text() : capture(call, key, output.text(), false);
             if (!control) ledger.succeeded(key, projected);
             onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));

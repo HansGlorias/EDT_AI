@@ -79,6 +79,11 @@ public final class GitTools {
         return List.of(tools.new StatusTool(), tools.new DiffTool(), tools.new LogTool(), tools.new RestoreTool());
     }
 
+    /** Проверка происхождения, а не имени инструмента. */
+    public static boolean isBuiltInRead(Tool tool) {
+        return tool instanceof GitTools.StatusTool || tool instanceof GitTools.DiffTool || tool instanceof GitTools.LogTool;
+    }
+
     // ---- инструменты ----
 
     private final class StatusTool implements Tool {

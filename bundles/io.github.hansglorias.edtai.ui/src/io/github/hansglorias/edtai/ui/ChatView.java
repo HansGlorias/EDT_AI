@@ -307,7 +307,15 @@ public class ChatView extends ViewPart {
                 @Override
                 public List<Tool> explorationTools() {
                     AiSettings saved = SettingsStore.workspace().load();
-                    return saved.toolsEnabled() ? ProjectTools.create(EclipseWorkspaceFiles.current(), saved::contextLimit) : List.of();
+                    if (!saved.toolsEnabled()) return List.of();
+                    EclipseWorkspaceFiles files = EclipseWorkspaceFiles.current();
+                    List<Tool> reads = new ArrayList<>(ProjectTools.create(files, saved::contextLimit));
+                    try {
+                        GitTools.create(files, saved::contextLimit).stream().filter(GitTools::isBuiltInRead).forEach(reads::add);
+                    } catch (LinkageError e) {
+                        // EGit необязателен.
+                    }
+                    return reads;
                 }
 
                 @Override
@@ -3512,6 +3520,7 @@ public class ChatView extends ViewPart {
             // В этой сборке EDT нет JGit (EGit): без инструментов git.
         }
         Set<String> builtIn = tools.stream().map(Tool::name).collect(Collectors.toSet());
+        builtIn.add("delegate_task");
         builtIn.add("explore_project"); // Имя добавляемого AgentLoop инструмента тоже зарезервировано для MCP.
         // Сервер не подключился — это видно на кнопке MCP, а не строкой в каждом ответе.
         tools.addAll(mcp.tools(current.mcpServers(), TrustSettings.from(current), builtIn, current::contextLimit, problem -> { }));

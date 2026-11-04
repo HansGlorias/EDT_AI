@@ -243,21 +243,23 @@ class ChatAnalysisExportTest {
 
     @Test
     void explorationChildUsageIsDistinguishedAndCumulativeParentIsNotAdded() throws Exception {
-        String childId = "call/child/12345678-1234-1234-1234-123456789abc/read";
-        var parent = new ToolUse("call", "explore_project", "Разведка", "", ToolUse.Status.DONE)
-                .withUsage(TokenUsage.step(10, 2, false));
-        var child = new ToolUse(childId, "explore_project", "Разведка: читает", "", ToolUse.Status.DONE)
-                .withUsage(TokenUsage.step(20, 5, true));
-        var message = ChatMessage.of(ChatRole.ASSISTANT, "Итог").withTools(List.of(parent, child));
-        var entries = write(new ChatAnalysisExport.Snapshot("", List.of(message), configuration(), List.of(),
-                TokenUsage.step(30, 7, TokenUsage.Source.MIXED, TokenUsage.Source.MIXED), false), false);
-        var uses = list(list(Json.parseObject(entries.get("conversation.json")).get("messages")).get(0).get("tools"));
-        assertEquals("parent_or_unspecified", uses.get(0).get("execution_scope"));
-        assertEquals("exploration_child", uses.get(1).get("execution_scope"));
-        assertEquals("tool-1", uses.get(1).get("parent_tool_id"));
-        assertEquals("child-1", uses.get(1).get("child_id"));
-        assertEquals("exploration_child_model_step", map(uses.get(1).get("usage")).get("scope"));
-        assertFalse(String.join("", entries.values()).contains("12345678-1234-1234-1234-123456789abc"));
-        assertTrue(entries.get("summary.md").contains("| input | 10 (1/2 записей usage) | 20 (1/2 записей usage) |"));
+        for (String toolName : List.of("explore_project", "delegate_task")) {
+            String childId = "call/child/12345678-1234-1234-1234-123456789abc/read";
+            var parent = new ToolUse("call", toolName, "Разведка", "", ToolUse.Status.DONE)
+                    .withUsage(TokenUsage.step(10, 2, false));
+            var child = new ToolUse(childId, toolName, "Разведка: читает", "", ToolUse.Status.DONE)
+                    .withUsage(TokenUsage.step(20, 5, true));
+            var message = ChatMessage.of(ChatRole.ASSISTANT, "Итог").withTools(List.of(parent, child));
+            var entries = write(new ChatAnalysisExport.Snapshot("", List.of(message), configuration(), List.of(),
+                    TokenUsage.step(30, 7, TokenUsage.Source.MIXED, TokenUsage.Source.MIXED), false), false);
+            var uses = list(list(Json.parseObject(entries.get("conversation.json")).get("messages")).get(0).get("tools"));
+            assertEquals("parent_or_unspecified", uses.get(0).get("execution_scope"));
+            assertEquals("exploration_child", uses.get(1).get("execution_scope"));
+            assertEquals("tool-1", uses.get(1).get("parent_tool_id"));
+            assertEquals("child-1", uses.get(1).get("child_id"));
+            assertEquals("exploration_child_model_step", map(uses.get(1).get("usage")).get("scope"));
+            assertFalse(String.join("", entries.values()).contains("12345678-1234-1234-1234-123456789abc"));
+            assertTrue(entries.get("summary.md").contains("| input | 10 (1/2 записей usage) | 20 (1/2 записей usage) |"));
+        }
     }
 }
