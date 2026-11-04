@@ -13,6 +13,7 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Shell;
 
 /**
  * Снимки UI для просмотра при ревью. Сохраняются в каталог из свойства
@@ -53,7 +54,7 @@ final class Screenshots {
         flush(display);
 
         Point size = control.getSize();
-        Rectangle bounds = display.map(control.getParent(), null, control.getBounds());
+        Rectangle bounds = captureBounds(control);
         Image image = new Image(display, size.x, size.y);
         try {
             GC gc = new GC(display);
@@ -66,6 +67,12 @@ final class Screenshots {
         } finally {
             image.dispose();
         }
+    }
+
+    static Rectangle captureBounds(Control control) {
+        // Shell bounds are already relative to the display, even for a child shell.
+        return control instanceof Shell ? control.getBounds()
+                : control.getDisplay().map(control.getParent(), null, control.getBounds());
     }
 
     private static Path save(Image image, String name) throws IOException {
