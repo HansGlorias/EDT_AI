@@ -76,7 +76,9 @@ class EditToolsTest {
     @Test
     void ambiguousMissingAndForbiddenEdits() {
         assertTrue(message(Map.of("module", MODULE, "old_text", "\tВозврат;", "new_text", "")).contains("встречается в модуле 2 раз"));
-        assertTrue(message(Map.of("module", MODULE, "old_text", "2  \tВозврат;", "new_text", "")).contains("без номеров строк"));
+        assertTrue(message(Map.of("module", MODULE, "old_text", "2  \tВозврат;", "new_text", "")).contains("2 раз (без учёта пробелов)"),
+                "номер строки из read_module снимается, но фрагмент всё равно неуникален");
+        assertTrue(message(Map.of("module", MODULE, "old_text", "Процедура В()", "new_text", "")).contains("«Процедура В()» в модуле нет"));
         assertTrue(message(Map.of("module", "src/Configuration.mdo", "old_text", "<x/>", "new_text", "")).startsWith(
                 "Менять можно только модули .bsl"));
         assertTrue(message(Map.of("module", "ОбщийМодуль.Нет", "old_text", "а", "new_text", "б")).startsWith("Модуля "));
@@ -128,6 +130,32 @@ class EditToolsTest {
         Files.writeString(file, "А\n \t\nБ\n");
         edit.call(Map.of("module", MODULE, "old_text", " \t", "new_text", "  \t "));
         assertEquals("А\n  \t \nБ\n", Files.readString(file));
+    }
+
+    @Test
+    void spacesInsteadOfTabsAreMatchedAndReindentedToModuleStyle() throws Exception {
+        Path file = temp.resolve("Демо").resolve(MODULE);
+        // Модель пишет отступы 4 пробелами, в модуле — табы; в конце строки модуля лишний пробел.
+        edit.call(Map.of("module", MODULE, "old_text", "Процедура Б()\n    Возврат;\nКонецПроцедуры",
+                "new_text", "Процедура Б()\n    Если Истина Тогда\n        Сообщить(\"Б\");\n    КонецЕсли;\n    Возврат;\nКонецПроцедуры"));
+        assertEquals("\uFEFFПроцедура А()\r\n\tВозврат;\r\nКонецПроцедуры\r\n\r\nПроцедура Б()\r\n\tЕсли Истина Тогда\r\n"
+                + "\t\tСообщить(\"Б\");\r\n\tКонецЕсли;\r\n\tВозврат;\r\nКонецПроцедуры\r\n", Files.readString(file, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void lineNumbersAndLostIndentFromReadModuleAreTolerated() throws Exception {
+        Path file = temp.resolve("Демо").resolve(MODULE);
+        Files.writeString(file, "Процедура А()\n\tЗначение = 1;  \n\tВозврат;\nКонецПроцедуры\n");
+        edit.call(Map.of("module", MODULE, "old_text", " 2  Значение = 1;\n 3  Возврат;",
+                "new_text", " 2  Значение = 2;\n 3  Возврат;"));
+        assertEquals("Процедура А()\n\tЗначение = 2;\n\tВозврат;\nКонецПроцедуры\n", Files.readString(file));
+    }
+
+    @Test
+    void mismatchNamesTheFirstDifferentLine() {
+        String error = message(Map.of("module", MODULE, "old_text", "Процедура Б()\n\tВозврат 1;", "new_text", ""));
+        assertTrue(error.contains("Начало фрагмента совпало со строкой 5, но строка 6 отличается: в модуле «Возврат;», в old_text «Возврат 1;»"),
+                error);
     }
 
     private Map<String, Object> validInput() {

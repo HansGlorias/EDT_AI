@@ -106,6 +106,8 @@ final class AgentLoop {
     private final Map<ToolExecutionLedger.Key, String> resultReferences = new HashMap<>();
     /** Первый шаг, результат которого передаётся модели в последнем запросе. */
     private int firstVisibleStep;
+    /** Сколько первых шагов уже без результатов: только растёт, чтобы начало запроса не менялось. */
+    private int omittedSteps;
     /** Что последним сообщили в ленту про обрезку истории. */
     private ToolUse trimmed;
 
@@ -370,11 +372,17 @@ final class AgentLoop {
         int budget = RequestBudget.chars(connection()) >> shrink;
         // Результаты старых шагов убираются уже сверх рабочей части окна, а не только у его края.
         int working = RequestBudget.working(budget);
-        int omitted = 0;
+        int omitted = Math.min(omittedSteps, Math.max(0, transcript.size() - 1));
         List<Object> extra = transcript.project(adapter, omitted);
-        while (omitted < transcript.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > working) {
-            extra = transcript.project(adapter, ++omitted);
+        if (RequestBudget.size(connection(), history, extra, tools) > working) {
+            // При большом окне убираем сразу пачкой, до двух третей рабочей части: начало запроса потом
+            // несколько шагов не меняется, и кэш префикса на сервере модели не сбрасывается каждый шаг.
+            int target = working < budget ? working * 2 / 3 : working;
+            while (omitted < transcript.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > target) {
+                extra = transcript.project(adapter, ++omitted);
+            }
         }
+        omittedSteps = omitted;
         // Обрезка меняет только представление: выполненные операции не забываются.
         firstVisibleStep = omitted;
         List<Object> fixed = extra;
