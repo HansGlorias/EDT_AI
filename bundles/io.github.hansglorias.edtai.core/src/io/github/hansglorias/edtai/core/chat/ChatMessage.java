@@ -98,6 +98,35 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
         return answer;
     }
 
+    /**
+     * Ответ без следов инструментов в любом месте: небольшие модели, видя след у прошлых ответов,
+     * пишут его посреди своего текста — с выдуманными вызовами. Незакрытый след остаётся как есть.
+     */
+    public static String stripTraces(String answer) {
+        String text = stripTrace(answer);
+        int from = text.indexOf(TRACE);
+        while (from >= 0) {
+            int depth = 0;
+            int end = -1;
+            for (int i = from; i < text.length() && end < 0; i++) {
+                char c = text.charAt(i);
+                if (c == '[') {
+                    depth++;
+                } else if (c == ']' && --depth == 0) {
+                    end = i + 1;
+                }
+            }
+            if (end < 0) {
+                break;
+            }
+            String before = text.substring(0, from).stripTrailing();
+            String after = text.substring(end).stripLeading();
+            text = before.isEmpty() ? after : after.isEmpty() ? before : before + "\n\n" + after;
+            from = text.indexOf(TRACE, before.length());
+        }
+        return text;
+    }
+
     /** Так модель видит краткое содержание: как сообщение пользователя. */
     public static final String SUMMARY_PREFIX = "[Краткое содержание предыдущей части диалога — сообщения выше уже не передаются]\n";
 
@@ -129,7 +158,8 @@ public record ChatMessage(ChatRole role, String text, Instant time, Status statu
             return SUMMARY_PREFIX + text;
         }
         if (role == ChatRole.ASSISTANT) {
-            String trace = tools.stream().filter(ToolUse::isCall).map(ToolUse::label).collect(Collectors.joining("; "));
+            String trace = tools.stream().filter(use -> use.isCall() && !use.id().contains("/child/")).map(ToolUse::traceLabel)
+                    .collect(Collectors.joining("; "));
             return trace.isEmpty() ? text : TRACE + trace + "]\n\n" + text;
         }
         String files = attachments.stream().map(Attachment::promptText).collect(Collectors.joining("\n\n"));

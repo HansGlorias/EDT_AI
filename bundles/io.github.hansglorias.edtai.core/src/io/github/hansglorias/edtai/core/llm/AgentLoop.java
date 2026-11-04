@@ -53,6 +53,18 @@ final class AgentLoop {
     static final String REPEATED = "Этот вызов с теми же аргументами уже был в этом ответе, его результат или ссылка для дочитывания выше. Не повторяй его:"
             + " используй полученный результат или вызови с другими аргументами.";
 
+    /** Шаг, вызовы которого в основном — заблокированные повторы: предупреждение модели. */
+    static final String STUCK = "(Служебная пометка EDT AI: вызовы этого шага в основном повторяют уже сделанные, повторы"
+            + " не выполнены. Их результаты выше или дочитываются read_tool_result. Ещё один такой шаг — и инструменты будут"
+            + " отключены: переходи к делу — правке или ответу пользователю.)";
+
+    /** Повторы не прекратились или исчерпан лимит разведки: последний запрос без инструментов. */
+    static final String FINAL = "(Служебная пометка EDT AI: инструменты отключены — вызовы этого шага не выполнены."
+            + " Ответь по уже найденному: что выяснил, со ссылками Модуль:строка, что собирался сделать дальше и чего не хватило.)";
+
+    /** После скольких шагов подряд, в основном из повторов, инструменты отключаются. */
+    static final int MAX_STUCK_STEPS = 2;
+
     /** Сколько раз урезать запрос после ответа «не помещается». */
     static final int MAX_SHRINK = 3;
 
@@ -104,6 +116,12 @@ final class AgentLoop {
     private int shrink;
     /** Сервер отклонил запрос с инструментами: больше их не передаём. */
     private boolean toolsRejected;
+    /** Последний запрос ответа — без инструментов: модель зациклилась или разведка исчерпала лимит. */
+    private boolean toolsOff;
+    /** Вызовов текущего шага, заблокированных как повторы. */
+    private int blockedInStep;
+    /** Шагов подряд, не меньше половины вызовов которых — заблокированные повторы. */
+    private int stuckSteps;
     /** Токены ответа за прошедшие шаги. */
     private TokenUsage usage;
     /** Токены последнего запроса к модели. */
@@ -133,7 +151,7 @@ final class AgentLoop {
         this.maxSteps = maxSteps;
         this.exploration = exploration;
         this.adapter = ProtocolAdapter.of(connection.protocol());
-        this.resultStore = new ToolResultStore(Math.max(512, Math.min(6000, RequestBudget.chars(connection) / 8)), 1_000_000);
+        this.resultStore = new ToolResultStore(RequestBudget.page(connection), 1_000_000);
         this.resultReader = resultStore.tool();
     }
 
@@ -241,14 +259,18 @@ final class AgentLoop {
         for (int step = 1;; step++) {
             checkCancelled();
             ModelReply reply = request();
-            if (reply.calls().isEmpty()) {
-                incomplete |= reply.truncated();
-                if (exploration) return ChatMessage.stripTrace(ThinkFilter.strip(reply.text())).strip();
-                return ChatMessage.stripTrace(ThinkFilter.strip(answer.toString())).strip();
+            if (reply.calls().isEmpty() || toolsOff) {
+                incomplete |= reply.truncated() || toolsOff;
+                if (exploration) return ChatMessage.stripTraces(ThinkFilter.strip(reply.text())).strip();
+                return ChatMessage.stripTraces(ThinkFilter.strip(answer.toString())).strip();
             }
             if (step >= maxSteps) {
                 incomplete = true;
-                if (exploration) return "Лимит запросов разведки исчерпан; итог не завершён.";
+                if (exploration) {
+                    // Работа разведчика не пропадает: последний запрос без инструментов — итог по найденному.
+                    if (finalWithoutTools(reply)) continue;
+                    return "Лимит запросов разведки исчерпан; итог не завершён.";
+                }
                 text("_Остановлено: модель вызвала инструменты " + MAX_STEPS + " раз подряд. Напишите «продолжай»,"
                         + " чтобы она продолжила, или уточните задачу._");
                 return answer.toString().strip();
@@ -257,15 +279,24 @@ final class AgentLoop {
             List<ProtocolAdapter.ToolResult> results = new ArrayList<>();
             // Токены шага — у первого его вызова: шаг один, вызовов в нём может быть несколько.
             TokenUsage tokens = lastStep;
+            blockedInStep = 0;
             for (ToolCall call : reply.calls()) {
                 checkCancelled();
                 results.add(execute(call, tokens));
                 tokens = null;
             }
-            String note = step == maxSteps - 1 ? LAST_STEP : step == WRAP_UP_STEP ? WRAP_UP : "";
-            if (!note.isEmpty() && !results.isEmpty()) {
-                ProtocolAdapter.ToolResult last = results.get(results.size() - 1);
-                results.set(results.size() - 1, new ProtocolAdapter.ToolResult(last.call(), last.text() + "\n\n" + note, last.error()));
+            // Модель повторяет одни и те же вызовы: предупреждаем, затем отвечаем без инструментов.
+            stuckSteps = blockedInStep > 0 && blockedInStep * 2 >= reply.calls().size() ? stuckSteps + 1 : 0;
+            if (stuckSteps >= MAX_STUCK_STEPS) {
+                onTool.accept(new ToolUse("loop", "tools", "Повторы вызовов", "модель повторяла одни и те же вызовы "
+                        + stuckSteps + " шага подряд — инструменты отключены, ответ по найденному", ToolUse.Status.FAILED));
+                transcript.add(reply, withNote(results, FINAL));
+                toolsOff = true;
+                continue;
+            }
+            String note = stuckSteps > 0 ? STUCK : step == maxSteps - 1 ? LAST_STEP : step == WRAP_UP_STEP ? WRAP_UP : "";
+            if (!note.isEmpty()) {
+                results = withNote(results, note);
             }
             if (!catalog.selected().equals(previousSelection) && !selectionFits(reply, results)) {
                 catalog.restore(previousSelection);
@@ -284,6 +315,36 @@ final class AgentLoop {
             transcript.add(reply, results);
             separate = answer.length() > 0;
         }
+    }
+
+    /** Служебная пометка — к последнему результату пакета. */
+    private static List<ProtocolAdapter.ToolResult> withNote(List<ProtocolAdapter.ToolResult> results, String note) {
+        if (results.isEmpty()) {
+            return results;
+        }
+        List<ProtocolAdapter.ToolResult> noted = new ArrayList<>(results);
+        ProtocolAdapter.ToolResult last = noted.get(noted.size() - 1);
+        noted.set(noted.size() - 1, new ProtocolAdapter.ToolResult(last.call(), last.text() + "\n\n" + note, last.error()));
+        return noted;
+    }
+
+    /**
+     * Следующий запрос — последний и без инструментов: вызовы шага не выполняются, модель отвечает по
+     * найденному. Anthropic не принимает историю с вызовами без описаний инструментов — там нельзя.
+     *
+     * @return будет ли такой запрос
+     */
+    private boolean finalWithoutTools(ModelReply reply) {
+        if (toolsOff || base.protocol() == Protocol.ANTHROPIC) {
+            return false;
+        }
+        List<ProtocolAdapter.ToolResult> results = new ArrayList<>();
+        for (ToolCall call : reply.calls()) {
+            results.add(new ProtocolAdapter.ToolResult(call, "Не выполнено: лимит шагов.", true));
+        }
+        transcript.add(reply, withNote(results, FINAL));
+        toolsOff = true;
+        return true;
     }
 
     /** Проверяем весь пакет до публикации выбранных схем: последние результаты не обрезаются. */
@@ -307,9 +368,11 @@ final class AgentLoop {
     private FittedRequest prepare() throws ModelException {
         RequestBudget.requireInputSpace(connection());
         int budget = RequestBudget.chars(connection()) >> shrink;
+        // Результаты старых шагов убираются уже сверх рабочей части окна, а не только у его края.
+        int working = RequestBudget.working(budget);
         int omitted = 0;
         List<Object> extra = transcript.project(adapter, omitted);
-        while (omitted < transcript.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > budget) {
+        while (omitted < transcript.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > working) {
             extra = transcript.project(adapter, ++omitted);
         }
         // Обрезка меняет только представление: выполненные операции не забываются.
@@ -329,19 +392,21 @@ final class AgentLoop {
      * схема одного из них), потом совсем без инструментов.
      */
     private ModelReply request() throws Exception {
-        // Только на границе запроса: весь предыдущий пакет выполнялся по предложенным ему схемам.
-        if (catalog != null && !catalog.empty() && !toolsRejected) {
+        if (toolsOff && base.protocol() != Protocol.ANTHROPIC) {
+            tools = List.of();
+        } else if (catalog != null && !catalog.empty() && !toolsRejected) {
+            // Только на границе запроса: весь предыдущий пакет выполнялся по предложенным ему схемам.
             tools = new ArrayList<>(fixedTools);
             tools.addAll(catalog.selected());
         }
-        if (resultStore.hasResults() && !tools.contains(resultReader)) {
+        if (resultStore.hasResults() && !tools.contains(resultReader) && !(toolsOff && tools.isEmpty())) {
             tools = new ArrayList<>(tools);
             tools.add(resultReader);
         }
         RequestContext context = diagnosticRun == null ? null : new RequestContext(diagnosticRun, RequestType.ANSWER, 0);
         while (true) {
             checkCancelled();
-            if (exploration && ++requests > maxSteps) {
+            if (exploration && ++requests > maxSteps + (toolsOff ? 1 : 0)) {
                 incomplete = true;
                 throw new ModelException("Лимит физических запросов разведки исчерпан");
             }
@@ -507,6 +572,9 @@ final class AgentLoop {
         };
         ToolUse.Problem problem = decision.action() == ToolExecutionLedger.Action.DENIED
                 ? ToolUse.Problem.DENIED : ToolUse.Problem.REPEATED;
+        if (problem == ToolUse.Problem.REPEATED) {
+            blockedInStep++;
+        }
         onTool.accept(ToolUse.failed(call.id(), call.name(), summary, problem,
                 decision.action() == ToolExecutionLedger.Action.REPEATED ? "" : text));
         return new ProtocolAdapter.ToolResult(call, text, true);

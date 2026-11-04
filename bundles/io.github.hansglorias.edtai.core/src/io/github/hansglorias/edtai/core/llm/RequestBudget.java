@@ -25,6 +25,32 @@ final class RequestBudget {
     private RequestBudget() {
     }
 
+    /** Рабочая часть окна для шагов ответа: не меньше ~32k токенов, не больше ~80k (условных символов). */
+    static final int WORKING_FLOOR = 96_000;
+    static final int WORKING_CAP = 240_000;
+    /** Страница большого результата инструмента при большом окне, символов. */
+    static final int MAX_PAGE = 20_000;
+
+    /**
+     * Сколько символов держать в запросе, пока идут шаги ответа: половина бюджета, в пределах
+     * {@link #WORKING_FLOOR}–{@link #WORKING_CAP}, не больше самого бюджета. Сверх неё результаты старых
+     * шагов не передаются (их можно перечитать). Каждый шаг отправляет весь запрос заново, а на длинном
+     * контексте небольшие модели теряют нить и повторяют вызовы — заполнять окно до предела дорого и вредно.
+     */
+    static int working(int budget) {
+        return Math.min(budget, Math.max(WORKING_FLOOR, Math.min(WORKING_CAP, budget / 2)));
+    }
+
+    /**
+     * Страница большого результата инструмента: при небольшом окне — как раньше, до 6000 символов (1/8
+     * бюджета), при большом — до {@link #MAX_PAGE} (1/16 бюджета): модуль на тысячу строк дочитывается
+     * за 2–3 шага, а не за 8.
+     */
+    static int page(ModelConnection connection) {
+        int chars = chars(connection);
+        return Math.max(512, Math.max(Math.min(6000, chars / 8), Math.min(MAX_PAGE, chars / 16)));
+    }
+
     /** Бюджет в символах тела запроса. */
     static int chars(ModelConnection connection) {
         return chars(connection.window(), reserve(connection.window(), OutputPolicy.maxTokens(connection)));

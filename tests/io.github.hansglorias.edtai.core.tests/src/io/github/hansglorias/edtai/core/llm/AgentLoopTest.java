@@ -291,8 +291,11 @@ class AgentLoopTest {
 
     @Test
     void stepLimitStopsEndlessToolCalls() throws Exception {
+        // Каждый раз новые аргументы: это не повтор, а бесконечный поиск — его останавливает лимит шагов.
+        AtomicInteger step = new AtomicInteger();
         server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
-                toolCalls("{\"index\":0,\"id\":\"x\",\"function\":{\"name\":\"read_module\",\"arguments\":\"{\\\"module\\\":\\\"А\\\"}\"}}"),
+                toolCalls("{\"index\":0,\"id\":\"x\",\"function\":{\"name\":\"read_module\",\"arguments\":\"{\\\"module\\\":\\\"А"
+                        + step.getAndIncrement() + "\\\"}\"}}"),
                 "data: [DONE]\n\n"), 0));
 
         String answer = run(Protocol.OPENAI_COMPATIBLE);
@@ -309,12 +312,13 @@ class AgentLoopTest {
     /** Модель послушалась пометки о последнем шаге: вместо «Остановлено» — её итог. */
     @Test
     void lastStepNoteLetsModelAnswer() throws Exception {
+        AtomicInteger step = new AtomicInteger();
         server = FakeModelServer.http().handler((request, response) -> {
             if (request.body().contains("это был последний шаг")) {
                 response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Итог: нашёл А.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
             } else {
                 response.sse(List.of(toolCalls("{\"index\":0,\"id\":\"x\",\"function\":{\"name\":\"read_module\","
-                        + "\"arguments\":\"{\\\"module\\\":\\\"А\\\"}\"}}"), "data: [DONE]\n\n"), 0);
+                        + "\"arguments\":\"{\\\"module\\\":\\\"А" + step.getAndIncrement() + "\\\"}\"}}"), "data: [DONE]\n\n"), 0);
             }
         });
 
@@ -630,9 +634,81 @@ class AgentLoopTest {
                 uses.get(uses.size() - 1).withUsage(null));
         assertEquals("Читает модуль Общий — повтор, не выполнен", uses.get(uses.size() - 1).withUsage(null).label());
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(2).body()).get("messages"));
-        assertEquals("Ошибка: " + AgentLoop.REPEATED, Json.stringAt(messages.get(messages.size() - 1), "content"));
+        assertEquals("Ошибка: " + AgentLoop.REPEATED + "\n\n" + AgentLoop.STUCK,
+                Json.stringAt(messages.get(messages.size() - 1), "content"), "шаг из одних повторов — с предупреждением");
         assertEquals("system", Json.stringAt(messages.get(0), "role"));
         assertTrue(Json.stringAt(messages.get(0), "content").contains("Правила работы с инструментами"));
+    }
+
+    @Test
+    void endlessRepeatsTurnToolsOffAndAnswerWithFoundData() throws Exception {
+        AtomicInteger step = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int id = step.getAndIncrement();
+            response.sse(List.of(request.body().contains("\"tools\"")
+                    ? toolCalls("{\"index\":0,\"id\":\"call_" + id + "\",\"function\":{\"name\":\"read_module\","
+                            + "\"arguments\":\"{\\\"module\\\":\\\"Общий\\\"}\"}}")
+                    : "data: {\"choices\":[{\"delta\":{\"content\":\"Итог по найденному.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+        });
+
+        assertEquals("Итог по найденному.", run(Protocol.OPENAI_COMPATIBLE));
+
+        assertEquals(4, server.requests().size(), "чтение, повтор с предупреждением, повтор — и ответ без инструментов");
+        String last = server.requests().get(3).body();
+        assertFalse(last.contains("\"tools\""));
+        assertTrue(last.contains("инструменты отключены"));
+        assertTrue(uses.stream().anyMatch(use -> use.id().equals("loop") && use.status() == ToolUse.Status.FAILED));
+    }
+
+    @Test
+    void stepsKeepToWorkingPartOfLargeWindow() throws Exception {
+        Tool big = new Tool() {
+            @Override public boolean repeatableRead() { return true; }
+            @Override public String name() { return "read_module"; }
+            @Override public String description() { return "Читает модуль"; }
+            @Override public Map<String, Object> inputSchema() { return Json.object("type", "object"); }
+            @Override public String summary(Map<String, Object> input) { return "Читает " + input.get("module"); }
+            @Override public Result call(Map<String, Object> input) {
+                return new Result(input.get("module") + ":" + "ж".repeat(19_000), "строки");
+            }
+        };
+        AtomicInteger step = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int id = step.getAndIncrement();
+            response.sse(List.of(id < 14
+                    ? toolCalls("{\"index\":0,\"id\":\"c" + id + "\",\"function\":{\"name\":\"read_module\","
+                            + "\"arguments\":\"{\\\"module\\\":\\\"М" + id + "\\\"}\"}}")
+                    : "data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+        });
+        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()), 120_000);
+        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(big),
+                ToolApprover.ALLOW_ALL);
+        assertEquals("Готово.", provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS));
+
+        String last = server.requests().get(server.requests().size() - 1).body();
+        int working = RequestBudget.working(RequestBudget.chars(connection));
+        assertTrue(last.contains(AgentLoop.OMITTED), "старые результаты убраны раньше края окна");
+        assertTrue(last.length() < working + 25_000, "запрос держится около рабочей части: " + last.length());
+        assertTrue(last.contains("М13:"), "последний результат передан");
+    }
+
+    @Test
+    void explorationAtStepLimitStillReturnsReport() throws Exception {
+        AtomicInteger step = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int id = step.getAndIncrement();
+            response.sse(List.of(request.body().contains("\"tools\"")
+                    ? toolCalls("{\"index\":0,\"id\":\"c" + id + "\",\"function\":{\"name\":\"read_module\","
+                            + "\"arguments\":\"{\\\"module\\\":\\\"М" + id + "\\\"}\"}}")
+                    : "data: {\"choices\":[{\"delta\":{\"content\":\"Отчёт: модули М0 и М1.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+        });
+        AgentLoop child = new AgentLoop(new ModelClient(), connectionOpenAi(), HISTORY, problems -> List.of(READ),
+                ToolApprover.ALLOW_ALL, parts::add, uses::add, usages::add, 2, true);
+
+        assertEquals("Отчёт: модули М0 и М1.", child.start().get(15, TimeUnit.SECONDS));
+        assertTrue(child.incomplete(), "отчёт по неполному поиску");
+        assertEquals(3, server.requests().size(), "два шага и последний запрос без инструментов");
     }
 
     @Test

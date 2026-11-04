@@ -153,6 +153,26 @@ class ChatAnalysisExportTest {
     }
 
     @Test
+    void replyStatsGiveDurationsAndRepeatsAreCounted() throws Exception {
+        var t0 = java.time.Instant.parse("2026-11-04T10:00:00Z");
+        var read = new ToolUse("c1", "read_module", "Читает", "строки 1–5", ToolUse.Status.DONE);
+        var repeat = ToolUse.failed("c2", "read_module", "Читает", ToolUse.Problem.REPEATED, "");
+        var stats = new ReplyStats(t0, t0.plusSeconds(597), 300_000, 200_000, 50_000, 47_000, TokenUsage.step(900, 40, false),
+                java.util.Map.of("c1", 1_500L));
+        var answer = new ChatMessage(ChatRole.ASSISTANT, "Ответ", t0, ChatMessage.Status.DONE, List.of(), List.of(read, repeat),
+                List.of(), stats);
+        var entries = write(new ChatAnalysisExport.Snapshot("", List.of(ChatMessage.of(ChatRole.USER, "Вопрос"), answer),
+                configuration(), List.of(), null, false), false);
+        var message = list(Json.parseObject(entries.get("conversation.json")).get("messages")).get(1);
+        assertEquals(1500L, ((Number) map(list(message.get("tools")).get(0)).get("duration_ms")).longValue());
+        assertNull(map(list(message.get("tools")).get(1)).get("duration_ms"));
+        assertEquals(597_000L, ((Number) map(message.get("reply_stats")).get("total_ms")).longValue());
+        assertTrue(entries.get("summary.md").contains("message-2 — 9 мин 57 с, думала 8 мин 20 с, инструменты 47 с"),
+                entries.get("summary.md"));
+        assertTrue(entries.get("summary.md").contains("REPEATED): 1"));
+    }
+
+    @Test
     void knownZeroIsServerAndBinaryAttachmentsAreNeverIncluded() throws Exception {
         var use = new ToolUse("", "read_module", "", "", ToolUse.Status.DONE).withUsage(TokenUsage.step(0, 0, false));
         var message = ChatMessage.of(ChatRole.ASSISTANT, "Ответ").withTools(List.of(use))
