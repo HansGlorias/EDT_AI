@@ -17,6 +17,9 @@ class ScreenshotsTest {
             parent.setBounds(80, 90, 500, 400);
             Shell child = new Shell(parent, SWT.DIALOG_TRIM);
             child.setBounds(170, 180, 300, 200);
+            parent.open();
+            child.open();
+            AbstractChatTest.settle();
             Rectangle bounds = Screenshots.captureBounds(child);
             assertEquals(child.getLocation().x, bounds.x);
             assertEquals(child.getLocation().y, bounds.y);
@@ -37,6 +40,8 @@ class ScreenshotsTest {
             parent.setBounds(80, 90, 500, 400);
             Button button = new Button(parent, SWT.PUSH);
             button.setBounds(25, 35, 100, 30);
+            parent.open();
+            AbstractChatTest.settle();
             var location = button.toDisplay(0, 0);
             assertEquals(new Rectangle(location.x, location.y, 100, 30), Screenshots.captureBounds(button));
         } finally {
