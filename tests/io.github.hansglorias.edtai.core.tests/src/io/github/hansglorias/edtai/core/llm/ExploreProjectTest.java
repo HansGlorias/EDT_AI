@@ -184,7 +184,8 @@ class ExploreProjectTest {
                     Json.object("module", "src/CommonModules/Test/Module.bsl", "first_line", step))), 1, 1);
         })) {
             Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read forever"));
-            assertEquals(ExploreProject.MAX_STEPS, calls.get());
+            assertEquals(ExploreProject.MAX_STEPS + 1, calls.get(), "шаги и последний запрос итога без инструментов");
+            assertFalse(server.requests().get(ExploreProject.MAX_STEPS).body().contains("\"tools\""));
             assertEquals("partial", result.outcome());
             assertTrue(result.text().length() <= ExploreProject.MAX_REPORT);
         }

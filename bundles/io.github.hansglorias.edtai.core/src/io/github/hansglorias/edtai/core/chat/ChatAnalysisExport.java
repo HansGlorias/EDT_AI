@@ -91,7 +91,8 @@ public final class ChatAnalysisExport {
         else markdown.append("Содержимое разговора, кода, ошибок и путей не включено.\n\n");
         int sourceTools = snapshot.messages().stream().mapToInt(m -> m.tools().size()).sum();
         int tools = 0, calls = 0, failed = 0, errors = 0, usageRecords = 0;
-        int childRecords = 0;
+        int childRecords = 0, repeated = 0;
+        List<String> replies = new ArrayList<>();
         Map<String, String> childIds = new LinkedHashMap<>();
         // Отдельные известные подытоги, без parent aggregate и без суммы context.
         long[][] totals = new long[2][2];
@@ -103,7 +104,16 @@ public final class ChatAnalysisExport {
             if (message.role() == ChatRole.ERROR) errors++;
             Map<String, Object> body = content.field(message.text());
             markdown.append("## ").append(mid).append(" · ").append(message.role()).append(" · ")
-                    .append(message.status()).append("\n\n").append(text(body)).append("\n\n");
+                    .append(message.status()).append("\n\n");
+            ReplyStats stats = message.stats() != null && message.stats().finished() != null ? message.stats() : null;
+            if (stats != null) {
+                markdown.append("_Ответ ").append(stats.span()).append(": ").append(stats.hint(0).lines().skip(1)
+                        .collect(java.util.stream.Collectors.joining("; "))).append("; всего ")
+                        .append(ReplyStats.duration(stats.total(Instant.now()))).append("_\n\n");
+                replies.add(mid + " — " + ReplyStats.duration(stats.total(Instant.now()))
+                        + ", думала " + ReplyStats.duration(stats.thinking()) + ", инструменты " + ReplyStats.duration(stats.tools()));
+            }
+            markdown.append(text(body)).append("\n\n");
             List<Object> uses = new ArrayList<>();
             Map<String, String> callIds = new LinkedHashMap<>();
             for (ToolUse use : message.tools()) {
@@ -111,6 +121,7 @@ public final class ChatAnalysisExport {
                 tools++;
                 if (use.isCall()) calls++;
                 if (use.status() == ToolUse.Status.FAILED) failed++;
+                if (use.problem() == ToolUse.Problem.REPEATED) repeated++;
                 Map<String, Object> name = content.metadata(use.name());
                 Map<String, Object> summary = content.field(use.summary());
                 Map<String, Object> outcome = content.field(use.outcome());
@@ -132,7 +143,8 @@ public final class ChatAnalysisExport {
                         "kind", use.isCall() ? "tool_call" : "notice", "name", name,
                         "status", use.status().name(), "problem", use.problem() == null ? null : use.problem().name(),
                         "text_offset", use.at(), "summary", summary, "outcome", outcome,
-                        "arguments", unavailable(), "result", unavailable(), "duration_ms", null,
+                        "arguments", unavailable(), "result", unavailable(),
+                        "duration_ms", stats == null ? null : stats.calls().get(use.id()),
                         "usage", usage(use.usage(), child ? "exploration_child_model_step" : "parent_or_unspecified_model_step", false)));
                 markdown.append("- tool-").append(tools).append(" · ").append(use.status());
                 if (use.problem() != null) markdown.append(" · ").append(use.problem());
@@ -165,7 +177,11 @@ public final class ChatAnalysisExport {
                     "status", message.status().name(), "time", message.time().toString(), "text", body,
                     "tools", uses, "tool_count_in_history", message.tools().size(),
                     "context", contexts, "context_count_in_history", message.context().size(),
-                    "attachments", attachments, "attachment_count_in_history", message.attachments().size()));
+                    "attachments", attachments, "attachment_count_in_history", message.attachments().size(),
+                    "reply_stats", stats == null ? null : object("started", stats.started().toString(),
+                            "finished", stats.finished().toString(), "total_ms", stats.total(Instant.now()),
+                            "waiting_ms", stats.waiting(), "reasoning_ms", stats.reasoning(), "writing_ms", stats.writing(),
+                            "tools_ms", stats.tools(), "usage", usage(stats.tokens(), "reply_aggregate", true))));
         }
         for (Change change : snapshot.changes().stream().limit(MAX_CHANGES).toList()) {
             if (change.messageIndex() < 0 || change.messageIndex() >= size) continue;
@@ -201,6 +217,9 @@ public final class ChatAnalysisExport {
                 + ", со статусом FAILED (включая отказ/дубль): " + failed + ".\n\n"
                 + "Дочерних progress-записей explore_project/delegate_task: " + childRecords + ", групп: " + childIds.size()
                 + ". Scope взят из соглашения структурированных ID, не из текста отчёта. Это не полный child transcript.\n\n"
+                + "Заблокированных повторов вызовов (REPEATED): " + repeated + ".\n\n"
+                + (replies.isEmpty() ? "Время ответов: в истории нет (старые ответы или ответы до сохранения статистики).\n\n"
+                        : "Время ответов (ReplyStats, с начала ответа до конца):\n\n- " + String.join("\n- ", replies) + "\n\n")
                 + "Доступных записей правок: " + edits.size() + ". Это не число всех изменений; снимки не сохраняются в истории.\n\n"
                 + "| Известный подытог usage шагов | SERVER | ESTIMATE |\n|---|---|---|\n"
                 + "| input | " + subtotal(totals[0], coverage[0], 0, usageRecords) + " | " + subtotal(totals[0], coverage[0], 1, usageRecords) + " |\n"
@@ -210,7 +229,7 @@ public final class ChatAnalysisExport {
                 + "Это не покрытие физических запросов. UNKNOWN и MIXED не включены в эти суммы; MIXED сохранён отдельно в JSON. "
                 + "Usage последнего ответа — родительский агрегат, он не прибавляется к шагам.\n\n"
                 + "Запросы ответа без инструментов, названия, сжатия, сетевые повторы, transport attempts, "
-                + "полная стоимость и длительности: unavailable. Контекст не суммируется. "
+                + "полная стоимость и длительность физических запросов: unavailable. Контекст не суммируется. "
                 + "Аргументы/полные результаты инструментов не сохраняются; outcome — краткая строка, не полный результат.\n\n"
                 + "Содержимое: " + (include ? "включено с очисткой известных секретов и ограничениями" : "не включено")
                 + "; обрезанных полей: " + content.truncated + ". Глобальный DiagnosticLog не включён: связи с этим чатом нет.\n\n"

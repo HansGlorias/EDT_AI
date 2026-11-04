@@ -118,6 +118,11 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         return text() + (usage == null ? "" : " · " + usage.describeStep());
     }
 
+    /** Строка для следа вызовов, который видит модель: без токенов — ей они не нужны и провоцируют подражание. */
+    public String traceLabel() {
+        return text();
+    }
+
     private String text() {
         if (SUBAGENT.equals(name)) {
             return summary + switch (status) {
