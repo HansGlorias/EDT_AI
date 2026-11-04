@@ -162,7 +162,8 @@ class ChatPendingReplyTest extends AbstractChatTest {
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, true);
         view.input().setText("Вопрос");
         view.send();
-        waitUntil(() -> !server.requests().isEmpty());
+        // Название может прийти первым: ждём именно основной запрос, который останавливаем.
+        waitUntil(() -> server.requests().stream().anyMatch(request -> !ChatTitlesTest.isTitle(request)));
         view.session().cancel();
         view.refresh();
         assertFalse(view.session().isBusy());
