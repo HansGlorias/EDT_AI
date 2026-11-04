@@ -152,7 +152,7 @@ class ChatCommandsTest extends AbstractChatTest {
         ask(view, "как получить текущую дату");
 
         waitUntil(() -> server.requests().size() == 2, () -> String.valueOf(server.requests().size()));
-        assertTrue(server.requests().get(1).body().contains("Придумай короткое название"), server.requests().get(1).body());
+        assertTrue(server.requests().stream().anyMatch(request -> request.body().contains("Придумай короткое название")));
         waitUntil(() -> chatTitle(view).equals("Текущая дата сеанса"), () -> chatTitle(view));
 
         ask(view, "а время?");

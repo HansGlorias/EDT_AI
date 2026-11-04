@@ -169,8 +169,9 @@ class RequestBudgetGuardTest {
                 ModelClient client = new ModelClient();
                 ModelChatProvider provider = new ModelChatProvider(() -> connection, client);
                 localFailure(client.check(connection));
-                localFailure(provider.title(QUESTION));
                 localFailure(provider.summarize(QUESTION));
+                // У названия свой системный промпт, но минимальный запрос тоже обязан помещаться.
+                localFailure(new ModelChatProvider(() -> connection(protocol, server.url(), 512, 64), client).title(QUESTION));
                 assertEquals(0, server.requests().size());
             }
         }

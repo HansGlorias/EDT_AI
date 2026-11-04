@@ -149,12 +149,16 @@ class ChatPendingReplyTest extends AbstractChatTest {
     void stopBeforeFirstByteEndsIndicatorAndReopenHasOnlyQuestion() throws Exception {
         CountDownLatch release = new CountDownLatch(1);
         server = FakeModelServer.http().handler((request, response) -> {
+            if (ChatTitlesTest.isTitle(request)) {
+                response.sse(List.of(openAiPart("Название по вопросу"), "data: [DONE]\n\n"), 0);
+                return;
+            }
             release.await(TIMEOUT_MS, TimeUnit.MILLISECONDS);
             response.sse(List.of(openAiPart("Поздний ответ"), "data: [DONE]\n\n"), 0);
         });
         configure(server);
         ChatView view = pendingView();
-        // Даже при включённых названиях пустой ответ не запускает лишний запрос.
+        // Название строится по вопросу, независимо от остановленного пустого ответа.
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, true);
         view.input().setText("Вопрос");
         view.send();
@@ -174,11 +178,12 @@ class ChatPendingReplyTest extends AbstractChatTest {
         assertFalse(view.history().getText().contains("ответ не получен"));
         release.countDown();
         settle();
-        assertEquals(1, server.requests().size());
+        waitUntil(() -> server.requests().size() == 2);
+        assertEquals(1, server.requests().stream().filter(ChatTitlesTest::isTitle).count());
     }
 
     @Test
-    void emptyFinalEndsIndicatorWithoutGeneratingTitle() throws Exception {
+    void emptyFinalEndsIndicatorWithTitleFromQuestion() throws Exception {
         answering(List.of());
         ChatView view = pendingView();
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).putBoolean(ChatView.GENERATE_TITLES, true);
@@ -189,7 +194,8 @@ class ChatPendingReplyTest extends AbstractChatTest {
         assertNotNull(view.linkAction(MessageRenderer.RETRY));
         assertEquals(1, view.historyFile().load().size());
         settle();
-        assertEquals(1, server.requests().size());
+        waitUntil(() -> server.requests().size() == 2);
+        assertEquals(1, server.requests().stream().filter(ChatTitlesTest::isTitle).count());
         Screenshots.render(view.control(), "chat-empty-final");
     }
 }
