@@ -65,6 +65,9 @@ abstract class ProtocolAdapter {
     /** Результаты вызовов для следующего запроса, в порядке вызовов. */
     abstract List<Object> toolResults(List<ToolResult> results);
 
+    /** Ответ модели без вызовов и служебная пометка плагина от имени пользователя после него. */
+    abstract List<Object> textExchange(String assistant, String user);
+
     /**
      * Результат вызова инструмента.
      *

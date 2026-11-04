@@ -183,13 +183,20 @@ public final class ChatAnalysisExport {
                             "waiting_ms", stats.waiting(), "reasoning_ms", stats.reasoning(), "writing_ms", stats.writing(),
                             "tools_ms", stats.tools(), "usage", usage(stats.tokens(), "reply_aggregate", true))));
         }
+        StringBuilder changesMarkdown = new StringBuilder();
         for (Change change : snapshot.changes().stream().limit(MAX_CHANGES).toList()) {
             if (change.messageIndex() < 0 || change.messageIndex() >= size) continue;
             edits.add(object("message_id", "message-" + (change.messageIndex() + 1),
                     "source", change.observedMcp() ? "observed_resource_change" : "volatile_edit_snapshot",
                     "path", content.field(change.path()),
+                    "diff", change.observedMcp() ? unavailable() : content.field(LineDiff.unified(change.before(), change.after())),
                     "before", change.observedMcp() ? unavailable() : content.field(change.before()),
                     "after", change.observedMcp() ? unavailable() : content.field(change.after())));
+            if (include && !change.observedMcp()) {
+                changesMarkdown.append("### message-").append(change.messageIndex() + 1).append(" · ")
+                        .append(text(content.field(change.path()))).append("\n\n```diff\n")
+                        .append(text(content.field(LineDiff.unified(change.before(), change.after())))).append("```\n\n");
+            }
         }
         String feedbackText = "# Отзыв пользователя\n\n## Ожидал\n\n" + text(content.field(feedback.expected()))
                 + "\n\n## Получил\n\n" + text(content.field(feedback.actual()))
@@ -239,6 +246,9 @@ public final class ChatAnalysisExport {
                 "plugin_version", pluginVersion, "created_at", Instant.now().toString(),
                 "id_scope", "export_local_not_execution_trace", "content_included", include,
                 "configuration", profile, "completeness", completeness)));
+        if (changesMarkdown.length() > 0) {
+            markdown.append("## Правки (diff по полным текстам)\n\n").append(changesMarkdown);
+        }
         entries.put("conversation.md", markdown.toString());
         entries.put("conversation.json", Json.write(object("schema_version", SCHEMA_VERSION, "title", title,
                 "messages", messages, "changes", edits, "measurements", object("coverage", "unavailable",

@@ -699,6 +699,66 @@ class AgentLoopTest {
         assertEquals(omitted.get(first), omitted.get(first + 1), "пачкой, не по шагу: " + omitted);
     }
 
+    /** Инструмент изменения для тестов: считает вызовы. */
+    private static Tool writer(AtomicInteger writes) {
+        return new Tool() {
+            @Override public boolean modifies() { return true; }
+            @Override public String name() { return "edit_module"; }
+            @Override public String description() { return "Правит модуль"; }
+            @Override public Map<String, Object> inputSchema() { return Json.object("type", "object"); }
+            @Override public String summary(Map<String, Object> input) { return "Правит модуль"; }
+            @Override public Result call(Map<String, Object> input) {
+                writes.incrementAndGet();
+                return new Result("Изменено", "строки 1–2");
+            }
+        };
+    }
+
+    @Test
+    void claimedChangesWithoutEditToolAreSentBackOnce() throws Exception {
+        AtomicInteger writes = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            String body = request.body();
+            if (!body.contains("Служебная пометка EDT AI: в этом ответе")) {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Готово. Добавил обработчик кнопки.\"}}]}\n\n",
+                        "data: [DONE]\n\n"), 0);
+            } else if (!body.contains("\"role\":\"tool\"")) {
+                response.sse(List.of(toolCalls("{\"index\":0,\"id\":\"e1\",\"function\":{\"name\":\"edit_module\",\"arguments\":\"{}\"}}"),
+                        "data: [DONE]\n\n"), 0);
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Теперь правка внесена.\"}}]}\n\n",
+                        "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        String answer = run(Protocol.OPENAI_COMPATIBLE, problems -> List.of(READ, writer(writes)), ToolApprover.ALLOW_ALL);
+
+        assertEquals(1, writes.get(), "после пометки модель внесла правку инструментом");
+        assertEquals(3, server.requests().size());
+        assertTrue(answer.endsWith("Теперь правка внесена."), answer);
+        assertTrue(uses.stream().anyMatch(use -> use.id().equals("claim")));
+        List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
+        assertEquals("assistant", Json.stringAt(messages.get(messages.size() - 2), "role"));
+        assertEquals(AgentLoop.UNMADE_CHANGES, Json.stringAt(messages.get(messages.size() - 1), "content"));
+    }
+
+    @Test
+    void honestAnswersAndReadOnlyToolsAreNotChecked() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Я ничего не менял: правка не нужна.\"}}]}\n\n", "data: [DONE]\n\n"), 0));
+        run(Protocol.OPENAI_COMPATIBLE, problems -> List.of(READ, writer(new AtomicInteger())), ToolApprover.ALLOW_ALL);
+        assertEquals(1, server.requests().size(), "отрицание — не заявление о правке");
+
+        server.close();
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Готово. Добавил бы обработчик так.\"}}]}\n\n", "data: [DONE]\n\n"), 0));
+        run(Protocol.OPENAI_COMPATIBLE, problems -> List.of(READ), ToolApprover.ALLOW_ALL);
+        assertEquals(1, server.requests().size(), "без инструментов изменения (План) проверки нет");
+        assertTrue(ChangeClaims.claims("Изменения внесены в модуль"));
+        assertFalse(ChangeClaims.claims("Внесу правку после ответа"));
+        assertFalse(ChangeClaims.claims("Я не добавил новую процедуру"));
+    }
+
     @Test
     void explorationAtStepLimitStillReturnsReport() throws Exception {
         AtomicInteger step = new AtomicInteger();

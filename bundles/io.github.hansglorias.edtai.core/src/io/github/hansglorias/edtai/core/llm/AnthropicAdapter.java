@@ -167,6 +167,12 @@ final class AnthropicAdapter extends ProtocolAdapter {
     }
 
     @Override
+    List<Object> textExchange(String assistant, String user) {
+        return List.of(Json.object("role", "assistant", "content", List.of(Json.object("type", "text", "text", assistant))),
+                Json.object("role", "user", "content", List.of(Json.object("type", "text", "text", user))));
+    }
+
+    @Override
     Object image(Attachment image) {
         return Json.object("type", "image", "source", Json.object("type", "base64", "media_type", image.mediaType(), "data",
                 image.data()));

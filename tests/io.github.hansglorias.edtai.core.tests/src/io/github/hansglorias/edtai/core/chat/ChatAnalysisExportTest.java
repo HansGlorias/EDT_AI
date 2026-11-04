@@ -116,6 +116,9 @@ class ChatAnalysisExportTest {
         for (String value : List.of(TOKEN, URL, "https://", "example.invalid", "raw-call-id")) assertFalse(all.contains(value), value);
         var conversation = Json.parseObject(entries.get("conversation.json"));
         assertEquals("available", map(list(conversation.get("changes")).get(0).get("before")).get("status"));
+        String diff = (String) map(list(conversation.get("changes")).get(0).get("diff")).get("value");
+        assertTrue(diff.contains("+после") && diff.startsWith("@@ -1,1 +1,1 @@"), diff);
+        assertTrue(entries.get("conversation.md").contains("```diff"), "diff и в conversation.md; секрет очищен проверкой выше");
     }
 
     @Test
