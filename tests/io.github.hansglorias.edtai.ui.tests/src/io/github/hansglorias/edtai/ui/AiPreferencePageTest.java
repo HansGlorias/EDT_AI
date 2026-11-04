@@ -27,6 +27,9 @@ class AiPreferencePageTest extends AbstractChatTest {
         try {
             var settings = (AiPreferencePage) dialog.getSelectedPage();
             dialog.getShell().setSize(900, 700);
+            dialog.getShell().setLocation(0, 0);
+            dialog.getShell().forceActive();
+            settle();
             dialog.getShell().layout(true, true);
             var scroll = assertInstanceOf(ScrolledComposite.class, settings.localDiagnosticsField().getParent().getParent().getParent());
             waitUntil(() -> scroll.getClientArea().height > 0);
@@ -34,17 +37,9 @@ class AiPreferencePageTest extends AbstractChatTest {
             settings.localDiagnosticsField().setFocus();
             scroll.showControl(settings.localDiagnosticsField());
             settle();
-            var bounds = scroll.getDisplay().map(settings.localDiagnosticsField(), scroll,
-                    new Rectangle(0, 0, settings.localDiagnosticsField().getSize().x,
-                            settings.localDiagnosticsField().getSize().y));
-            assertTrue(scroll.getClientArea().contains(bounds.x, bounds.y));
-            assertTrue(scroll.getClientArea().contains(bounds.x + bounds.width - 1, bounds.y + bounds.height - 1));
-            var onShell = scroll.getDisplay().map(settings.localDiagnosticsField(), dialog.getShell(),
-                    new Rectangle(0, 0, settings.localDiagnosticsField().getSize().x,
-                            settings.localDiagnosticsField().getSize().y));
-            assertTrue(dialog.getShell().getClientArea().contains(onShell.x, onShell.y));
-            assertTrue(dialog.getShell().getClientArea().contains(onShell.x + onShell.width - 1, onShell.y + onShell.height - 1));
+            assertDiagnosticsVisible(settings, scroll);
             Screenshots.capture(dialog.getShell(), "preferences-diagnostics");
+            assertDiagnosticsVisible(settings, scroll);
             assertFalse(settings.localDiagnosticsField().getSelection());
             settings.localDiagnosticsField().setSelection(true);
             assertTrue(settings.performOk());
@@ -140,6 +135,22 @@ class AiPreferencePageTest extends AbstractChatTest {
             }
         } finally {
             dialog.close();
+        }
+    }
+
+    private static void assertDiagnosticsVisible(AiPreferencePage settings, ScrolledComposite scroll) {
+        var field = settings.localDiagnosticsField();
+        String geometry = "origin=" + scroll.getOrigin() + ", field=" + field.getBounds()
+                + ", scroller=" + scroll.getBounds() + ", shell=" + field.getShell().getBounds()
+                + ", focus=" + field.getDisplay().getFocusControl();
+        for (var ancestor = field.getParent(); ancestor != null; ancestor = ancestor.getParent()) {
+            var bounds = field.getDisplay().map(field, ancestor,
+                    new Rectangle(0, 0, field.getSize().x, field.getSize().y));
+            var client = ancestor.getClientArea();
+            assertTrue(client.contains(bounds.x, bounds.y)
+                    && client.contains(bounds.x + bounds.width - 1, bounds.y + bounds.height - 1),
+                    "флажок обрезан в " + ancestor + ": " + bounds + ", client=" + client + "; " + geometry);
+            if (ancestor == field.getShell()) break;
         }
     }
 
