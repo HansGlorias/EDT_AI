@@ -661,6 +661,39 @@ class AgentLoopTest {
     }
 
     @Test
+    void stepsKeepToWorkingPartOfLargeWindow() throws Exception {
+        Tool big = new Tool() {
+            @Override public boolean repeatableRead() { return true; }
+            @Override public String name() { return "read_module"; }
+            @Override public String description() { return "Читает модуль"; }
+            @Override public Map<String, Object> inputSchema() { return Json.object("type", "object"); }
+            @Override public String summary(Map<String, Object> input) { return "Читает " + input.get("module"); }
+            @Override public Result call(Map<String, Object> input) {
+                return new Result(input.get("module") + ":" + "ж".repeat(19_000), "строки");
+            }
+        };
+        AtomicInteger step = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int id = step.getAndIncrement();
+            response.sse(List.of(id < 14
+                    ? toolCalls("{\"index\":0,\"id\":\"c" + id + "\",\"function\":{\"name\":\"read_module\","
+                            + "\"arguments\":\"{\\\"module\\\":\\\"М" + id + "\\\"}\"}}")
+                    : "data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+        });
+        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()), 120_000);
+        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(big),
+                ToolApprover.ALLOW_ALL);
+        assertEquals("Готово.", provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS));
+
+        String last = server.requests().get(server.requests().size() - 1).body();
+        int working = RequestBudget.working(RequestBudget.chars(connection));
+        assertTrue(last.contains(AgentLoop.OMITTED), "старые результаты убраны раньше края окна");
+        assertTrue(last.length() < working + 25_000, "запрос держится около рабочей части: " + last.length());
+        assertTrue(last.contains("М13:"), "последний результат передан");
+    }
+
+    @Test
     void explorationAtStepLimitStillReturnsReport() throws Exception {
         AtomicInteger step = new AtomicInteger();
         server = FakeModelServer.http().handler((request, response) -> {

@@ -12,9 +12,9 @@ import java.util.Map;
  */
 final class AgentTranscript {
 
-    static final String OMITTED = "(результат не передан: не помещается в окно модели; если нужно, повтори чтение."
+    static final String OMITTED = "(результат старого шага не передан ради окна модели; если он ещё нужен, повтори чтение."
             + " Операцию изменения данных повторно не выполняй)";
-    static final String OMITTED_ERROR = "(подробности ошибки не переданы: не помещаются в окно модели;"
+    static final String OMITTED_ERROR = "(подробности ошибки старого шага не переданы ради окна модели;"
             + " этот вызов НЕ завершился успешно)";
 
     private record Step(ModelReply reply, List<ProtocolAdapter.ToolResult> results, Map<String, String> references) { }

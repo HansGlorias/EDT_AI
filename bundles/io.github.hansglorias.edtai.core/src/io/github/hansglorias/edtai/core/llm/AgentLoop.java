@@ -151,7 +151,7 @@ final class AgentLoop {
         this.maxSteps = maxSteps;
         this.exploration = exploration;
         this.adapter = ProtocolAdapter.of(connection.protocol());
-        this.resultStore = new ToolResultStore(Math.max(512, Math.min(6000, RequestBudget.chars(connection) / 8)), 1_000_000);
+        this.resultStore = new ToolResultStore(RequestBudget.page(connection), 1_000_000);
         this.resultReader = resultStore.tool();
     }
 
@@ -368,9 +368,11 @@ final class AgentLoop {
     private FittedRequest prepare() throws ModelException {
         RequestBudget.requireInputSpace(connection());
         int budget = RequestBudget.chars(connection()) >> shrink;
+        // Результаты старых шагов убираются уже сверх рабочей части окна, а не только у его края.
+        int working = RequestBudget.working(budget);
         int omitted = 0;
         List<Object> extra = transcript.project(adapter, omitted);
-        while (omitted < transcript.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > budget) {
+        while (omitted < transcript.size() - 1 && RequestBudget.size(connection(), history, extra, tools) > working) {
             extra = transcript.project(adapter, ++omitted);
         }
         // Обрезка меняет только представление: выполненные операции не забываются.

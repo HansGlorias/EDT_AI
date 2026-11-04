@@ -160,4 +160,25 @@ class RequestBudgetTest {
         return new ModelConnection(Protocol.OPENAI_COMPATIBLE, "http://localhost", "m", "", maxTokens, "",
                 new TrustSettings(false, Optional.empty()), window);
     }
+
+    @Test
+    void workingPartAndPageGrowWithWindowWithinLimits() {
+        // Небольшое окно — как раньше: весь бюджет и страница до 6000 символов.
+        int small = RequestBudget.chars(window(32_768));
+        assertEquals(small, RequestBudget.working(small));
+        assertEquals(6000, RequestBudget.page(window(32_768)));
+        // 120k: шаги держатся в половине бюджета, страница 20 000 — модуль на 1100 строк за 2–3 шага.
+        int medium = RequestBudget.chars(window(120_000));
+        assertEquals(medium / 2, RequestBudget.working(medium));
+        assertEquals(RequestBudget.MAX_PAGE, RequestBudget.page(window(120_000)));
+        // 200k и больше: не больше ~80k токенов на шаги, сколько бы ни позволяло окно.
+        assertEquals(RequestBudget.WORKING_CAP, RequestBudget.working(RequestBudget.chars(window(200_000))));
+        assertEquals(RequestBudget.WORKING_CAP, RequestBudget.working(RequestBudget.chars(window(1_000_000))));
+        assertEquals(1000, RequestBudget.working(1000), "не больше самого бюджета");
+    }
+
+    private static ModelConnection window(int tokens) {
+        return new ModelConnection(Protocol.OPENAI_COMPATIBLE, "http://localhost", "m", "", 0, "",
+                new TrustSettings(false, Optional.empty()), tokens);
+    }
 }
