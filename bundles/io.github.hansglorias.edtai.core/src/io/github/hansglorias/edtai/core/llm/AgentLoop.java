@@ -65,6 +65,11 @@ final class AgentLoop {
     /** После скольких шагов подряд, в основном из повторов, инструменты отключаются. */
     static final int MAX_STUCK_STEPS = 2;
 
+    /** Модель пишет о правках, не вызвав инструмент изменения: один раз просим внести их или исправить ответ. */
+    static final String UNMADE_CHANGES = "(Служебная пометка EDT AI: в этом ответе не было ни одного успешного вызова"
+            + " инструмента изменения, а ты пишешь, что правки сделаны. Файлы не изменены. Если правки нужны — внеси их"
+            + " инструментом сейчас и проверь результат; если нет — прямо скажи пользователю, что ничего не менял.)";
+
     /** Сколько раз урезать запрос после ответа «не помещается». */
     static final int MAX_SHRINK = 3;
 
@@ -120,6 +125,10 @@ final class AgentLoop {
     private boolean toolsRejected;
     /** Последний запрос ответа — без инструментов: модель зациклилась или разведка исчерпала лимит. */
     private boolean toolsOff;
+    /** В этом ответе успешно выполнен инструмент изменения. */
+    private boolean changed;
+    /** Ответ уже проверяли на правки без инструментов. */
+    private boolean claimChecked;
     /** Вызовов текущего шага, заблокированных как повторы. */
     private int blockedInStep;
     /** Шагов подряд, не меньше половины вызовов которых — заблокированные повторы. */
@@ -261,6 +270,9 @@ final class AgentLoop {
         for (int step = 1;; step++) {
             checkCancelled();
             ModelReply reply = request();
+            if (reply.calls().isEmpty() && unmadeChanges(reply)) {
+                continue;
+            }
             if (reply.calls().isEmpty() || toolsOff) {
                 incomplete |= reply.truncated() || toolsOff;
                 if (exploration) return ChatMessage.stripTraces(ThinkFilter.strip(reply.text())).strip();
@@ -317,6 +329,25 @@ final class AgentLoop {
             transcript.add(reply, results);
             separate = answer.length() > 0;
         }
+    }
+
+    /**
+     * Модель закончила ответ словами о сделанных правках, но инструмент изменения в этом ответе успешно
+     * не выполнялся, хотя был доступен: один раз возвращаем её к делу пометкой. В ленте — строка проверки.
+     *
+     * @return ответ продолжается
+     */
+    private boolean unmadeChanges(ModelReply reply) {
+        if (exploration || toolsOff || claimChecked || changed || tools.stream().noneMatch(Tool::modifies)
+                || !ChangeClaims.claims(ThinkFilter.strip(reply.text()))) {
+            return false;
+        }
+        claimChecked = true;
+        onTool.accept(new ToolUse("claim", "tools", "Проверка ответа", "модель написала о правках, но не вызывала"
+                + " инструмент изменения — попросили внести их или исправить ответ", ToolUse.Status.FAILED));
+        transcript.addNote(reply, UNMADE_CHANGES);
+        separate = answer.length() > 0;
+        return true;
     }
 
     /** Служебная пометка — к последнему результату пакета. */
@@ -541,6 +572,7 @@ final class AgentLoop {
             if (tool instanceof ExploreProject || tool instanceof DelegateTask) checkCancelled();
             String projected = tool == resultReader || control ? output.text() : capture(call, key, output.text(), false);
             if (!control) ledger.succeeded(key, projected);
+            if (tool.modifies()) changed = true;
             onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));
             return new ProtocolAdapter.ToolResult(call, projected, false);
         } catch (CancellationException e) {

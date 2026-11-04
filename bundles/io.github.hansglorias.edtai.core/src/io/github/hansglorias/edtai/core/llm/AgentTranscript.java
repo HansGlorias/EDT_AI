@@ -17,7 +17,8 @@ final class AgentTranscript {
     static final String OMITTED_ERROR = "(подробности ошибки старого шага не переданы ради окна модели;"
             + " этот вызов НЕ завершился успешно)";
 
-    private record Step(ModelReply reply, List<ProtocolAdapter.ToolResult> results, Map<String, String> references) { }
+    /** Шаг: ответ с вызовами и их результаты либо ответ без вызовов и служебная пометка {@code note}. */
+    private record Step(ModelReply reply, List<ProtocolAdapter.ToolResult> results, Map<String, String> references, String note) { }
 
     private final List<Step> steps = new ArrayList<>();
     private final Map<String, String> references = new HashMap<>();
@@ -37,14 +38,23 @@ final class AgentTranscript {
     }
 
     void add(ModelReply reply, List<ProtocolAdapter.ToolResult> results) {
-        steps.add(new Step(reply, List.copyOf(results), Map.copyOf(references)));
+        steps.add(new Step(reply, List.copyOf(results), Map.copyOf(references), null));
         references.clear();
+    }
+
+    /** Ответ без вызовов и пометка плагина после него: модель продолжает тот же ответ. */
+    void addNote(ModelReply reply, String note) {
+        steps.add(new Step(reply, List.of(), Map.of(), note));
     }
 
     List<Object> project(ProtocolAdapter adapter, int omitted) {
         List<Object> extra = new ArrayList<>();
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
+            if (step.note() != null) {
+                extra.addAll(adapter.textExchange(step.reply().text().isBlank() ? "…" : step.reply().text(), step.note()));
+                continue;
+            }
             extra.add(adapter.assistantMessage(step.reply()));
             List<ProtocolAdapter.ToolResult> results = step.results();
             if (i < omitted) {

@@ -164,6 +164,11 @@ final class OpenAiAdapter extends ProtocolAdapter {
         return messages;
     }
 
+    @Override
+    List<Object> textExchange(String assistant, String user) {
+        return List.of(Json.object("role", "assistant", "content", assistant), Json.object("role", "user", "content", user));
+    }
+
     /** Аргументы — строка JSON; некоторые серверы присылают сразу объект. */
     private static String arguments(Object call) {
         Object arguments = Json.at(call, "function", "arguments");
