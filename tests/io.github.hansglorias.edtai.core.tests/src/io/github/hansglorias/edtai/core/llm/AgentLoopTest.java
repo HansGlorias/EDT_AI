@@ -702,6 +702,228 @@ class AgentLoopTest {
         return run(protocol, problems -> List.of(READ), ToolApprover.ALLOW_ALL);
     }
 
+    @Test
+    void openAiDiscoversMcpWithoutActivatingItInsideBatch() throws Exception {
+        discoveryRoundTrip(Protocol.OPENAI_COMPATIBLE);
+    }
+
+    @Test
+    void anthropicDiscoversMcpWithoutActivatingItInsideBatch() throws Exception {
+        discoveryRoundTrip(Protocol.ANTHROPIC);
+    }
+
+    @Test
+    void selectedMcpStillHonoursDeniedApproval() throws Exception {
+        discoveryRoundTrip(Protocol.OPENAI_COMPATIBLE, false);
+    }
+
+    private void discoveryRoundTrip(Protocol protocol) throws Exception {
+        discoveryRoundTrip(protocol, true);
+    }
+
+    private void discoveryRoundTrip(Protocol protocol, boolean allow) throws Exception {
+        AtomicInteger executed = new AtomicInteger();
+        AtomicInteger approvals = new AtomicInteger();
+        AtomicInteger step = new AtomicInteger();
+        Tool remote = new Tool() {
+            @Override public String name() { return "update_remote"; }
+            @Override public String description() { return "Меняет тестовый объект"; }
+            @Override public boolean mcp() { return true; }
+            @Override public boolean modifies() { return true; }
+            @Override public boolean needsApproval() { return true; }
+            @Override public Map<String, Object> inputSchema() {
+                return Json.object("type", "object", "properties",
+                        Json.object("remote_schema_marker", Json.object("type", "string")));
+            }
+            @Override public String summary(Map<String, Object> input) { return "Тестовая правка"; }
+            @Override public Result call(Map<String, Object> input) {
+                executed.incrementAndGet();
+                return new Result("Изменено", "Изменено");
+            }
+        };
+        server = FakeModelServer.http().handler((request, response) -> {
+            int currentStep = step.getAndIncrement();
+            List<String> events = new java.util.ArrayList<>();
+            if (currentStep == 0) {
+                events.add(discoveryCall(protocol, 0, "list", "discover_mcp_tools", Json.object("action", "list", "offset", 0)));
+            } else if (currentStep == 1) {
+                events.add(discoveryCall(protocol, 0, "select", "discover_mcp_tools",
+                        Json.object("action", "select", "names", List.of(remote.name()))));
+                events.add(discoveryCall(protocol, 1, "too_early", remote.name(), Map.of()));
+            } else if (currentStep == 2) {
+                events.add(discoveryCall(protocol, 0, "execute", remote.name(), Map.of()));
+            } else {
+                events.add(protocol == Protocol.ANTHROPIC
+                        ? "event: content_block_delta\ndata: " + Json.write(Json.object("type", "content_block_delta", "index", 0,
+                                "delta", Json.object("type", "text_delta", "text", "Готово."))) + "\n\n"
+                        : "data: " + Json.write(Json.object("choices", List.of(Json.object("delta", Json.object("content", "Готово."))))) + "\n\n");
+            }
+            events.add(protocol == Protocol.ANTHROPIC
+                    ? "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n" : "data: [DONE]\n\n");
+            response.sse(events, 0);
+        });
+
+        ToolApprover approver = (use, arguments) -> {
+            approvals.incrementAndGet();
+            assertEquals(remote.name(), use.name());
+            return CompletableFuture.completedFuture(allow ? ToolApprover.Decision.ALLOW : ToolApprover.Decision.DENY);
+        };
+        assertEquals("Готово.", run(protocol, problems -> List.of(READ, remote), approver));
+        assertEquals(allow ? 1 : 0, executed.get(), "выбор не разрешает выполнение в том же пакете и не заменяет подтверждение");
+        assertEquals(1, approvals.get(), "управление каталогом не спрашивает разрешение, MCP-правка спрашивает");
+        assertTrue(uses.stream().anyMatch(use -> use.id().equals("too_early") && use.status() == ToolUse.Status.FAILED));
+        String initial = server.requests().get(0).body();
+        assertTrue(initial.contains("discover_mcp_tools"));
+        assertTrue(initial.contains("read_module"), "встроенный набор остаётся доступным");
+        assertFalse(initial.contains("remote_schema_marker"), "начальный запрос не содержит полную схему MCP");
+        assertFalse(server.requests().get(1).body().contains("remote_schema_marker"), "list не активирует схему");
+        assertTrue(server.requests().get(2).body().contains("remote_schema_marker"), "select действует со следующего запроса");
+
+        assertEquals("Готово.", run(protocol, problems -> List.of(READ, remote), approver));
+        assertFalse(server.requests().get(4).body().contains("remote_schema_marker"), "новый ответ не наследует активный набор");
+        assertFalse(READ.mcp(), "встроенные инструменты по умолчанию не MCP");
+    }
+
+    private static String discoveryCall(Protocol protocol, int index, String id, String name, Map<String, Object> input) {
+        if (protocol == Protocol.ANTHROPIC) {
+            return "event: content_block_start\ndata: " + Json.write(Json.object("type", "content_block_start", "index", index,
+                    "content_block", Json.object("type", "tool_use", "id", id, "name", name, "input", Map.of()))) + "\n\n"
+                    + "event: content_block_delta\ndata: " + Json.write(Json.object("type", "content_block_delta", "index", index,
+                            "delta", Json.object("type", "input_json_delta", "partial_json", Json.write(input)))) + "\n\n";
+        }
+        return toolCalls(Json.write(Json.object("index", index, "id", id, "type", "function", "function",
+                Json.object("name", name, "arguments", Json.write(input)))));
+    }
+
+    @Test
+    void repeatedCatalogSelectionsReplaceSchemasWithoutLedgerRejection() throws Exception {
+        Tool first = catalogTool("remote_a", "schema_a", 0);
+        Tool second = catalogTool("remote_b", "schema_b", 0);
+        AtomicInteger step = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int index = step.getAndIncrement();
+            if (index < 3) {
+                response.sse(List.of(discoveryCall(Protocol.OPENAI_COMPATIBLE, 0, "select_" + index,
+                        "discover_mcp_tools", Json.object("action", "select", "names",
+                                List.of(index == 1 ? second.name() : first.name()))), "data: [DONE]\n\n"), 0);
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        assertEquals("Готово.", run(Protocol.OPENAI_COMPATIBLE, problems -> List.of(READ, first, second), ToolApprover.ALLOW_ALL));
+        List<String> bodies = server.requests().stream().map(FakeModelServer.Request::body).toList();
+        assertFalse(bodies.get(0).contains("schema_a"));
+        assertTrue(bodies.get(1).contains("schema_a"));
+        assertFalse(bodies.get(1).contains("schema_b"));
+        assertFalse(bodies.get(2).contains("schema_a"));
+        assertTrue(bodies.get(2).contains("schema_b"));
+        assertTrue(bodies.get(3).contains("schema_a"));
+        assertFalse(bodies.get(3).contains("schema_b"));
+        assertEquals(3, uses.stream().filter(use -> use.status() == ToolUse.Status.DONE).count());
+        assertTrue(uses.stream().noneMatch(use -> use.problem() == ToolUse.Problem.REPEATED));
+    }
+
+    @Test
+    void oversizedMcpSelectionIsRejectedBeforeRequestAndKeepsPreviousSet() throws Exception {
+        Tool small = catalogTool("remote_small", "schema_small", 0);
+        Tool huge = catalogTool("remote_huge", "schema_huge", 80_000);
+        AtomicInteger step = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int index = step.getAndIncrement();
+            if (index < 2) {
+                response.sse(List.of(discoveryCall(Protocol.OPENAI_COMPATIBLE, 0, "select_" + index,
+                        "discover_mcp_tools", Json.object("action", "select", "names",
+                                List.of(index == 0 ? small.name() : huge.name()))), "data: [DONE]\n\n"), 0);
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()), 12_000);
+        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(small, huge),
+                ToolApprover.ALLOW_ALL);
+
+        assertEquals("Готово.", provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS));
+        assertEquals(3, server.requests().size(), "неподходящая схема не обрывает ответ до следующего запроса");
+        assertTrue(server.requests().stream().noneMatch(request -> request.body().contains("schema_huge")));
+        assertTrue(server.requests().get(2).body().contains("schema_small"), "неудачный select атомарен");
+        assertTrue(uses.stream().anyMatch(use -> use.id().equals("select_1") && use.problem() == ToolUse.Problem.BAD_ARGUMENTS));
+    }
+
+    private static Tool catalogTool(String name, String schemaMarker, int padding) {
+        return new Tool() {
+            @Override public String name() { return name; }
+            @Override public String description() { return "Тестовый MCP"; }
+            @Override public boolean mcp() { return true; }
+            @Override public Map<String, Object> inputSchema() {
+                return Json.object("type", "object", "properties", Json.object(schemaMarker,
+                        Json.object("type", "string", "description", "x".repeat(padding))));
+            }
+            @Override public String summary(Map<String, Object> input) { return name; }
+            @Override public Result call(Map<String, Object> input) { throw new AssertionError("Схему только выбирают"); }
+        };
+    }
+
+    @Test
+    void selectedMcpSchemaRejectionFallsBackWithoutRestoringCatalog() throws Exception {
+        Tool remote = catalogTool("remote_test", "remote_schema_marker", 0);
+        AtomicInteger step = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int current = step.getAndIncrement();
+            if (current == 0) {
+                response.sse(List.of(discoveryCall(Protocol.OPENAI_COMPATIBLE, 0, "select", "discover_mcp_tools",
+                        Json.object("action", "select", "names", List.of(remote.name()))), "data: [DONE]\n\n"), 0);
+            } else if (current == 1) {
+                response.send(400, "application/json", Json.write(Json.object("error", Json.object("message",
+                        "tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"))));
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Без инструментов.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+
+        assertEquals("Без инструментов.", run(Protocol.OPENAI_COMPATIBLE, problems -> List.of(READ, remote), ToolApprover.ALLOW_ALL));
+        assertEquals(3, server.requests().size());
+        assertTrue(server.requests().get(1).body().contains("remote_schema_marker"));
+        assertNull(Json.parseObject(server.requests().get(2).body()).get("tools"), "повтор без инструментов и каталога");
+        assertTrue(uses.stream().anyMatch(use -> use.outcome().startsWith(AgentLoop.TOOLS_UNSUPPORTED)));
+    }
+
+    @Test
+    void pendingAssistantTranscriptCannotPushSelectedSchemasOverBudget() throws Exception {
+        Tool small = catalogTool("remote_small", "schema_small", 0);
+        Tool large = catalogTool("remote_large", "schema_large", 18_000);
+        AtomicInteger step = new AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            int index = step.getAndIncrement();
+            if (index < 2) {
+                List<String> events = new java.util.ArrayList<>();
+                if (index == 1) {
+                    events.add("data: " + Json.write(Json.object("choices", List.of(Json.object("delta",
+                            Json.object("content", "x".repeat(13_000)))))) + "\n\n");
+                }
+                events.add(discoveryCall(Protocol.OPENAI_COMPATIBLE, 0, "select_" + index, "discover_mcp_tools",
+                        Json.object("action", "select", "names", List.of(index == 0 ? small.name() : large.name()))));
+                events.add("data: [DONE]\n\n");
+                response.sse(events, 0);
+            } else {
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"content\":\"Готово.\"}}]}\n\n", "data: [DONE]\n\n"), 0);
+            }
+        });
+        ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 0, "",
+                new TrustSettings(false, Optional.empty()), 12_000);
+        ModelChatProvider provider = new ModelChatProvider(() -> connection, new ModelClient(), problems -> List.of(small, large),
+                ToolApprover.ALLOW_ALL);
+
+        assertTrue(provider.reply(HISTORY, parts::add, uses::add).get(15, TimeUnit.SECONDS).endsWith("Готово."));
+        assertEquals(3, server.requests().size());
+        assertTrue(server.requests().get(2).body().contains("schema_small"), "прежний выбор сохранён");
+        assertFalse(server.requests().get(2).body().contains("schema_large"));
+        assertTrue(uses.stream().anyMatch(use -> use.id().equals("select_1")
+                && use.problem() == ToolUse.Problem.BAD_ARGUMENTS && use.outcome().contains("результатами пакета")),
+                "отказ вызван проверкой полного пакета, а не размером схемы отдельно");
+    }
+
     private String run(Protocol protocol, ToolSource tools, ToolApprover approver) throws Exception {
         ModelConnection connection = new ModelConnection(protocol, server.url(), "test-model", "", 0, "",
                 new TrustSettings(false, Optional.empty()));

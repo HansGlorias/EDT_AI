@@ -81,6 +81,8 @@ final class AgentLoop {
     private final CompletableFuture<String> result = new CompletableFuture<>();
 
     private List<Tool> tools = List.of();
+    private List<Tool> fixedTools = List.of();
+    private McpToolCatalog catalog;
     private volatile CompletableFuture<ModelReply> current;
     private final StringBuilder answer = new StringBuilder();
     private boolean separate;
@@ -209,6 +211,25 @@ final class AgentLoop {
         if (tools.stream().anyMatch(tool -> tool.name().equals(resultReader.name()))) {
             throw new IllegalStateException("Имя read_tool_result зарезервировано для чтения результатов");
         }
+        catalog = new McpToolCatalog(tools);
+        if (!catalog.empty()) {
+            if (tools.stream().anyMatch(tool -> tool.name().equals(McpToolCatalog.NAME))) {
+                throw new IllegalStateException("Имя discover_mcp_tools зарезервировано");
+            }
+            fixedTools = new ArrayList<>(tools.stream().filter(tool -> !tool.mcp()).toList());
+            fixedTools.add(catalog);
+            tools = List.copyOf(fixedTools);
+            catalog.fits(selected -> {
+                List<Tool> candidate = new ArrayList<>(fixedTools);
+                candidate.addAll(selected);
+                candidate.add(resultReader); // Резерв для дочитывания результатов.
+                List<Object> retained = transcript.project(adapter, transcript.size());
+                int budget = RequestBudget.chars(connection()) >> shrink;
+                RequestBudget.Fitted fitted = RequestBudget.fit(history,
+                        part -> RequestBudget.size(connection(), part, retained, candidate), budget);
+                return RequestBudget.size(connection(), fitted.history(), retained, candidate) <= budget;
+            });
+        }
         for (int step = 1;; step++) {
             checkCancelled();
             ModelReply reply = request();
@@ -224,6 +245,7 @@ final class AgentLoop {
                         + " чтобы она продолжила, или уточните задачу._");
                 return answer.toString().strip();
             }
+            List<Tool> previousSelection = catalog.selected();
             List<ProtocolAdapter.ToolResult> results = new ArrayList<>();
             // Токены шага — у первого его вызова: шаг один, вызовов в нём может быть несколько.
             TokenUsage tokens = lastStep;
@@ -237,9 +259,37 @@ final class AgentLoop {
                 ProtocolAdapter.ToolResult last = results.get(results.size() - 1);
                 results.set(results.size() - 1, new ProtocolAdapter.ToolResult(last.call(), last.text() + "\n\n" + note, last.error()));
             }
+            if (!catalog.selected().equals(previousSelection) && !selectionFits(reply, results)) {
+                catalog.restore(previousSelection);
+                String error = "Выбор MCP-схем не применён: следующий запрос с результатами пакета не помещается "
+                        + "в оценочный бюджет. Прежний набор сохранён; выбери меньше инструментов.";
+                for (int i = 0; i < results.size(); i++) {
+                    ProtocolAdapter.ToolResult value = results.get(i);
+                    if (value.call().name().equals(McpToolCatalog.NAME) && !value.error()
+                            && "select".equals(value.call().input().get("action"))) {
+                        results.set(i, new ProtocolAdapter.ToolResult(value.call(), error, true));
+                        onTool.accept(ToolUse.failed(value.call().id(), value.call().name(), catalog.summary(Map.of()),
+                                ToolUse.Problem.BAD_ARGUMENTS, error));
+                    }
+                }
+            }
             transcript.add(reply, results);
             separate = answer.length() > 0;
         }
+    }
+
+    /** Проверяем весь пакет до публикации выбранных схем: последние результаты не обрезаются. */
+    private boolean selectionFits(ModelReply reply, List<ProtocolAdapter.ToolResult> results) {
+        List<Tool> candidate = new ArrayList<>(fixedTools);
+        candidate.addAll(catalog.selected());
+        candidate.add(resultReader);
+        List<Object> extra = new ArrayList<>(transcript.project(adapter, transcript.size()));
+        extra.add(adapter.assistantMessage(reply));
+        extra.addAll(adapter.toolResults(results));
+        int budget = RequestBudget.chars(connection()) >> shrink;
+        RequestBudget.Fitted fitted = RequestBudget.fit(history,
+                part -> RequestBudget.size(connection(), part, extra, candidate), budget);
+        return RequestBudget.size(connection(), fitted.history(), extra, candidate) <= budget;
     }
 
     /**
@@ -271,6 +321,11 @@ final class AgentLoop {
      * схема одного из них), потом совсем без инструментов.
      */
     private ModelReply request() throws Exception {
+        // Только на границе запроса: весь предыдущий пакет выполнялся по предложенным ему схемам.
+        if (catalog != null && !catalog.empty() && !toolsRejected) {
+            tools = new ArrayList<>(fixedTools);
+            tools.addAll(catalog.selected());
+        }
         if (resultStore.hasResults() && !tools.contains(resultReader)) {
             tools = new ArrayList<>(tools);
             tools.add(resultReader);
@@ -311,7 +366,8 @@ final class AgentLoop {
                     context = RequestContext.retry(context);
                     continue;
                 }
-                if (!e.rejectsTools() || tools.isEmpty() || !transcript.isEmpty()) {
+                if (!e.rejectsTools() || tools.isEmpty()
+                        || !transcript.isEmpty() && tools.stream().noneMatch(Tool::mcp)) {
                     throw e;
                 }
                 boolean anthropic = base.protocol() == Protocol.ANTHROPIC;
@@ -319,6 +375,8 @@ final class AgentLoop {
                 List<Tool> builtIn = tools.stream().filter(tool -> !tool.needsApproval()).toList();
                 if (!builtIn.isEmpty() && builtIn.size() < tools.size()) {
                     tools = builtIn;
+                    if (catalog != null) catalog.disable();
+                    fixedTools = builtIn;
                     onTool.accept(new ToolUse("tools-mcp", "tools", "Инструменты MCP", MCP_REJECTED + e.getMessage(),
                             ToolUse.Status.FAILED));
                 } else if (anthropic) {
@@ -327,6 +385,7 @@ final class AgentLoop {
                     throw e;
                 } else {
                     toolsRejected = true;
+                    if (catalog != null) catalog.disable();
                     tools = List.of();
                     onTool.accept(new ToolUse("tools", "tools", "Инструменты", TOOLS_UNSUPPORTED + " Причина: " + e.getMessage(),
                             ToolUse.Status.FAILED));
@@ -371,7 +430,10 @@ final class AgentLoop {
         ToolExecutionLedger.Key key = ToolExecutionLedger.key(call.name(), input);
         // Ссылка на снимок остаётся даже в сокращённой истории: повтор источника не нужен.
         int visibleFrom = resultReferences.getOrDefault(key, "").isEmpty() ? firstVisibleStep : 0;
-        ToolExecutionLedger.Decision decision = ledger.decide(key, visibleFrom);
+        // Локальный выбор схем не является фактом чтения/записи проекта. Повторный выбор допустим.
+        boolean control = tool == catalog;
+        ToolExecutionLedger.Decision decision = control
+                ? new ToolExecutionLedger.Decision(ToolExecutionLedger.Action.RUN, null) : ledger.decide(key, visibleFrom);
         if (decision.action() != ToolExecutionLedger.Action.RUN) {
             transcript.remember(call.id(), resultReferences.getOrDefault(key, ""));
             return previous(call, summary, decision, onTool);
@@ -391,12 +453,12 @@ final class AgentLoop {
         }
         onTool.accept(new ToolUse(call.id(), call.name(), summary, "", ToolUse.Status.RUNNING));
         checkCancelled();
-        ledger.started(key, tool, transcript.size());
+        if (!control) ledger.started(key, tool, transcript.size());
         try {
             Tool.Result output = tool instanceof ExploreProject explore ? explore.call(input, call.id()) : tool.call(input);
             if (tool instanceof ExploreProject) checkCancelled();
-            String projected = tool == resultReader ? output.text() : capture(call, key, output.text(), false);
-            ledger.succeeded(key, projected);
+            String projected = tool == resultReader || control ? output.text() : capture(call, key, output.text(), false);
+            if (!control) ledger.succeeded(key, projected);
             onTool.accept(new ToolUse(call.id(), call.name(), summary, output.outcome(), ToolUse.Status.DONE).withFile(output.file()));
             return new ProtocolAdapter.ToolResult(call, projected, false);
         } catch (CancellationException e) {
@@ -404,8 +466,8 @@ final class AgentLoop {
         } catch (ToolException | RuntimeException e) {
             String error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             ToolUse.Problem problem = e instanceof ToolException failure ? failure.problem() : ToolUse.Problem.FAILED;
-            error = capture(call, key, error, true);
-            ledger.failed(key, error, problem);
+            if (!control) error = capture(call, key, error, true);
+            if (!control) ledger.failed(key, error, problem);
             onTool.accept(ToolUse.failed(call.id(), call.name(), summary, problem, error));
             return new ProtocolAdapter.ToolResult(call, error, true);
         }
