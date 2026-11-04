@@ -8,7 +8,25 @@ public final class PlanApproval {
     public static final String EXECUTE = "План утверждён. Выполни согласованный выше план. Учитывай ответы на уточнения."
             + " После правки перечитай изменённый код и проверь diff. Не расширяй задачу.";
 
+    /** Пользователь исправил план в файле: выполнять его редакцию, а не предложенную моделью. */
+    public static final String EXECUTE_EDITED = "План утверждён с правками пользователя. Выполни именно утверждённую"
+            + " редакцию ниже — она заменяет план, предложенный выше. Учитывай ответы на уточнения."
+            + " После правки перечитай изменённый код и проверь diff. Не расширяй задачу.";
+
     private PlanApproval() { }
+
+    /**
+     * Поручение выполнить план.
+     *
+     * @param decisions ответы на уточнения по строке; пусто — не было
+     * @param edited    исправленный пользователем план; {@code null} или пусто — выполнять предложенный
+     */
+    public static String execute(String decisions, String edited) {
+        boolean own = edited != null && !edited.isBlank();
+        return (own ? EXECUTE_EDITED : EXECUTE)
+                + (decisions == null || decisions.isBlank() ? "" : "\nОтветы на уточнения:\n" + decisions)
+                + (own ? "\n\nУтверждённый план:\n" + edited.strip() : "");
+    }
 
     public static Optional<ChatMessage> candidate(List<ChatMessage> messages) {
         if (messages.size() < 2) return Optional.empty();

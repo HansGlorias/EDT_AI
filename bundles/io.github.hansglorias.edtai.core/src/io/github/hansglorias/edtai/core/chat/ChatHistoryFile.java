@@ -22,8 +22,9 @@ import io.github.hansglorias.edtai.core.json.JsonException;
  *
  * <p>Формат: {@code {"version":1,"messages":[{"role":"USER","status":"DONE","time":"…","text":"…","context":[…]}]}}.
  * Поля {@code context} (фрагменты кода сообщения), {@code attachments}
- * (файлы и скриншоты, картинки — в base64) и {@code tools} (вызовы
- * инструментов в ответе) необязательные: файлы без них читаются как есть.
+ * (файлы и скриншоты, картинки — в base64), {@code tools} (вызовы
+ * инструментов в ответе) и {@code stats} (время и токены законченного ответа)
+ * необязательные: файлы без них читаются как есть.
  */
 public final class ChatHistoryFile {
 
@@ -95,18 +96,34 @@ public final class ChatHistoryFile {
                         saved.put("problem", use.problem().name());
                     }
                     if (use.usage() != null) {
-                        saved.put("tokens", Json.object("input", use.usage().input(), "output", use.usage().output(),
-                                "estimated", use.usage().estimated(), "context", use.usage().context(),
-                                "inputSource", use.usage().inputSource().name(), "outputSource", use.usage().outputSource().name(),
-                                "contextSource", use.usage().contextSource().name()));
+                        saved.put("tokens", encode(use.usage()));
                     }
                     tools.add(saved);
                 }
                 item.put("tools", tools);
             }
+            ReplyStats stats = message.stats();
+            if (stats != null && stats.finished() != null) {
+                Map<String, Object> saved = new LinkedHashMap<>(Json.object("started", stats.started().toString(),
+                        "finished", stats.finished().toString(), "waiting", stats.waiting(), "reasoning", stats.reasoning(),
+                        "writing", stats.writing(), "tools", stats.tools()));
+                if (stats.tokens() != null) {
+                    saved.put("tokens", encode(stats.tokens()));
+                }
+                if (!stats.calls().isEmpty()) {
+                    saved.put("calls", new LinkedHashMap<String, Object>(new java.util.TreeMap<>(stats.calls())));
+                }
+                item.put("stats", saved);
+            }
             items.add(item);
         }
         return Json.write(Json.object("version", VERSION, "messages", items));
+    }
+
+    private static Map<String, Object> encode(TokenUsage usage) {
+        return Json.object("input", usage.input(), "output", usage.output(), "estimated", usage.estimated(),
+                "context", usage.context(), "inputSource", usage.inputSource().name(), "outputSource",
+                usage.outputSource().name(), "contextSource", usage.contextSource().name());
     }
 
     /**
@@ -126,7 +143,7 @@ public final class ChatHistoryFile {
                 String time = Json.stringAt(item, "time");
                 messages.add(new ChatMessage(ChatRole.valueOf(role), body, time == null ? Instant.EPOCH : Instant.parse(time),
                         status == null ? ChatMessage.Status.DONE : ChatMessage.Status.valueOf(status), context(item), tools(item),
-                        attachments(item)));
+                        attachments(item), stats(item)));
             }
             return messages;
         } catch (JsonException | IllegalArgumentException | DateTimeParseException e) {
@@ -162,6 +179,26 @@ public final class ChatHistoryFile {
                     Json.at(use, "at") instanceof Number at ? at.intValue() : -1, null, tokens(use), problem(use)));
         }
         return tools;
+    }
+
+    /** Время и токены ответа; повреждённые или старые — без них, диалог всё равно загружается. */
+    private static ReplyStats stats(Object message) {
+        Map<String, Object> saved = Json.asObject(Json.at(message, "stats"));
+        if (saved == null) return null;
+        try {
+            Map<String, Long> calls = new LinkedHashMap<>();
+            Map<String, Object> savedCalls = Json.asObject(saved.get("calls"));
+            if (savedCalls != null) {
+                for (Map.Entry<String, Object> call : savedCalls.entrySet()) {
+                    calls.put(call.getKey(), tokenNumber(call.getValue()));
+                }
+            }
+            return new ReplyStats(Instant.parse((String) saved.get("started")), Instant.parse((String) saved.get("finished")),
+                    tokenNumber(saved.get("waiting")), tokenNumber(saved.get("reasoning")), tokenNumber(saved.get("writing")),
+                    tokenNumber(saved.get("tools")), tokens(saved), calls);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /** Вид ошибки вызова; старые диалоги и неизвестные значения — без него. */

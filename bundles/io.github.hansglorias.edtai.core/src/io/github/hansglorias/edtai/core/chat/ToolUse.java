@@ -99,8 +99,14 @@ public record ToolUse(String id, String name, String summary, String outcome, St
         return new ToolUse(id, name, summary, detail, Status.FAILED, at, file, usage, newProblem);
     }
 
+    /**
+     * Запуск специалиста (субагента) целиком: id — id запуска, summary — «Ревью: задача», outcome — его
+     * отчёт, usage — токены всего запуска. Для панели специалистов; модель его в следе не видит.
+     */
+    public static final String SUBAGENT = "subagent";
+
     /** Служебные строки ленты (сервер не подключился, окно модели), а не вызовы инструментов. */
-    private static final Set<String> NOTICES = Set.of("tools", "mcp", "context");
+    private static final Set<String> NOTICES = Set.of("tools", "mcp", "context", SUBAGENT);
 
     /** Вызов инструмента, а не служебная строка. */
     public boolean isCall() {
@@ -113,6 +119,13 @@ public record ToolUse(String id, String name, String summary, String outcome, St
     }
 
     private String text() {
+        if (SUBAGENT.equals(name)) {
+            return summary + switch (status) {
+                case AWAITING, RUNNING -> " — работает…";
+                case DONE -> " — отчёт готов";
+                case FAILED -> " — " + (problem == null ? "ошибка" : problem.label());
+            };
+        }
         return switch (status) {
             case AWAITING -> summary + " — ждёт разрешения";
             case RUNNING -> summary + "…";

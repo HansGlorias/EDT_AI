@@ -95,7 +95,9 @@ PR — три раздела: «Что сделано», «Что провере
 - `chat` — сообщения, сессия (`ChatSession`), история чатов (`ChatStore`,
   `ChatHistoryFile`), режим модели (`AgentMode`: Агент, Авто, План,
   Вопросы), вызовы инструментов в ленте (`ToolUse`: токены шага, вид
-  ошибки), команды поля ввода (`SlashCommand`).
+  ошибки), команды поля ввода (`SlashCommand`), время и токены ответа
+  (`ReplyStats`), специалисты ответа для панели (`Subagents`), план
+  отдельным файлом (`PlanFile`).
 - `llm` — клиент модели (`ModelClient`, адаптеры OpenAI/Anthropic, SSE),
   цикл агента с инструментами (`AgentLoop`), бюджет окна (`RequestBudget`).
 - `tools` — встроенные инструменты: чтение проекта (`ProjectTools`),
@@ -108,7 +110,8 @@ PR — три раздела: «Что сделано», «Что провере
 
 `bundles/io.github.hansglorias.edtai.ui` — Eclipse UI:
 - `ChatView` — вид чата; `MessageRenderer` — лента (StyledText);
-  `ChatHistoryPanel` — список чатов с точками состояния; `Chip` —
+  `ChatHistoryPanel` — список чатов с точками состояния; `SubagentsPanel` —
+  панель специалистов; `UserQuestionsBar` — форма уточнений; `Chip` —
   кнопки-надписи под полем ввода; `ReviewMarkers` — маркеры ревью;
   `AiPreferencePage` — настройки; обработчики команд редактора и окна
   коммита.
