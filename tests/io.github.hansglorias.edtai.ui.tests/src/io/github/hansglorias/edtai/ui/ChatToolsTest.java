@@ -341,7 +341,7 @@ class ChatToolsTest extends AbstractChatTest {
 
         Map<String, Object> first = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(first.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
-        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "skill", "save_skill", "report_review", "attach_file", "ask_user", "git_status", "git_diff", "git_log", "git_restore", "explore_project"), names);
+        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "edit_module", "skill", "save_skill", "report_review", "attach_file", "ask_user", "git_status", "git_diff", "git_log", "git_restore", "explore_project", "delegate_task"), names);
         List<Object> messages = Json.asList(Json.parseObject(server.requests().get(1).body()).get("messages"));
         String result = Json.stringAt(messages.get(messages.size() - 1), "content");
         assertTrue(result.contains("ОбщийМодуль.Тест.Модуль (проект " + PROJECT + ", src/CommonModules/Тест/Module.bsl)"), result);
@@ -412,7 +412,7 @@ class ChatToolsTest extends AbstractChatTest {
         Map<String, Object> request = Json.parseObject(server.requests().get(0).body());
         List<String> names = Json.asList(request.get("tools")).stream().map(tool -> Json.stringAt(tool, "function", "name")).toList();
         assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "skill", "save_skill", "report_review", "attach_file", "ask_user", "git_status", "git_diff",
-                "git_log", "explore_project"), names, "скиллы и разведка проект не меняют — остаются");
+                "git_log", "explore_project", "delegate_task"), names, "скиллы и специалисты проект не меняют — остаются");
         String system = Json.stringAt(Json.asList(request.get("messages")).get(0), "content");
         assertTrue(system.contains(ProjectBrief.READ_ONLY_RULES), system);
         assertTrue(view.session().messages().get(0).attachments().isEmpty(), "«Вопросы» — без инструкции плана");
@@ -436,6 +436,9 @@ class ChatToolsTest extends AbstractChatTest {
         ask(view, "Что в проекте?");
 
         assertNull(Json.parseObject(server.requests().get(0).body()).get("tools"));
+        assertEquals(1, server.requests().size(), "отключены и встроенные специалисты: дочерних запросов нет");
+        assertFalse(server.requests().get(0).body().contains("delegate_task"));
+        assertFalse(server.requests().get(0).body().contains("explore_project"));
         assertFalse(view.history().getText().contains(MessageRenderer.TOOL));
     }
 

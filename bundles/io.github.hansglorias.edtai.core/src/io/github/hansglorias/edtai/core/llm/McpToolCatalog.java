@@ -17,7 +17,6 @@ import io.github.hansglorias.edtai.core.tools.ToolException;
 final class McpToolCatalog implements Tool {
     static final String NAME = "discover_mcp_tools";
     static final int PAGE_SIZE = 10;
-    static final int MAX_ACTIVE = 8;
     static final String NOTE = "Каталог — снимок доступных серверных инструментов на начало ответа. "
             + "Серверное расширение через enable_toolset и подобные операции пока не поддерживается: "
             + "новые схемы автоматически не появятся. select полностью заменяет активный набор со следующего запроса модели.";
@@ -39,7 +38,7 @@ final class McpToolCatalog implements Tool {
     @Override public String name() { return NAME; }
     @Override public String description() {
         return "Find available MCP tools: list/search pages of names and short descriptions using optional query substring, then select exact names to load schemas. "
-                + "select replaces all active MCP schemas (maximum 8); call selected tools only in the next model request. "
+                + "select replaces all active MCP schemas within the request budget; call selected tools only in the next model request. "
                 + "No MCP tools can be called before selection. Server-side toolset expansion is not supported.";
     }
     @Override public Map<String, Object> inputSchema() {
@@ -47,7 +46,7 @@ final class McpToolCatalog implements Tool {
                 "action", Map.of("type", "string", "enum", List.of("list", "select")),
                 "offset", Map.of("type", "integer", "minimum", 0),
                 "query", Map.of("type", "string", "maxLength", 200),
-                "names", Map.of("type", "array", "maxItems", MAX_ACTIVE, "items", Map.of("type", "string"))),
+                "names", Map.of("type", "array", "items", Map.of("type", "string"))),
                 "required", List.of("action"), "additionalProperties", false);
     }
     @Override public boolean safeInPlan() { return true; }
@@ -98,7 +97,7 @@ final class McpToolCatalog implements Tool {
 
     private Result select(Map<String, Object> input) throws ToolException {
         if (input.containsKey("offset") || input.containsKey("query")) throw bad("offset и query допустимы только при list");
-        if (!(input.get("names") instanceof List<?> names) || names.size() > MAX_ACTIVE) throw bad("names: массив до 8 точных имён");
+        if (!(input.get("names") instanceof List<?> names)) throw bad("names: массив точных имён");
         List<Tool> replacement = new ArrayList<>();
         for (Object name : names) {
             if (!(name instanceof String text) || text.length() > 64 || replacement.stream().anyMatch(tool -> tool.name().equals(text))) throw bad("Имена должны быть строками без повторов");

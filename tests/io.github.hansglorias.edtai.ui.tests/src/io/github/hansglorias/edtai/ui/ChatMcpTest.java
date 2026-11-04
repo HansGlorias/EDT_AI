@@ -83,6 +83,79 @@ class ChatMcpTest extends AbstractChatTest {
     }
 
     @Test
+    void delegatedReadUsesNormalMcpApproval() throws Exception {
+        var step = delegatedReadServer();
+        ChatView view = configuredDelegate();
+        view.input().setText("Поручи специалисту проверить версию");
+        view.send();
+        waitUntil(() -> view.approvalBar().isShown(), () -> view.history().getText());
+
+        assertTrue(view.approvalBar().messageText().contains("MCP «EDT»: safe_read"), view.approvalBar().messageText());
+        assertTrue(calls.isEmpty(), "дочерний вызов не проходит до решения пользователя");
+        assertEquals(3, step.get());
+        click(view.approvalBar().allowButton());
+        // Решение завершает future в фоне, панель скрывается отдельным SWT asyncExec.
+        waitUntil(() -> !view.session().isBusy() && !view.approvalBar().isShown());
+        view.refresh();
+
+        assertEquals(List.of("safe_read"), calls);
+        assertEquals(5, step.get());
+        assertFalse(view.approvalBar().isShown());
+        assertTrue(view.history().getText().contains("Проверка специалиста завершена."));
+        assertTrue(server.requests().get(4).body().contains("status: complete"));
+    }
+
+    @Test
+    void stopCancelsDelegatedMcpApprovalWithoutCallingServerOrResumingParent() throws Exception {
+        var step = delegatedReadServer();
+        ChatView view = configuredDelegate();
+        view.input().setText("Поручи специалисту проверить версию");
+        view.send();
+        waitUntil(() -> view.approvalBar().isShown(), () -> view.history().getText());
+        assertEquals(3, step.get());
+
+        view.sendButton().notifyListeners(SWT.Selection, new Event());
+        waitUntil(() -> !view.session().isBusy());
+        settle();
+        view.refresh();
+
+        assertFalse(view.approvalBar().isShown());
+        assertTrue(calls.isEmpty());
+        assertEquals(3, step.get(), "Stop не запускает следующий запрос ребёнка или родителя");
+        assertEquals(io.github.hansglorias.edtai.core.chat.ChatMessage.Status.STOPPED,
+                view.session().messages().get(1).status());
+    }
+
+    private ChatView configuredDelegate() throws Exception {
+        planTools = true;
+        SettingsStore.workspace().save(new AiSettings(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", 0, "", 0,
+                true, false, "", new ArrayList<>(List.of(new McpServer("EDT", McpTransport.HTTP,
+                        mcp.url() + "/mcp", true, "safe_read")))));
+        return showView();
+    }
+
+    private java.util.concurrent.atomic.AtomicInteger delegatedReadServer() {
+        var step = new java.util.concurrent.atomic.AtomicInteger();
+        server.handler((request, response) -> {
+            switch (step.getAndIncrement()) {
+                case 0 -> toolCall(response, "delegate_task", Json.object("role", "verify", "task", "Проверь версию EDT"));
+                case 1 -> selectMcp(response, "safe_read");
+                case 2 -> toolCall(response, "safe_read", Json.object());
+                case 3 -> response.sse(List.of(openAiPart("Версия проверена через MCP."), "data: [DONE]\n\n"), 0);
+                default -> response.sse(List.of(openAiPart("Проверка специалиста завершена."), "data: [DONE]\n\n"), 0);
+            }
+        });
+        return step;
+    }
+
+    private static void toolCall(FakeModelServer.Response response, String name, Map<String, Object> arguments) throws Exception {
+        Map<String, Object> function = Json.object("name", name, "arguments", Json.write(arguments));
+        Map<String, Object> delta = Json.object("tool_calls", List.of(Json.object("index", 0, "id", "call_" + name, "function", function)));
+        response.sse(List.of("data: " + Json.write(Json.object("choices", List.of(Json.object("delta", delta)))) + "\n\n",
+                "data: [DONE]\n\n"), 0);
+    }
+
+    @Test
     void planRejectsMcpWritesAndUnannotatedReadsEvenIfModelCallsThem() throws Exception {
         planTools = true;
         java.util.concurrent.atomic.AtomicInteger step = new java.util.concurrent.atomic.AtomicInteger();

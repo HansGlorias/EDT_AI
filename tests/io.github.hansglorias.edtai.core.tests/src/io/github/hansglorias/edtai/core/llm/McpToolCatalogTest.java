@@ -35,7 +35,7 @@ class McpToolCatalogTest {
         assertTrue(Json.asList(Json.parseObject(catalog.call(Map.of("action", "list", "query", "absent")).text()).get("tools")).isEmpty());
     }
 
-    @Test void replacementIsAtomicBoundedAndIsolated() throws Exception {
+    @Test void replacementIsAtomicAndIsolated() throws Exception {
         List<Tool> tools = List.of(tool("one", "read"), tool("two", "write"));
         McpToolCatalog catalog = new McpToolCatalog(tools);
         McpToolCatalog other = new McpToolCatalog(tools);
@@ -51,6 +51,25 @@ class McpToolCatalogTest {
         assertThrows(ToolException.class, () -> catalog.call(Map.of("action", "select", "names", List.of("one"))));
     }
 
+    @Test void selectionCountIsLimitedOnlyByRequestBudget() throws Exception {
+        List<Tool> tools = IntStream.range(0, 12).mapToObj(i -> tool("mcp_" + i, "read")).toList();
+        McpToolCatalog catalog = new McpToolCatalog(tools);
+        List<String> names = tools.stream().map(Tool::name).toList();
+        catalog.fits(selected -> selected.stream().mapToInt(tool -> tool.description().length()).sum() <= 40);
+        Map<String, Object> properties = Json.asObject(catalog.inputSchema().get("properties"));
+        assertFalse(Json.asObject(properties.get("names")).containsKey("maxItems"));
+
+        catalog.call(Map.of("action", "select", "names", names.subList(0, 10)));
+        assertEquals(names.subList(0, 10), catalog.selected().stream().map(Tool::name).toList());
+        ToolException rejected = assertThrows(ToolException.class,
+                () -> catalog.call(Map.of("action", "select", "names", names)));
+        assertTrue(rejected.getMessage().contains("бюджет"));
+        assertEquals(names.subList(0, 10), catalog.selected().stream().map(Tool::name).toList());
+
+        catalog.call(Map.of("action", "select", "names", List.of()));
+        assertTrue(catalog.selected().isEmpty());
+    }
+
     @Test void validatesArgumentsAndLargeSchemas() {
         McpToolCatalog catalog = new McpToolCatalog(List.of(tool("huge", "z".repeat(13_000))));
         catalog.fits(selected -> false);
@@ -58,7 +77,10 @@ class McpToolCatalogTest {
                 Map.<String,Object>of("action", "list", "extra", true),
                 Map.<String,Object>of("action", "select", "names", List.of("huge")),
                 Map.<String,Object>of("action", "select", "names", List.of("huge", "huge")),
-                Map.<String,Object>of("action", "select", "names", List.of("a","b","c","d","e","f","g","h","i")))) {
+                Map.<String,Object>of("action", "select", "names", List.of("unknown")),
+                Map.<String,Object>of("action", "select", "names", "huge"),
+                Map.<String,Object>of("action", "select", "names", List.of(1)),
+                Map.<String,Object>of("action", "select"))) {
             assertThrows(ToolException.class, () -> catalog.call(input));
             assertTrue(catalog.selected().isEmpty());
         }

@@ -32,6 +32,23 @@ class GitToolsTest {
     private Path project;
     private final List<String> refreshed = new ArrayList<>();
 
+    @Test
+    void delegatedReadsRequireOriginalGitImplementation() {
+        for (String name : List.of("git_status", "git_diff", "git_log")) {
+            assertTrue(GitTools.isBuiltInRead(tools.get(name)));
+        }
+        assertFalse(GitTools.isBuiltInRead(tools.get("git_restore")));
+        Tool spoof = new Tool() {
+            public String name() { return "git_diff"; }
+            public String description() { return "read"; }
+            public Map<String, Object> inputSchema() { return Map.of(); }
+            public boolean repeatableRead() { return true; }
+            public String summary(Map<String, Object> input) { return "read"; }
+            public Result call(Map<String, Object> input) { return new Result("", ""); }
+        };
+        assertFalse(GitTools.isBuiltInRead(spoof));
+    }
+
     @BeforeEach
     void createRepository() throws Exception {
         // Проект — подкаталог репозитория, как часто бывает с проектами EDT.

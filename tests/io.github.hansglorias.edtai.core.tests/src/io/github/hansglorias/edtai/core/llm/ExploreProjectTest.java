@@ -313,6 +313,97 @@ class ExploreProjectTest {
         }
     }
 
+    @Test
+    void rolesShareQuotaValidateScopeAndDiscoverOnlyApprovedReadOnlyMcp() throws Exception {
+        List<ToolUse> progress = new CopyOnWriteArrayList<>();
+        List<ToolUse> approvals = new CopyOnWriteArrayList<>();
+        List<TokenUsage> usage = new CopyOnWriteArrayList<>();
+        AtomicInteger executed = new AtomicInteger();
+        AtomicInteger requests = new AtomicInteger();
+        List<Throwable> errors = new CopyOnWriteArrayList<>();
+        Tool safe = mcp("diagnostic_read", true, false, executed);
+        Tool unknown = mcp("unknown_tool", false, false, executed);
+        Tool write = mcp("write_tool", true, true, executed);
+        try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+            try {
+                int step = requests.getAndIncrement();
+                Map<String, Object> body = Json.parseObject(request.body());
+                List<String> names = toolNames(body, Protocol.OPENAI_COMPATIBLE);
+                assertFalse(names.contains("delegate_task"));
+                assertFalse(names.contains("explore_project"));
+                assertFalse(names.contains("unknown_tool"));
+                assertFalse(names.contains("write_tool"));
+                assertTrue(request.body().contains("scope-marker"));
+                if (step == 0) {
+                    assertTrue(request.body().contains("Проверяй гипотезу"));
+                    assertFalse(names.contains("diagnostic_read"));
+                    send(response, Protocol.OPENAI_COMPATIBLE, "", List.of(call("discover_mcp_tools", Map.of("action", "list"))), 10, 2);
+                } else if (step == 1) {
+                    assertTrue(request.body().contains("diagnostic_read"));
+                    assertFalse(request.body().contains("unknown_tool"));
+                    assertFalse(request.body().contains("write_tool"));
+                    send(response, Protocol.OPENAI_COMPATIBLE, "", List.of(call("discover_mcp_tools", Map.of("action", "select", "names", List.of("diagnostic_read")))), 10, 2);
+                } else if (step == 2) {
+                    assertTrue(names.contains("diagnostic_read"));
+                    send(response, Protocol.OPENAI_COMPATIBLE, "", List.of(call("diagnostic_read", Map.of())), 10, 2);
+                } else if (step == 3) send(response, Protocol.OPENAI_COMPATIBLE, "Проверено чтением диагностики", List.of(), 10, 2);
+                else {
+                    assertTrue(request.body().contains("Ищи конкретные ошибки"));
+                    send(response, Protocol.OPENAI_COMPATIBLE, "Ревью без чтений", List.of(), 10, 2);
+                }
+            } catch (Throwable error) { errors.add(error); throw error; }
+        })) {
+            ExploreProject runner = new ExploreProject(new ModelClient(), connection(server, Protocol.OPENAI_COMPATIBLE),
+                    List.of(safe, unknown, write), progress::add, (id, value) -> usage.add(value), (use, args) -> {
+                        approvals.add(use);
+                        return java.util.concurrent.CompletableFuture.completedFuture(ToolApprover.Decision.ALLOW);
+                    });
+            DelegateTask delegate = new DelegateTask(runner);
+            Tool.Result verified = delegate.call(Map.of("role", "verify", "task", "check", "scope", "scope-marker"), "parent");
+            assertEquals("complete", verified.outcome());
+            assertTrue(verified.text().contains("Роль: verify"));
+            assertEquals(1, executed.get());
+            assertEquals(1, approvals.size());
+            assertTrue(progress.stream().anyMatch(use -> use.id().equals(approvals.get(0).id())));
+            assertEquals(40, usage.get(usage.size() - 1).input());
+            assertEquals("partial", delegate.call(Map.of("role", "review", "task", "review", "scope", "scope-marker")).outcome());
+            assertEquals("partial", runner.call(Map.of("question", "third")).outcome());
+            assertEquals(5, requests.get());
+            assertEquals(List.of(), errors);
+            for (Map<String, Object> input : List.of(Map.<String, Object>of("role", "write", "task", "x"),
+                    Map.<String, Object>of("role", "verify", "task", "x", "scope", 7),
+                    Map.<String, Object>of("role", "review", "task", "x", "extra", "x"))) {
+                assertThrows(ToolException.class, () -> delegate.call(input));
+            }
+        }
+    }
+
+    @Test
+    void catalogSelectionAloneIsNotEvidenceOfVerification() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+            if (requests.getAndIncrement() == 0) send(response, Protocol.OPENAI_COMPATIBLE, "", List.of(call("discover_mcp_tools", Map.of("action", "list"))), 1, 1);
+            else send(response, Protocol.OPENAI_COMPATIBLE, "Everything works", List.of(), 1, 1);
+        })) {
+            ExploreProject runner = explorer(server, List.of(mcp("diagnostic_read", true, false, new AtomicInteger())));
+            assertEquals("partial", new DelegateTask(runner).call(Map.of("role", "verify", "task", "check")).outcome());
+        }
+    }
+
+    private static Tool mcp(String name, boolean readOnly, boolean modifies, AtomicInteger calls) {
+        return new Tool() {
+            public String name() { return name; }
+            public String description() { return "test read"; }
+            public Map<String, Object> inputSchema() { return Map.of("type", "object", "properties", Map.of()); }
+            public boolean mcp() { return true; }
+            public boolean safeInPlan() { return readOnly; }
+            public boolean modifies() { return modifies; }
+            public boolean needsApproval() { return true; }
+            public String summary(Map<String, Object> input) { return name; }
+            public Result call(Map<String, Object> input) { calls.incrementAndGet(); return new Result("diagnostic fixture", "read"); }
+        };
+    }
+
     private ExploreProject explorer(FakeModelServer server, List<Tool> reads) {
         return new ExploreProject(new ModelClient(), connection(server, Protocol.OPENAI_COMPATIBLE), reads, use -> { }, (id, value) -> { });
     }

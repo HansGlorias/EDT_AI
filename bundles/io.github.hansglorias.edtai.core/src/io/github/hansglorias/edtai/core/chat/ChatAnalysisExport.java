@@ -116,7 +116,7 @@ public final class ChatAnalysisExport {
                 Map<String, Object> outcome = content.field(use.outcome());
                 String localId = "tool-" + tools;
                 var childMatch = CHILD.matcher(use.id());
-                boolean child = use.name().equals("explore_project") && childMatch.matches();
+                boolean child = (use.name().equals("explore_project") || use.name().equals("delegate_task")) && childMatch.matches();
                 String parentId = child ? callIds.get(childMatch.group(1)) : null;
                 String childId = null;
                 if (child) {
@@ -199,7 +199,7 @@ public final class ChatAnalysisExport {
                 + "Сообщений: " + size + "/" + snapshot.messages().size() + "; ошибок-сообщений: " + errors
                 + ". Записей ToolUse: " + tools + "/" + sourceTools + ", из них вызовов: " + calls
                 + ", со статусом FAILED (включая отказ/дубль): " + failed + ".\n\n"
-                + "Дочерних progress-записей explore_project: " + childRecords + ", групп: " + childIds.size()
+                + "Дочерних progress-записей explore_project/delegate_task: " + childRecords + ", групп: " + childIds.size()
                 + ". Scope взят из соглашения структурированных ID, не из текста отчёта. Это не полный child transcript.\n\n"
                 + "Доступных записей правок: " + edits.size() + ". Это не число всех изменений; снимки не сохраняются в истории.\n\n"
                 + "| Известный подытог usage шагов | SERVER | ESTIMATE |\n|---|---|---|\n"

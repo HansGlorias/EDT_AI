@@ -19,7 +19,7 @@ public interface ToolSource {
      */
     List<Tool> tools(Consumer<ToolUse> problems);
 
-    /** Только исходные встроенные чтения ProjectTools для изолированной разведки; MCP не наследуется. */
+    /** Исходные встроенные чтения ProjectTools/GitTools для дочерних ролей. MCP берётся отдельно из разрешённого списка родителя. */
     default List<Tool> explorationTools() {
         return List.of();
     }
