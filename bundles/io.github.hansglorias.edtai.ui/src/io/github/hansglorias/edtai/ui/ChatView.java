@@ -226,7 +226,7 @@ public class ChatView extends ViewPart {
     private static final DateTimeFormatter SCREENSHOT_TIME = DateTimeFormatter.ofPattern("HHmmss");
     static final String SKILL_PROMPT = "Создай скилл по описанию ниже. Следуй приложенному скиллу create-skill; если описание"
             + " неясно — сначала задай вопросы; сохрани инструментом save_skill.";
-    /** Придумывать ли название чата после первого ответа (запрос к модели). Хранится в настройках рабочей области. */
+    /** Придумывать ли название чата по первому вопросу (запрос к модели). Хранится в настройках рабочей области. */
     static final String GENERATE_TITLES = "generateChatTitles";
 
     /** Как часто перерисовывать ленту во время стриминга. */
@@ -251,6 +251,8 @@ public class ChatView extends ViewPart {
     private volatile boolean viewDisposed;
     /** Чаты, для которых уже просили название у модели: по разу. */
     private final Set<String> titleRequested = ConcurrentHashMap.newKeySet();
+    /** Независимые запросы названий; UI-поток. Переключение чатов их не отменяет. */
+    private final Map<String, CompletableFuture<String>> titleRequests = new HashMap<>();
     /**
      * Живой диалог: сессия и всё, что относится к её ответу. Открыт в виде
      * один ({@link #current}), остальные живы, пока отвечают в фоне или хранят черновик.
@@ -362,6 +364,9 @@ public class ChatView extends ViewPart {
                     if (pending != null) pending.future.cancel(true);
                 }
                 inUi(() -> {
+                    if (busy && !chat.session.isCompacting()) {
+                        generateTitle(chat);
+                    }
                     if (!busy) {
                         if (chat == current && questionsBar != null && !chat.session.isBusy()) questionsBar.show(null);
                         attachChanges(chat);
@@ -373,7 +378,6 @@ public class ChatView extends ViewPart {
                                 lives.remove(chat.id, chat);
                             }
                         }
-                        generateTitle(chat);
                         deliverCommitMessage(chat);
                     }
                     refreshHistoryPanel();
@@ -680,6 +684,7 @@ public class ChatView extends ViewPart {
                 if (id.equals(chatId)) {
                     deleteChat();
                 } else {
+                    cancelTitle(id);
                     Live deleted = lives.get(id);
                     if (deleted != null) {
                         deleted.session.cancel();
@@ -1352,6 +1357,7 @@ public class ChatView extends ViewPart {
     /** Удаляет открытый диалог и начинает новый. */
     private void deleteChat() {
         Live deleted = current;
+        cancelTitle(deleted.id);
         deleted.session.cancel();
         try {
             chats.delete(deleted.id);
@@ -1398,6 +1404,7 @@ public class ChatView extends ViewPart {
             return;
         }
         try {
+            cancelTitle(id);
             chats.rename(id, title);
         } catch (IOException e) {
             showNotice("Не удалось переименовать чат: " + e.getMessage());
@@ -2707,19 +2714,23 @@ public class ChatView extends ViewPart {
             this::openPreferences).open();
 
     /**
-     * После ответа: если у чата ещё нет названия, просит модель придумать его
-     * по первому обмену — по разу на чат. Пользователь может переименовать.
+     * С первым вопросом, параллельно основному ответу: по разу на чат.
+     * Пользователь может переименовать; поздний результат его не заменит.
      */
     private void generateTitle(Live chat) {
         String id = chat.id;
-        List<ChatMessage> messages = chat.session.messages().stream().filter(message -> !message.isEmptyAnswer()).toList();
-        boolean answered = messages.stream().anyMatch(message -> message.role() == ChatRole.ASSISTANT
-                && message.status() == Status.DONE && !message.text().isBlank());
-        if (!preferences().getBoolean(GENERATE_TITLES, true) || !answered || chats.customTitle(id).isPresent()
+        List<ChatMessage> messages = chat.session.messages();
+        if (!preferences().getBoolean(GENERATE_TITLES, true)
+                || messages.stream().noneMatch(message -> message.role() == ChatRole.USER) || chats.customTitle(id).isPresent()
                 || !titleRequested.add(id)) {
             return;
         }
-        chat.session.provider().title(messages).whenComplete((title, error) -> inUi(() -> {
+        // Быстрый результат названия не должен прийти раньше появления файла нового чата.
+        saveIfChanged(chat);
+        CompletableFuture<String> request = chat.session.provider().title(messages);
+        titleRequests.put(id, request);
+        request.whenComplete((title, error) -> inUi(() -> {
+            if (!titleRequests.remove(id, request)) return;
             try {
                 if (error == null && title != null && !title.isBlank() && chats.customTitle(id).isEmpty()
                         && Files.exists(chats.file(id).path())) {
@@ -2730,6 +2741,11 @@ public class ChatView extends ViewPart {
                 // Название — удобство: остаётся начало вопроса.
             }
         }));
+    }
+
+    private void cancelTitle(String id) {
+        CompletableFuture<String> request = titleRequests.remove(id);
+        if (request != null) request.cancel(true);
     }
 
     /** Добавляет фрагмент на панель над полем ввода и ставит фокус в поле. */
@@ -3725,6 +3741,8 @@ public class ChatView extends ViewPart {
     @Override
     public void dispose() {
         viewDisposed = true;
+        titleRequests.values().forEach(request -> request.cancel(true));
+        titleRequests.clear();
         diagnostics.close();
         mcpMonitor.close();
         markTabBusy(false);
