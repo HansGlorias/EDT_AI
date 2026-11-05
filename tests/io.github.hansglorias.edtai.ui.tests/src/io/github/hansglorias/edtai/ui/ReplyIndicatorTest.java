@@ -17,6 +17,10 @@ import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.widgets.Shell;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.jface.layout.GridLayoutFactory;
+import org.eclipse.jface.layout.GridDataFactory;
+import org.eclipse.ui.IWorkbenchPage;
 import org.junit.jupiter.api.Test;
 
 class ReplyIndicatorTest extends AbstractChatTest {
@@ -24,10 +28,14 @@ class ReplyIndicatorTest extends AbstractChatTest {
         Shell shell = new Shell(page.getWorkbenchWindow().getShell(), SWT.SHELL_TRIM);
         try {
             shell.setLayout(new FillLayout());
-            StyledText text = new StyledText(shell, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY);
-            text.setMargins(24, 24, 24, 24);
+            Composite transcript = new Composite(shell, SWT.NONE);
+            GridLayoutFactory.fillDefaults().numColumns(2).spacing(0, 0).applyTo(transcript);
+            StyledText text = new StyledText(transcript, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY);
+            GridDataFactory.fillDefaults().grab(true, true).hint(0, 0).applyTo(text);
+            text.setMargins(0, 24, 24, 24);
             text.setText("Рассуждает…\n" + "Сохранённый текст\n".repeat(80));
             ReplyIndicator indicator = new ReplyIndicator(text);
+            GridDataFactory.fillDefaults().grab(false, true).hint(ReplyIndicator.GUTTER, SWT.DEFAULT).applyTo(indicator);
             shell.setSize(420, 320);
             shell.open();
             indicator.follow(0);
@@ -79,12 +87,17 @@ class ReplyIndicatorTest extends AbstractChatTest {
         configure(server);
         ChatView view = showView();
         view.showHistoryPanel(false);
+        page.setPartState(page.getReference(view), IWorkbenchPage.STATE_RESTORED);
+        settle();
+        page.setPartState(page.getReference(view), IWorkbenchPage.STATE_MAXIMIZED);
+        settle();
         view.input().setText("Вопрос");
         view.send();
-        waitUntil(() -> view.history().getText().contains("рассуждает") && view.replyIndicator().getVisible());
+        waitUntil(() -> view.history().getText().contains("рассуждает") && view.replyIndicator().getVisible(),
+                () -> "лента=" + view.history().getClientArea() + ", текст=" + view.history().getText());
         ReplyIndicator indicator = view.replyIndicator();
-        assertEquals(view.history(), indicator.getParent(), "анимация находится в ленте");
-        assertTrue(indicator.getBounds().x + indicator.getSize().x <= view.history().getLeftMargin());
+        assertEquals(view.history().getParent(), indicator.getParent(), "анимация рядом с лентой, вне StyledText");
+        assertTrue(indicator.getBounds().x + indicator.getSize().x <= view.history().getBounds().x);
         AtomicInteger hides = new AtomicInteger();
         AtomicInteger transcriptPaints = new AtomicInteger();
         indicator.addListener(SWT.Hide, event -> hides.incrementAndGet());

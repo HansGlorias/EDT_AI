@@ -12,6 +12,7 @@ import org.eclipse.swt.widgets.Canvas;
 /** Ядро EDT AI на левом поле активного ответа. Кадр меняет только собственный Canvas. */
 final class ReplyIndicator extends Canvas {
     static final int SIZE = 20;
+    static final int GUTTER = 24;
     private static final int FRAME_MS = 40;
     private static final long PERIOD_NANOS = 2_400_000_000L;
     private final StyledText history;
@@ -22,16 +23,18 @@ final class ReplyIndicator extends Canvas {
     private boolean positionQueued;
     private double phase;
     private int frames;
+    private int logoY;
 
     ReplyIndicator(StyledText history) {
-        super(history, SWT.DOUBLE_BUFFERED | SWT.NO_FOCUS);
+        super(history.getParent(), SWT.DOUBLE_BUFFERED | SWT.NO_FOCUS);
         this.history = history;
+        moveAbove(history);
         setVisible(false);
         setToolTipText("Модель работает");
         addListener(SWT.Paint, event -> {
             event.gc.setBackground(history.getBackground());
             event.gc.fillRectangle(getClientArea());
-            paintLogo(event.gc, getClientArea(), phase);
+            if (anchor >= 0) paintLogo(event.gc, new Rectangle(0, logoY, SIZE, SIZE), phase);
         });
         addListener(SWT.Dispose, event -> getDisplay().timerExec(-1, frame));
         history.addListener(SWT.Resize, event -> queuePosition());
@@ -59,19 +62,18 @@ final class ReplyIndicator extends Canvas {
     void reposition() {
         if (isDisposed()) return;
         boolean visible = anchor >= 0 && anchor < history.getCharCount() && history.isVisible();
+        int previousY = logoY;
         if (visible) {
             Point at = history.getLocationAtOffset(anchor);
-            int y = at.y + (history.getLineHeight(anchor) - SIZE) / 2;
-            int x = Math.max(0, history.getLeftMargin() - SIZE - 4);
-            Rectangle bounds = new Rectangle(x, y, SIZE, SIZE);
-            visible = y >= 0 && y + SIZE <= history.getClientArea().height;
-            if (visible && !bounds.equals(getBounds())) setBounds(bounds);
+            logoY = at.y + (history.getLineHeight(anchor) - SIZE) / 2;
+            visible = logoY >= 0 && logoY + SIZE <= history.getClientArea().height;
         }
+        if (previousY != logoY) { redraw(0, previousY, GUTTER, SIZE, false); redraw(0, logoY, GUTTER, SIZE, false); }
         if (getVisible() != visible) setVisible(visible);
         if (visible && !scheduled) {
             scheduled = true;
             phase = phaseNow();
-            redraw();
+            redraw(0, logoY, GUTTER, SIZE, false);
             getDisplay().timerExec(FRAME_MS, frame);
         } else if (!visible && scheduled) {
             scheduled = false;
@@ -87,7 +89,7 @@ final class ReplyIndicator extends Canvas {
         if (isDisposed() || !scheduled) return;
         phase = phaseNow();
         frames++;
-        redraw();
+        redraw(0, logoY, GUTTER, SIZE, false);
         getDisplay().timerExec(FRAME_MS, frame);
     }
 
