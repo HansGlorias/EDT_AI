@@ -1449,7 +1449,7 @@ public class ChatView extends ViewPart {
         if (messages == null) return;
         AnalysisExportDialog.Options options = askAnalysisOptions.get();
         if (options == null) return;
-        Path target = chooseAnalysisFile.apply("chat-analysis.zip");
+        Path target = chooseAnalysisFile.apply(ChatAnalysisExport.fileName(chats.title(id, messages)));
         if (target == null) return;
         // За время модальных диалогов фоновый ответ мог измениться.
         messages = messagesOf(id);

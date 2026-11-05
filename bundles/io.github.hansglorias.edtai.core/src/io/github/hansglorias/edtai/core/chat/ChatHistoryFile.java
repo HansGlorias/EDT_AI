@@ -102,6 +102,9 @@ public final class ChatHistoryFile {
                 }
                 item.put("tools", tools);
             }
+            if (message.replyModel() != null) {
+                item.put("replyModel", Json.object("protocol", message.replyModel().protocol(), "model", message.replyModel().model()));
+            }
             ReplyStats stats = message.stats();
             if (stats != null && stats.finished() != null) {
                 Map<String, Object> saved = new LinkedHashMap<>(Json.object("started", stats.started().toString(),
@@ -143,7 +146,7 @@ public final class ChatHistoryFile {
                 String time = Json.stringAt(item, "time");
                 messages.add(new ChatMessage(ChatRole.valueOf(role), body, time == null ? Instant.EPOCH : Instant.parse(time),
                         status == null ? ChatMessage.Status.DONE : ChatMessage.Status.valueOf(status), context(item), tools(item),
-                        attachments(item), stats(item)));
+                        attachments(item), stats(item), replyModel(item)));
             }
             return messages;
         } catch (JsonException | IllegalArgumentException | DateTimeParseException e) {
@@ -179,6 +182,14 @@ public final class ChatHistoryFile {
                     Json.at(use, "at") instanceof Number at ? at.intValue() : -1, null, tokens(use), problem(use)));
         }
         return tools;
+    }
+
+    /** Старые или неполные сведения о модели не восстанавливаются из текущих настроек. */
+    private static ReplyModel replyModel(Object message) {
+        Object saved = Json.asObject(message).get("replyModel");
+        String protocol = Json.stringAt(saved, "protocol");
+        String model = Json.stringAt(saved, "model");
+        return protocol == null || model == null ? null : new ReplyModel(protocol, model);
     }
 
     /** Время и токены ответа; повреждённые или старые — без них, диалог всё равно загружается. */

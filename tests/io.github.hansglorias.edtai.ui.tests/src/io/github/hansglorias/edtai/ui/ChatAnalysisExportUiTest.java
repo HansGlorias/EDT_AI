@@ -67,6 +67,7 @@ class ChatAnalysisExportUiTest extends AbstractChatTest {
         answering(List.of("Ответ"));
         ChatView view = showView();
         ask(view, "Выбранный разговор ui-demo-secret https://example.invalid/private");
+        view.chats().rename(view.chats().current().orElseThrow(), "Выбранный: чат");
         view.newChatForTest();
         settle();
         ask(view, "ДРУГОЙ РАЗГОВОР");
@@ -75,7 +76,7 @@ class ChatAnalysisExportUiTest extends AbstractChatTest {
         view.analysisToken = () -> "ui-demo-secret";
         view.askAnalysisOptions = () -> new AnalysisExportDialog.Options(true, new Feedback("Ожидал ответ", "Получил ответ", "ui-demo-secret"));
         view.chooseAnalysisFile = name -> {
-            assertEquals("chat-analysis.zip", name);
+            assertEquals("Выбранный_ чат-analysis.zip", name);
             return output;
         };
         view.historyPanel().runMenuItem(1, "Выгрузка для разбора");
