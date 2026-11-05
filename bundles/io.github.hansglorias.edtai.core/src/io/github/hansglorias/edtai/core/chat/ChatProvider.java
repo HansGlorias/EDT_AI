@@ -49,6 +49,12 @@ public interface ChatProvider {
         return reply(history, onText, onTool, onUsage);
     }
 
+    /** Идентичность фактического подключения фиксируется до первого запроса ответа. */
+    default CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
+            Consumer<TokenUsage> onUsage, Runnable onReasoning, Consumer<ReplyModel> onModel) {
+        return reply(history, onText, onTool, onUsage, onReasoning);
+    }
+
     /** Окно модели в токенах; 0 — неизвестно. */
     default long window() {
         return 0;

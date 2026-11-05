@@ -392,7 +392,11 @@ public final class ChatSession {
         activity(request, request.activity.next(ReplyActivity.Phase.THINKING, ""));
         request.sent = history;
         CompletableFuture<String> reply = provider.reply(history, part -> onPart(request, part), use -> onTool(request, use),
-                tokens -> onUsage(request, tokens), () -> onReasoning(request));
+                tokens -> onUsage(request, tokens), () -> onReasoning(request), identity -> {
+                    synchronized (lock) {
+                        if (!request.finished) request.model = identity;
+                    }
+                });
         request.inner = reply;
         return reply;
     }
@@ -548,11 +552,11 @@ public final class ChatSession {
             } else {
                 if (!partial.isBlank() || !request.tools.isEmpty() || !request.files.isEmpty()) {
                     put(request, partial, Status.STOPPED);
-                    result = ChatMessage.of(ChatRole.ERROR, describe(cause));
+                    result = ChatMessage.of(ChatRole.ERROR, describe(cause)).withReplyModel(request.model);
                     add(result);
                 } else {
                     ChatMessage pending = messages.get(request.index);
-                    result = new ChatMessage(ChatRole.ERROR, describe(cause), pending.time(), Status.DONE);
+                    result = new ChatMessage(ChatRole.ERROR, describe(cause), pending.time(), Status.DONE).withReplyModel(request.model);
                     messages.set(request.index, result);
                     ChatMessage failure = result;
                     listeners.forEach(listener -> listener.messageUpdated(request.index, failure));
@@ -570,13 +574,13 @@ public final class ChatSession {
     private ChatMessage put(Request request, String text, Status status) {
         if (request.index < 0 || request.index >= messages.size()) {
             ChatMessage message = new ChatMessage(ChatRole.ASSISTANT, text, Instant.now(), status, List.of(), request.tools,
-                    request.files, request.clock.snapshot());
+                    request.files, request.clock.snapshot(), request.model);
             request.index = messages.size();
             add(message);
             return message;
         }
         ChatMessage message = messages.get(request.index).with(text, status).withTools(request.tools)
-                .withAttachments(request.files).withStats(request.clock.snapshot());
+                .withAttachments(request.files).withStats(request.clock.snapshot()).withReplyModel(request.model);
         messages.set(request.index, message);
         int index = request.index;
         listeners.forEach(listener -> listener.messageUpdated(index, message));
@@ -615,6 +619,7 @@ public final class ChatSession {
     }
 
     private static final class Request {
+        ReplyModel model;
         final StringBuilder text = new StringBuilder();
         final List<ToolUse> tools = new ArrayList<>();
         /** Файлы, которые модель приложила к ответу. */

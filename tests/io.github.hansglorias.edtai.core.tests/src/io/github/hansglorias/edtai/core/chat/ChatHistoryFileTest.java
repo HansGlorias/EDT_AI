@@ -23,6 +23,19 @@ class ChatHistoryFileTest {
     Path temp;
 
     @Test
+    void historicalReplyModelSurvivesReloadAndLegacyRemainsUnknown() throws Exception {
+        ChatHistoryFile file = new ChatHistoryFile(temp.resolve("identity.json"));
+        ChatMessage old = ChatMessage.of(ChatRole.ASSISTANT, "old");
+        ChatMessage answer = ChatMessage.of(ChatRole.ASSISTANT, "answer")
+                .withReplyModel(new ReplyModel("OPENAI_COMPATIBLE", "model-a"));
+        file.save(List.of(old, answer));
+        assertEquals(List.of(old, answer), file.load());
+        assertEquals(null, file.load().get(0).replyModel());
+        assertEquals(answer.replyModel(), answer.with("new text", Status.STOPPED).withTools(List.of())
+                .withContext(List.of()).withAttachments(List.of()).withStats(null).replyModel());
+    }
+
+    @Test
     void emptyAnswersAreNeverSavedButToolResultsAre() throws Exception {
         ChatHistoryFile file = new ChatHistoryFile(temp.resolve("chat.json"));
         ChatMessage user = ChatMessage.of(ChatRole.USER, "вопрос");
