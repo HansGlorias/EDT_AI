@@ -43,6 +43,7 @@ class ReplyIndicatorTest extends AbstractChatTest {
             assertTrue(indicator.getVisible());
             text.setSelection(3, 9);
             text.update();
+            settle(); // GTK дорисовывает выделение после возврата в цикл событий.
             String before = text.getText();
             var selection = text.getSelection();
             var bounds = indicator.getBounds();
