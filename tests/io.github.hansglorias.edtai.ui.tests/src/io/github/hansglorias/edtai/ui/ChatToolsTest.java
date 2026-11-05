@@ -96,6 +96,7 @@ class ChatToolsTest extends AbstractChatTest {
         assertTrue(uses.stream().allMatch(use -> use.status() == ToolUse.Status.DONE));
         assertTrue(server.requests().get(3).body().contains("status: complete"));
         assertFalse(server.requests().get(3).body().contains("Сообщить"), "родителю не возвращается прочитанный ребёнком модуль");
+        assertTrue(view.subagentsPanel().isShown(), "реальный дочерний вызов открывает боковую панель");
         view.control().setSize(720, 650);
         view.control().layout(true, true);
         view.history().setTopIndex(0);
@@ -139,6 +140,8 @@ class ChatToolsTest extends AbstractChatTest {
             view.refresh();
             assertEquals(2, step.get());
             assertFalse(view.questionsBar().isShown());
+            assertTrue(view.subagentsPanel().isShown());
+            assertTrue(view.subagentsPanel().titleText().contains("прервано"));
             assertFalse(view.history().getText().contains("Поздний итог"));
             assertEquals(io.github.hansglorias.edtai.core.chat.ChatMessage.Status.STOPPED,
                     view.session().messages().get(1).status());

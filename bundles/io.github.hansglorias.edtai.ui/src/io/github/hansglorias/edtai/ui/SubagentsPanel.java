@@ -11,6 +11,7 @@ import org.eclipse.jface.layout.GridLayoutFactory;
 import org.eclipse.jface.preference.JFacePreferences;
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
@@ -30,19 +31,22 @@ import io.github.hansglorias.edtai.core.chat.Subagents.Run;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 
 /**
- * Панель специалистов (субагентов) последнего ответа над полем ввода: по строке на запуск — значок
+ * Боковая панель специалистов последнего ответа: карточка на запуск — значок
  * состояния, роль, задача, вызовы, время и токены. Щелчок по строке раскрывает шаги и отчёт.
- * «Скрыть» убирает панель до следующего ответа со специалистами.
+ * Сворачивается в узкую полосу, раскрывается той же кнопкой, не занимая место над вводом.
  */
 final class SubagentsPanel {
 
-    static final String HIDE = "скрыть";
     /** Сколько последних шагов специалиста видно в раскрытой строке. */
     private static final int STEPS = 12;
     private static final int ICON = 14;
 
     private final Composite bar;
     private final Label title;
+    private final Composite header;
+    private final Chip toggle;
+    private final Label count;
+    private final ScrolledComposite scroll;
     private final Composite rows;
     private final Runnable changed;
     /** Что показано: при тех же запусках меняются только метрики, без пересоздания строк. */
@@ -51,47 +55,60 @@ final class SubagentsPanel {
     private final List<Canvas> icons = new ArrayList<>();
     /** Раскрытые запуски по id. */
     private final Set<String> expanded = new HashSet<>();
-    /** Ответ, для которого панель скрыли: до ответа с другими специалистами она не появляется. */
-    private Object hiddenFor;
+    private boolean collapsed;
     private Object answer;
 
     SubagentsPanel(Composite parent, Runnable changed) {
         this.changed = changed;
-        bar = new Composite(parent, SWT.BORDER);
-        GridDataFactory.fillDefaults().grab(true, false).applyTo(bar);
-        GridLayoutFactory.swtDefaults().margins(6, 4).spacing(0, 2).applyTo(bar);
-        Composite header = new Composite(bar, SWT.NONE);
+        bar = new Composite(parent, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(false, true).hint(240, SWT.DEFAULT).applyTo(bar);
+        GridLayoutFactory.fillDefaults().margins(6, 8).spacing(0, 8).applyTo(bar);
+        bar.addListener(SWT.Paint, event -> {
+            event.gc.setForeground(meta(bar));
+            event.gc.setAlpha(40);
+            event.gc.drawLine(0, 0, 0, bar.getSize().y);
+        });
+        header = new Composite(bar, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(header);
         GridLayoutFactory.fillDefaults().numColumns(2).applyTo(header);
-        title = new Label(header, SWT.NONE);
+        title = new Label(header, SWT.WRAP);
         title.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
-        GridDataFactory.fillDefaults().grab(true, false).applyTo(title);
-        Link hide = new Link(header, SWT.NONE);
-        hide.setText("<a>" + HIDE + "</a>");
-        hide.setToolTipText("Скрыть панель до следующего ответа со специалистами");
-        hide.addListener(SWT.Selection, event -> {
-            hiddenFor = answer;
-            visible(false);
-        });
-        rows = new Composite(bar, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, false).applyTo(rows);
-        GridLayoutFactory.fillDefaults().spacing(0, 2).applyTo(rows);
+        GridDataFactory.fillDefaults().grab(true, false).hint(150, SWT.DEFAULT).applyTo(title);
+        toggle = new Chip(header, false);
+        toggle.setText("›");
+        toggle.setToolTipText("Свернуть специалистов");
+        toggle.addListener(SWT.Selection, event -> setCollapsed(!collapsed));
+        count = new Label(bar, SWT.CENTER);
+        count.setForeground(meta(bar));
+        GridDataFactory.fillDefaults().grab(true, false).exclude(true).applyTo(count);
+        count.setVisible(false);
+        scroll = new ScrolledComposite(bar, SWT.V_SCROLL);
+        GridDataFactory.fillDefaults().grab(true, true).applyTo(scroll);
+        scroll.setExpandHorizontal(true);
+        scroll.setExpandVertical(true);
+        rows = new Composite(scroll, SWT.NONE);
+        GridLayoutFactory.fillDefaults().spacing(0, 12).applyTo(rows);
+        scroll.setContent(rows);
+        scroll.addListener(SWT.Resize, event -> resize());
         visible(false);
     }
 
     /**
      * Показывает специалистов ответа; пустой список — панель скрыта.
      *
-     * @param owner ответ, которому они принадлежат: по нему помнится «скрыть»
+     * @param owner ответ, которому они принадлежат: раскрытые карточки не смешиваются между чатами
      */
     void show(Object owner, List<Run> runs) {
+        boolean newAnswer = !Objects.equals(answer, owner);
         answer = owner;
-        if (runs.isEmpty() || owner != null && Objects.equals(owner, hiddenFor)) {
+        if (newAnswer) expanded.clear();
+        if (runs.isEmpty()) {
+            if (!shown.isEmpty()) rebuild(List.of());
             shown = List.of();
             visible(false);
             return;
         }
-        if (!sameShape(shown, runs)) {
+        if (newAnswer || !sameShape(shown, runs)) {
             rebuild(runs);
         } else {
             for (int i = 0; i < runs.size(); i++) {
@@ -103,8 +120,16 @@ final class SubagentsPanel {
             }
         }
         shown = runs;
-        title.setText(title(runs));
+        String heading = title(runs);
+        if (!heading.equals(title.getText())) {
+            title.setText(heading);
+            bar.layout(true, true);
+        }
+        toggle.setToolTipText((collapsed ? "Показать" : "Свернуть") + " специалистов\n" + heading);
+        count.setText(Integer.toString(runs.size()));
+        count.setToolTipText(heading);
         visible(true);
+        resize();
     }
 
     /** «Специалисты · 2 — 1 работает, 1 готово». */
@@ -144,34 +169,41 @@ final class SubagentsPanel {
         for (Run run : runs) {
             row(run);
         }
+        rows.layout(true, true);
+        resize();
         changed.run();
     }
 
     private void row(Run run) {
-        Composite line = new Composite(rows, SWT.NONE);
+        Composite card = new Composite(rows, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(card);
+        GridLayoutFactory.fillDefaults().spacing(0, 4).applyTo(card);
+        Composite line = new Composite(card, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(line);
-        GridLayoutFactory.fillDefaults().numColumns(5).spacing(6, 0).applyTo(line);
-        Canvas icon = new Canvas(line, SWT.NO_BACKGROUND | SWT.DOUBLE_BUFFERED);
+        GridLayoutFactory.fillDefaults().numColumns(3).spacing(8, 0).applyTo(line);
+        Canvas icon = new Canvas(line, SWT.DOUBLE_BUFFERED);
+        icon.addListener(SWT.Paint, event -> paintState(event.gc, (Canvas) event.widget, run.state()));
         GridDataFactory.swtDefaults().hint(ICON, ICON).align(SWT.CENTER, SWT.CENTER).applyTo(icon);
-        icon.addListener(SWT.Paint, event -> paintState(event.gc, icon, run.state()));
         icon.setToolTipText(run.state().label());
         icons.add(icon);
         boolean open = expanded.contains(run.id());
-        Label arrow = new Label(line, SWT.NONE);
-        arrow.setText(open ? "▾" : "▸");
-        arrow.setForeground(meta(line));
         Label role = new Label(line, SWT.NONE);
-        role.setText(run.role());
+        role.setText((open ? "▾ " : "▸ ") + run.role());
         role.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
-        Label task = new Label(line, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(role);
+        Label state = new Label(line, SWT.NONE);
+        state.setText(run.state().label());
+        state.setForeground(meta(line));
+        Label task = new Label(card, SWT.WRAP);
         task.setText(run.task());
         task.setToolTipText(run.task());
         GridDataFactory.fillDefaults().grab(true, false).hint(60, SWT.DEFAULT).applyTo(task);
-        Label numbers = new Label(line, SWT.NONE);
+        Label numbers = new Label(card, SWT.WRAP);
         numbers.setText(run.metrics());
         numbers.setForeground(meta(line));
+        GridDataFactory.fillDefaults().grab(true, false).hint(100, SWT.DEFAULT).applyTo(numbers);
         metrics.add(numbers);
-        for (Control control : new Control[] { line, arrow, role, task, numbers }) {
+        for (Control control : new Control[] { line, icon, role, state, task, numbers }) {
             control.setCursor(line.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
             control.addListener(SWT.MouseUp, event -> toggle(run));
         }
@@ -190,7 +222,7 @@ final class SubagentsPanel {
     /** Шаги специалиста и его отчёт под строкой. */
     private void details(Run run) {
         Composite box = new Composite(rows, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, false).indent(ICON + 18, 0).applyTo(box);
+        GridDataFactory.fillDefaults().grab(true, false).indent(6, 0).applyTo(box);
         GridLayoutFactory.fillDefaults().spacing(0, 1).applyTo(box);
         List<ToolUse> steps = run.steps();
         if (steps.isEmpty()) {
@@ -224,7 +256,7 @@ final class SubagentsPanel {
     }
 
     private Label label(Composite parent, String text, boolean bold) {
-        Label label = new Label(parent, SWT.NONE);
+        Label label = new Label(parent, SWT.WRAP);
         label.setText(text);
         label.setForeground(meta(parent));
         if (bold) {
@@ -299,6 +331,30 @@ final class SubagentsPanel {
     boolean isShown() {
         return bar.getVisible();
     }
+
+    private void resize() {
+        if (scroll.isDisposed() || collapsed) return;
+        int height = rows.computeSize(Math.max(1, scroll.getClientArea().width), SWT.DEFAULT).y;
+        if (scroll.getMinHeight() != height) scroll.setMinHeight(height);
+    }
+
+    void setCollapsed(boolean value) {
+        collapsed = value;
+        title.setVisible(!value);
+        ((GridData) title.getLayoutData()).exclude = value;
+        scroll.setVisible(!value);
+        ((GridData) scroll.getLayoutData()).exclude = value;
+        count.setVisible(value);
+        ((GridData) count.getLayoutData()).exclude = !value;
+        ((GridData) bar.getLayoutData()).widthHint = value ? 32 : 240;
+        toggle.setText(value ? "‹" : "›");
+        toggle.setToolTipText((value ? "Показать" : "Свернуть") + " специалистов\n" + title.getText());
+        changed.run();
+        resize();
+    }
+
+    boolean isCollapsed() { return collapsed; }
+    Composite control() { return bar; }
 
     /** Заголовок панели: для тестов. */
     String titleText() {

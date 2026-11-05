@@ -519,7 +519,10 @@ final class AgentLoop {
 
     /** Подключение; если есть инструменты — с правилами работы с ними в системном промпте. */
     private ModelConnection connection() {
-        return exploration || tools.isEmpty() ? base : base.withSystemPromptPart(ProjectBrief.TOOL_RULES);
+        if (exploration || tools.isEmpty()) return base;
+        ModelConnection connection = base.withSystemPromptPart(ProjectBrief.TOOL_RULES);
+        return tools.stream().anyMatch(DelegateTask.class::isInstance)
+                ? connection.withSystemPromptPart(ExploreProject.PARENT_RULES) : connection;
     }
 
     private ProtocolAdapter.ToolResult execute(ToolCall call, TokenUsage tokens) {

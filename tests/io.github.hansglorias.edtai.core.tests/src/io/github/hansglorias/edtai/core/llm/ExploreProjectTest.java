@@ -54,10 +54,13 @@ class ExploreProjectTest {
                     assertEquals("fixed-parent-model", body.get("model"));
                     if (step == 0) {
                         assertTrue(toolNames(body, protocol).contains("explore_project"));
+                        assertTrue(request.body().contains("Специалисты:"));
+                        assertTrue(request.body().contains("role=review"));
                         send(response, protocol, "", List.of(call("explore_project", Json.object("question", "Find links", "scope", "CommonModules"))), 10, 2);
                     } else if (step == 1) {
                         assertFalse(request.body().contains("parent-private-prompt"));
                         assertFalse(request.body().contains("parent-private-history"));
+                        assertFalse(request.body().contains("Специалисты:"), "ребёнку не предлагают делегирование");
                         assertEquals(2048L, body.get("max_tokens"));
                         assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "check_module"), toolNames(body, protocol));
                         send(response, protocol, "CHILD_INTERMEDIATE", List.of(call("read_module", Json.object("module", "src/CommonModules/Test/Module.bsl"))), 200, 20);

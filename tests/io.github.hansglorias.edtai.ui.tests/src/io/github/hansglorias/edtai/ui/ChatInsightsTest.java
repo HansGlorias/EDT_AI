@@ -9,6 +9,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.ui.texteditor.ITextEditor;
@@ -20,6 +21,7 @@ import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
 import io.github.hansglorias.edtai.core.chat.PlanApproval;
 import io.github.hansglorias.edtai.core.chat.ReplyStats;
+import io.github.hansglorias.edtai.core.chat.Subagents;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 
@@ -63,10 +65,58 @@ class ChatInsightsTest extends AbstractChatTest {
         assertTrue(text.contains("Дольше всего"));
         assertNotNull(view.linkAction(MessageRenderer.HIDE_STATS));
         render(view, "reply-stats-and-subagents");
+        var sidebar = view.subagentsPanel();
+        var position = sidebar.control().toDisplay(0, 0);
+        var inputPosition = view.input().toDisplay(0, 0);
+        assertTrue(position.x > inputPosition.x + view.input().getSize().x,
+                "специалисты находятся справа от поля ввода");
+        assertTrue(sidebar.control().getSize().y > view.input().getSize().y);
+        int expandedWidth = sidebar.control().getSize().x;
+        int inputWidth = view.input().getSize().x;
+        sidebar.setCollapsed(true);
+        settle();
+        assertTrue(sidebar.isCollapsed());
+        assertTrue(sidebar.control().getSize().x < expandedWidth);
+        assertTrue(view.input().getSize().x > inputWidth);
+        render(view, "subagents-collapsed");
+        sidebar.setCollapsed(false);
+        settle();
+        assertFalse(sidebar.isCollapsed());
+        assertEquals(expandedWidth, sidebar.control().getSize().x);
 
         view.linkAction(MessageRenderer.HIDE_STATS).run();
         settle();
         assertFalse(view.history().getText().contains("Ожидание модели"));
+        view.session().restore(List.of(ChatMessage.of(ChatRole.ASSISTANT, "Ответ без специалистов")));
+        view.refresh();
+        settle();
+        assertFalse(sidebar.isShown(), "специалисты не переходят в другой ответ");
+    }
+
+    @Test
+    void collapsedSidebarReceivesLongReportAndScrollsAfterOpening() throws Exception {
+        answering(List.of("ok"));
+        ChatView view = showView();
+        var sidebar = view.subagentsPanel();
+        var run = new Subagents.Run("run", "Ревью", "Проверить результат", Subagents.State.RUNNING,
+                List.of(), null, 0, "");
+        sidebar.show("answer", List.of(run));
+        sidebar.expand("run");
+        render(view, "subagents-running");
+        sidebar.setCollapsed(true);
+        List<ToolUse> steps = java.util.stream.IntStream.range(0, 12).mapToObj(i ->
+                new ToolUse("run/" + i, "delegate_task", "Ревью: Читает модуль Документ.Реализация " + i,
+                        "Длинный результат проверки, который переносится на несколько строк", ToolUse.Status.DONE)).toList();
+        sidebar.show("answer", List.of(new Subagents.Run("run", "Ревью", "Проверить результат", Subagents.State.DONE,
+                steps, TokenUsage.step(1000, 100, false), 1200, "Выводы проверки\n".repeat(20))));
+        sidebar.setCollapsed(false);
+        settle();
+        ScrolledComposite scroll = java.util.Arrays.stream(sidebar.control().getChildren())
+                .filter(ScrolledComposite.class::isInstance).map(ScrolledComposite.class::cast).findFirst().orElseThrow();
+        assertTrue(scroll.getMinHeight() > scroll.getClientArea().height, "длинные шаги доступны прокруткой");
+        scroll.setOrigin(0, scroll.getMinHeight());
+        assertTrue(scroll.getOrigin().y > 0);
+        render(view, "subagents-long-report");
     }
 
     @Test
