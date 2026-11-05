@@ -45,6 +45,14 @@ class ChatPendingReplyTest extends AbstractChatTest {
         view.send();
         view.refresh();
         assertTrue(view.history().getText().contains("ожидает модель…"));
+        assertTrue(view.activityIndicator().isActive());
+        int phase = view.activityIndicator().phase();
+        String waitingText = view.history().getText();
+        int selection = view.history().getCharCount();
+        view.history().setSelection(selection);
+        waitUntil(() -> view.activityIndicator().phase() != phase);
+        assertEquals(waitingText, view.history().getText(), "кадр анимации не заменяет текст");
+        assertEquals(selection, view.history().getSelection().x, "анимация не сбрасывает выделение");
         release.countDown();
         waitUntil(() -> !view.session().isBusy());
         view.refresh();
@@ -52,6 +60,7 @@ class ChatPendingReplyTest extends AbstractChatTest {
         assertFalse(view.history().getText().contains("ожидает модель"));
         assertFalse(view.history().getText().contains("ответ не получен"));
         assertTrue(view.history().getText().contains("HTTP 503"));
+        assertFalse(view.activityIndicator().isActive(), "после ошибки таймер остановлен");
         assertNotNull(view.linkAction(MessageRenderer.RETRY));
         Screenshots.render(view.control(), "chat-pending-error");
     }
