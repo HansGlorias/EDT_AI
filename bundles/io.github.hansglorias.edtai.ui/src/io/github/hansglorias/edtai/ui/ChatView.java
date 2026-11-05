@@ -414,6 +414,8 @@ public class ChatView extends ViewPart {
     private Action historyAction;
     private ChatHistoryPanel historyPanel;
     private ThinScrollBar scrollBar;
+    private ReplyIndicator replyIndicator;
+    private Composite transcript;
     private Composite top;
     /** Правая часть: лента, панели над вводом, ввод, строка состояния. Список чатов — слева на всю высоту. */
     private Composite column;
@@ -469,8 +471,8 @@ public class ChatView extends ViewPart {
     private Chip mcpButton;
     /** Выбор модели справа в поле ввода, рядом с «Отправить». */
     private Chip modelButton;
-    /** Кольцо у кнопки модели: сколько окна занято, по ходу ответа. */
-    private ContextRing contextRing;
+    /** Статичный процент у кнопки модели: сколько окна занято. */
+    private ContextUsage contextUsage;
     /** Режим модели и формат следующего вопроса: одна кнопка слева. */
     private Chip modeButton;
     /** Модели с сервера ({@code /models}); пока не загружены — пусто. */
@@ -761,12 +763,19 @@ public class ChatView extends ViewPart {
     }
 
     private void createHistory(Composite parent) {
+        transcript = new Composite(parent, SWT.NONE);
+        GridLayoutFactory.fillDefaults().numColumns(2).spacing(0, 0).applyTo(transcript);
         // Без системной полосы прокрутки: своя, узкая (ThinScrollBar).
-        history = new StyledText(parent, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY);
+        history = new StyledText(transcript, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY);
+        GridDataFactory.fillDefaults().grab(true, true).hint(0, 0).applyTo(history);
+        transcript.setBackground(history.getBackground());
         // Справа есть место и под внутреннее поле пузыря, и до края ленты.
-        history.setMargins(24, 24, 36, 24);
+        history.setMargins(0, 24, 36, 24);
         history.setLineSpacing(2);
         scrollBar = new ThinScrollBar(history);
+        replyIndicator = new ReplyIndicator(history);
+        GridDataFactory.fillDefaults().grab(false, true).hint(ReplyIndicator.GUTTER, SWT.DEFAULT).applyTo(replyIndicator);
+        scrollBar.onScroll(replyIndicator::reposition);
         renderer = new MessageRenderer(history, new MessageRenderer.Callbacks() {
             @Override
             public void copy(String text) {
@@ -1050,8 +1059,8 @@ public class ChatView extends ViewPart {
         GridDataFactory.fillDefaults().grab(true, false).align(SWT.BEGINNING, SWT.CENTER).applyTo(mcpButton);
         mcpButton.addListener(SWT.Selection, event -> showMcpStatus());
 
-        contextRing = new ContextRing(actions);
-        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(contextRing);
+        contextUsage = new ContextUsage(actions);
+        GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(contextUsage);
 
         modelButton = new Chip(actions, true);
         GridDataFactory.fillDefaults().align(SWT.END, SWT.CENTER).applyTo(modelButton);
@@ -3116,6 +3125,7 @@ public class ChatView extends ViewPart {
                 history.getDisplay().asyncExec(() -> {
                     if (!history.isDisposed()) {
                         history.setTopPixel(Integer.MAX_VALUE);
+                        replyIndicator.reposition();
                     }
                 });
             }
@@ -3127,6 +3137,19 @@ public class ChatView extends ViewPart {
         updateEmptyState();
         updateSendButton();
         updateStatus();
+    }
+
+    private void updateReplyIndicator() {
+        int offset = -1;
+        if (session.isBusy() && !rendered.isEmpty() && !approvalBar.isShown() && !questionsBar.isShown()) {
+            Rendered last = rendered.get(rendered.size() - 1);
+            if (last.message().role() == ChatRole.ASSISTANT && last.message().status() == Status.STREAMING) {
+                int line = history.getLineAtOffset(last.placement().footerStart());
+                if (last.message().text().isBlank()) line = Math.max(0, line - 1);
+                offset = history.getOffsetAtLine(line);
+            }
+        }
+        replyIndicator.follow(offset);
     }
 
     /** Панель специалистов последнего ответа: со специалистами — видна, иначе скрыта. */
@@ -3383,7 +3406,7 @@ public class ChatView extends ViewPart {
             ((GridData) emptyLink.getLayoutData()).exclude = configured;
             emptyState.layout(true, true);
         }
-        Control shown = session.messages().isEmpty() ? emptyState : history;
+        Control shown = session.messages().isEmpty() ? emptyState : transcript;
         if (topLayout.topControl != shown) {
             topLayout.topControl = shown;
             top.layout(true);
@@ -3408,11 +3431,11 @@ public class ChatView extends ViewPart {
      * без ответов в этом сеансе — оценка по истории).
      */
     /**
-     * Кольцо окна: по ходу ответа — оценка последнего запроса и пришедший после него текст, после
+     * Занятость окна: по ходу ответа — оценка последнего запроса и пришедший после него текст, после
      * ответа — данные сервера; в чате без ответов — оценка истории.
      */
-    private void updateContextRing() {
-        if (contextRing == null || contextRing.isDisposed()) {
+    private void updateContextUsage() {
+        if (contextUsage == null || contextUsage.isDisposed()) {
             return;
         }
         long used = session.liveContext();
@@ -3428,12 +3451,12 @@ public class ChatView extends ViewPart {
             TokenUsage usage = session.usage();
             estimated = session.isBusy() || usage == null || usage.contextSource() != TokenUsage.Source.SERVER;
         }
-        contextRing.setCompacting(session.isCompacting());
-        contextRing.setGauge(settings.isConfigured() && window > 0 ? new ContextGauge(used, window, estimated) : null);
+        contextUsage.setCompacting(session.isCompacting());
+        contextUsage.setGauge(settings.isConfigured() && window > 0 ? new ContextGauge(used, window, estimated) : null);
     }
 
     private void updateStatus() {
-        updateContextRing();
+        updateContextUsage();
         String text;
         if (notice != null) {
             text = notice;
@@ -3449,9 +3472,9 @@ public class ChatView extends ViewPart {
                 parts.add(activity.describe(Instant.now()));
             } else if (usage != null) {
                 parts.add(usage.describe(window));
-            } else if (contextRing != null && contextRing.gauge() != null && contextRing.gauge().used() > 0) {
-                // То же число, что у кольца: после сжатия и перезапуска — с промптом и инструментами, не одна история.
-                parts.add(TokenUsage.describeEstimate(contextRing.gauge().used(), window));
+            } else if (contextUsage != null && contextUsage.gauge() != null && contextUsage.gauge().used() > 0) {
+                // То же число, что у процента: после сжатия и перезапуска — с промптом и инструментами, не одна история.
+                parts.add(TokenUsage.describeEstimate(contextUsage.gauge().used(), window));
             } else if (estimate() > 0) {
                 parts.add(TokenUsage.describeEstimate(estimate(), window));
             } else {
@@ -3471,6 +3494,7 @@ public class ChatView extends ViewPart {
                 root.layout(new Control[] { status });
             }
         }
+        updateReplyIndicator();
     }
 
     /** Оценка занятого окна для чата без ответов в этом сеансе; считается заново, только когда изменилась история. */
@@ -3788,6 +3812,8 @@ public class ChatView extends ViewPart {
         return scrollBar;
     }
 
+    ReplyIndicator replyIndicator() { return replyIndicator; }
+
     ChatHistoryPanel historyPanel() {
         return historyPanel;
     }
@@ -3843,8 +3869,8 @@ public class ChatView extends ViewPart {
         return modeButton;
     }
 
-    ContextRing contextRing() {
-        return contextRing;
+    ContextUsage contextUsage() {
+        return contextUsage;
     }
 
     Chip modelButton() {

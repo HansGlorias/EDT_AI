@@ -32,6 +32,7 @@ final class ThinScrollBar {
     /** Где внутри ползунка взяли мышью; -1 — не тянем. */
     private int grab = -1;
     private Rectangle thumb = new Rectangle(0, 0, 0, 0);
+    private Runnable scrolled = () -> { };
 
     ThinScrollBar(StyledText text) {
         this.text = text;
@@ -51,6 +52,9 @@ final class ThinScrollBar {
         text.addListener(SWT.Paint, event -> update());
     }
 
+    /** Уведомление только о прокрутке пользователем, не из Paint. */
+    void onScroll(Runnable listener) { scrolled = listener; }
+
     /** Пересчитывает ползунок: высота ленты или прокрутка изменились. */
     void update() {
         if (bar.isDisposed()) {
@@ -59,7 +63,7 @@ final class ThinScrollBar {
         Rectangle area = text.getClientArea();
         int total = total();
         // Скрытая лента (пока чат пуст, видна заглушка) ещё не разложена: её размер ничего не значит.
-        boolean needed = text.isVisible() && total > area.height && area.height > 0;
+        boolean needed = text.getCharCount() > 0 && text.isVisible() && total > area.height && area.height > 0;
         Rectangle bounds = new Rectangle(area.x + area.width - WIDTH, area.y, WIDTH, area.height);
         if (!bar.getBounds().equals(bounds)) {
             bar.setBounds(bounds);
@@ -127,6 +131,7 @@ final class ThinScrollBar {
         int top = (int) ((long) Math.max(0, Math.min(track, y - grab)) * range / track);
         text.setTopPixel(top);
         update();
+        scrolled.run();
     }
 
     private void wheel(Event event) {
@@ -137,6 +142,7 @@ final class ThinScrollBar {
         text.setTopPixel(text.getTopPixel() - Integer.signum(event.count) * lines * text.getLineHeight());
         event.doit = false;
         update();
+        scrolled.run();
     }
 
     private void setHover(boolean value) {
