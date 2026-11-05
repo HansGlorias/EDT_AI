@@ -41,7 +41,7 @@ public final class ProjectTools {
 
     public static List<Tool> create(WorkspaceFiles files, IntSupplier limit) {
         ProjectTools tools = new ProjectTools(files, limit);
-        return List.of(tools.new ProjectInfo(), tools.new ListObjects(), tools.new ReadModule(), tools.new SearchCode());
+        return List.of(tools.new ProjectInfo(), tools.new ListObjects(), tools.new ReadModule(), tools.new SearchCode(), tools.new CheckModule());
     }
 
     /** Проверка происхождения: одно имя read_module не делает MCP-инструмент встроенным чтением. */
@@ -229,6 +229,49 @@ public final class ProjectTools {
                 text.append("(дальше не поместилось в лимит: продолжение — first_line=").append(shown + 1).append(")\n");
             }
             return new Result(header + text, "строки " + first + "–" + shown + " из " + total);
+        }
+    }
+
+    private final class CheckModule extends ReadingTool {
+        @Override
+        public String name() { return "check_module"; }
+
+        @Override
+        public String description() {
+            return "Читает текущий снимок диагностик EDT для сохранённого модуля BSL без повторной правки."
+                    + " Свежесть анализа не гарантирована; пустой снимок не подтверждает отсутствие ошибок."
+                    + " Не опрашивай повторно в одном ответе; более поздний снимок — по новой реплике пользователя.";
+        }
+
+        @Override
+        public Map<String, Object> inputSchema() {
+            return schema(Map.of("module", string("Модуль: имя в нотации 1С или путь файла"), "project", PROJECT), List.of("module"));
+        }
+
+        @Override
+        public String summary(Map<String, Object> input) { return "Читает диагностику модуля " + text(input, "module"); }
+
+        @Override
+        public Result call(Map<String, Object> input) throws ToolException {
+            ToolArguments args = new ToolArguments(input);
+            String module = args.nonBlankString("module");
+            args.optionalString("project");
+            String project = project(input);
+            Path root = root(project).toAbsolutePath().normalize();
+            String path = modulePath(project, module);
+            Path file = root.resolve(path).normalize();
+            if (!file.startsWith(root) || !path.toLowerCase(Locale.ROOT).endsWith(".bsl")) {
+                throw new ToolException("Проверять можно только модули .bsl проекта");
+            }
+            if (!Files.isRegularFile(file)) throw new ToolException(missingModule(root, path));
+            ModuleDiagnostics diagnostics;
+            try {
+                diagnostics = files.unsavedText(project, path).isPresent() ? ModuleDiagnostics.unsaved()
+                        : ModuleDiagnostics.read(files, project, path, read(file));
+            } catch (IOException | RuntimeException | LinkageError e) {
+                diagnostics = ModuleDiagnostics.unavailable();
+            }
+            return new Result(diagnostics.text(), "диагностика: " + diagnostics.status());
         }
     }
 
