@@ -156,4 +156,38 @@ class ScrollsTest extends AbstractChatTest {
         Event event = new Event(); event.count = count;
         control.notifyListeners(SWT.MouseVerticalWheel, event);
     }
+
+    /** Таблица у конца списка с неполной последней строкой не перерисовывается по кругу. */
+    @Test void tableScrolledToEndSettlesWithoutRepaintLoop() throws Exception {
+        Shell shell = new Shell(page.getWorkbenchWindow().getShell(), SWT.SHELL_TRIM);
+        try {
+            shell.setLayout(new org.eclipse.swt.layout.FillLayout());
+            Table table = new Table(shell, SWT.NO_SCROLL | SWT.FULL_SELECTION);
+            Scrolls list = Scrolls.wrap(table);
+            new TableColumn(table, SWT.NONE).setWidth(200);
+            for (int i = 0; i < 40; i++) new TableItem(table, SWT.NONE).setText("диалог " + i);
+            shell.open();
+            int[] paints = { 0 };
+            table.addListener(SWT.Paint, event -> paints[0]++);
+            // Высоты, не кратные строке: последняя строка видна не целиком.
+            for (int extra : new int[] { 7, 13, 19 }) {
+                shell.setSize(260, table.getItemHeight() * 6 + extra + shell.computeTrim(0, 0, 0, 0).height);
+                shell.layout(true, true);
+                settle();
+                table.setTopIndex(table.getItemCount() - 1);
+                table.setSelection(table.getItemCount() - 1);
+                table.showSelection();
+                settle();
+                int top = table.getTopIndex();
+                paints[0] = 0;
+                long end = System.currentTimeMillis() + 1000;
+                while (System.currentTimeMillis() < end) {
+                    if (!shell.getDisplay().readAndDispatch()) Thread.sleep(10);
+                }
+                assertTrue(paints[0] < 10, "таблица перерисовывается по кругу: " + paints[0] + " раз за секунду");
+                assertEquals(top, table.getTopIndex(), "верхняя строка не прыгает");
+                assertTrue(list.vertical().isShown());
+            }
+        } finally { shell.dispose(); }
+    }
 }
