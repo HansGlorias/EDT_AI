@@ -95,13 +95,13 @@ public final class ModelChatProvider implements ChatProvider {
         return connection(store, UnaryOperator.identity());
     }
 
-    private static ModelConnection connection(SettingsStore store, UnaryOperator<AiSettings> adjust) throws Exception {
+    public static ModelConnection connection(SettingsStore store, UnaryOperator<AiSettings> adjust) throws Exception {
         AiSettings settings = adjust.apply(store.load());
         if (!settings.isConfigured()) {
             throw new ModelException("Модель не настроена: укажите адрес сервера и модель в настройках EDT AI.");
         }
         // Без сохранённого токена Secure Storage не открываем: иначе он может спросить мастер-пароль.
-        String token = store.hasToken() ? store.loadToken() : "";
+        String token = store.hasToken(settings.providerId()) ? store.loadToken(settings.providerId()) : "";
         return ModelConnection.of(settings, token);
     }
 

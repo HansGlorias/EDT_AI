@@ -73,4 +73,14 @@ class ChatModelTest {
         Files.writeString(temp.resolve("chats/models.json"), "{не json");
         assertEquals(ChatModel.NONE, new ChatStore(temp.resolve("chats")).model(second), "повреждённый файл — модель из настроек");
     }
+    @Test
+    void providerIdentitySurvivesRestartAndLegacyBindingStillLoads() throws Exception {
+        ChatStore store = new ChatStore(temp.resolve("chats"));
+        store.setModel("one", new ChatModel("model", "http://localhost:8080", "first"));
+        assertEquals("first", new ChatStore(temp.resolve("chats")).model("one").providerId());
+        Files.writeString(temp.resolve("chats/models.json"),
+                "{\"one\":{\"model\":\"old\",\"baseUrl\":\"http://localhost:8080\"}}");
+        assertEquals(new ChatModel("old", "http://localhost:8080"), store.model("one"));
+    }
+
 }

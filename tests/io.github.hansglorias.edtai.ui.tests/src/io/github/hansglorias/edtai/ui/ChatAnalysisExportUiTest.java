@@ -158,6 +158,34 @@ class ChatAnalysisExportUiTest extends AbstractChatTest {
         assertFalse(all.contains("Текст до выбора"));
     }
 
+    @Test
+    void exportCleansTokensOfAllConfiguredProviders() throws Exception {
+        answering(List.of("Ответ"));
+        var store = io.github.hansglorias.edtai.core.settings.SettingsStore.workspace();
+        var first = store.providers().get(0);
+        var second = io.github.hansglorias.edtai.core.settings.ApiProvider.of("export", "Второй", store.load());
+        store.saveProviders(List.of(first, second), first.id());
+        store.saveToken(first.id(), "first-export-secret");
+        store.saveToken(second.id(), "second-export-secret");
+        try {
+            ChatView view = showView();
+            ask(view, "первый first-export-secret второй second-export-secret");
+            Path output = Files.createTempDirectory("edtai-providers-export-").resolve("safe.zip");
+            view.askAnalysisOptions = () -> new AnalysisExportDialog.Options(true, Feedback.empty());
+            view.chooseAnalysisFile = name -> output;
+            runViewExport(view);
+            waitUntil(() -> Files.exists(output), () -> view.status().getText());
+            waitUntil(() -> view.status().getText().contains("Выгрузка сохранена"));
+            String all = String.join("", unzip(output).values());
+            assertTrue(all.contains("первый"));
+            assertFalse(all.contains("first-export-secret"));
+            assertFalse(all.contains("second-export-secret"));
+        } finally {
+            store.saveToken(first.id(), "");
+            store.saveToken(second.id(), "");
+        }
+    }
+
     private static Map<String, String> unzip(Path file) throws Exception {
         Map<String, String> entries = new LinkedHashMap<>();
         try (var zip = new ZipInputStream(Files.newInputStream(file), StandardCharsets.UTF_8)) {
