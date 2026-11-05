@@ -63,10 +63,32 @@ class ChatInsightsTest extends AbstractChatTest {
         assertTrue(text.contains("Дольше всего"));
         assertNotNull(view.linkAction(MessageRenderer.HIDE_STATS));
         render(view, "reply-stats-and-subagents");
+        var sidebar = view.subagentsPanel();
+        var position = sidebar.control().toDisplay(0, 0);
+        var inputPosition = view.input().toDisplay(0, 0);
+        assertTrue(position.x > inputPosition.x + view.input().getSize().x,
+                "специалисты находятся справа от поля ввода");
+        assertTrue(sidebar.control().getSize().y > view.input().getSize().y);
+        int expandedWidth = sidebar.control().getSize().x;
+        int inputWidth = view.input().getSize().x;
+        sidebar.setCollapsed(true);
+        settle();
+        assertTrue(sidebar.isCollapsed());
+        assertTrue(sidebar.control().getSize().x < expandedWidth);
+        assertTrue(view.input().getSize().x > inputWidth);
+        render(view, "subagents-collapsed");
+        sidebar.setCollapsed(false);
+        settle();
+        assertFalse(sidebar.isCollapsed());
+        assertEquals(expandedWidth, sidebar.control().getSize().x);
 
         view.linkAction(MessageRenderer.HIDE_STATS).run();
         settle();
         assertFalse(view.history().getText().contains("Ожидание модели"));
+        view.session().restore(List.of(ChatMessage.of(ChatRole.ASSISTANT, "Ответ без специалистов")));
+        view.refresh();
+        settle();
+        assertFalse(sidebar.isShown(), "специалисты не переходят в другой ответ");
     }
 
     @Test

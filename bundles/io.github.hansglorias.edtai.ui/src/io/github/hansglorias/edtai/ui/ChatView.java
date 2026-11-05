@@ -710,22 +710,22 @@ public class ChatView extends ViewPart {
             }
         });
         column = new Composite(sash, SWT.NONE);
-        GridLayoutFactory.fillDefaults().spacing(0, 6).extendedMargins(0, 0, 0, 2).applyTo(column);
+        GridLayoutFactory.fillDefaults().numColumns(2).spacing(0, 0).applyTo(column);
+        Composite conversation = new Composite(column, SWT.NONE);
+        GridDataFactory.fillDefaults().grab(true, true).hint(0, SWT.DEFAULT).applyTo(conversation);
+        GridLayoutFactory.fillDefaults().spacing(0, 6).extendedMargins(0, 0, 0, 2).applyTo(conversation);
         sash.setWeights(historyWeights);
         sash.setMaximizedControl(historyShown ? null : column);
-        top = new Composite(column, SWT.NONE);
+        top = new Composite(conversation, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, true).applyTo(top);
         topLayout = new StackLayout();
         top.setLayout(topLayout);
         createHistory(top);
         createEmptyState(top);
-        subagentsPanel = new SubagentsPanel(column, () -> {
-            if (root != null && status != null) root.layout(true, true);
-        });
-        approvalBar = new ApprovalBar(column, this::approvalChanged);
-        questionsBar = new UserQuestionsBar(column, this::approvalChanged);
-        createPlanBar(column);
-        queueBar = new QueueBar(column, new QueueBar.Callbacks() {
+        approvalBar = new ApprovalBar(conversation, this::approvalChanged);
+        questionsBar = new UserQuestionsBar(conversation, this::approvalChanged);
+        createPlanBar(conversation);
+        queueBar = new QueueBar(conversation, new QueueBar.Callbacks() {
             @Override
             public void edit(QueueBar.Queued message) {
                 returnToInput(message);
@@ -736,12 +736,16 @@ public class ChatView extends ViewPart {
                 root.layout(true, true);
             }
         });
-        createContextBar(column);
-        createInput(column);
+        createContextBar(conversation);
+        createInput(conversation);
 
-        status = new Label(column, SWT.NONE);
+        status = new Label(conversation, SWT.NONE);
         status.setForeground(metaColor());
         GridDataFactory.fillDefaults().grab(true, false).indent(4, 0).applyTo(status);
+
+        subagentsPanel = new SubagentsPanel(column, () -> {
+            if (root != null && status != null) root.layout(true, true);
+        });
 
         createActions();
 
@@ -3152,7 +3156,7 @@ public class ChatView extends ViewPart {
         replyIndicator.follow(offset);
     }
 
-    /** Панель специалистов последнего ответа: со специалистами — видна, иначе скрыта. */
+    /** Боковая панель специалистов последнего ответа: со специалистами — видна, иначе скрыта. */
     private void updateSubagents(List<ChatMessage> messages) {
         if (subagentsPanel == null) return;
         ChatMessage answer = io.github.hansglorias.edtai.core.chat.Subagents.latest(messages);
