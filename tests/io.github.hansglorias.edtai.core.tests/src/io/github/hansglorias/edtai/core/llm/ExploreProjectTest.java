@@ -59,7 +59,7 @@ class ExploreProjectTest {
                         assertFalse(request.body().contains("parent-private-prompt"));
                         assertFalse(request.body().contains("parent-private-history"));
                         assertEquals(2048L, body.get("max_tokens"));
-                        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code"), toolNames(body, protocol));
+                        assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "check_module"), toolNames(body, protocol));
                         send(response, protocol, "CHILD_INTERMEDIATE", List.of(call("read_module", Json.object("module", "src/CommonModules/Test/Module.bsl"))), 200, 20);
                     } else if (step == 2) {
                         assertTrue(request.body().contains("fixture-only"));
