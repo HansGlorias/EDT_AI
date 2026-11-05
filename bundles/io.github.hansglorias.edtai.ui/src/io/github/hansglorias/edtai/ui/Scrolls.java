@@ -151,9 +151,13 @@ final class Scrolls extends Composite {
             }
             if (content instanceof Table table) {
                 // GTK после замены строк на более короткий список оставляет прежний
-                // верхний индекс: таблица выглядит пустой. Win32 ограничивает сам.
+                // верхний индекс: таблица выглядит пустой. Поправляем только пустоту
+                // больше строки: Win32 сам держит последнюю строку целиком видимой,
+                // и его верхний индекс бывает на неполную строку дальше; если тянуть
+                // его назад, sync из Paint и Win32 бесконечно перерисовывают таблицу.
+                int line = Math.max(1, lineHeight());
                 int max = Math.max(0, totalHeight() - pageHeight());
-                if (top() > max) table.setTopIndex(max / Math.max(1, lineHeight()));
+                if (top() >= max + line) table.setTopIndex(max / line);
             }
             if (!getBackground().equals(content.getBackground())) setBackground(content.getBackground());
             if (!getForeground().equals(content.getForeground())) setForeground(content.getForeground());
