@@ -103,7 +103,6 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
-import org.eclipse.swt.widgets.ScrollBar;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.ToolItem;
@@ -1010,6 +1009,7 @@ public class ChatView extends ViewPart {
         input = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         input.setMessage("Сообщение (Enter — отправить, Shift+Enter — новая строка)");
         GridDataFactory.fillDefaults().grab(true, false).applyTo(input);
+        ScrollFrame.wrap(input);
         input.addListener(SWT.KeyDown, this::onInputKey);
         input.addModifyListener(event -> {
             if (!recalling) {
@@ -1925,12 +1925,7 @@ public class ChatView extends ViewPart {
         int needed = (content + lineHeight - 1) / lineHeight;
         int lines = Math.max(MIN_INPUT_LINES, Math.min(MAX_INPUT_LINES, needed));
         int height = lines * lineHeight + trim;
-        // Полоса прокрутки — только когда текст не помещается: пустая полоса в поле выглядит как рамка.
-        ScrollBar bar = input.getVerticalBar();
-        if (bar != null && bar.getVisible() != needed > MAX_INPUT_LINES) {
-            bar.setVisible(needed > MAX_INPUT_LINES);
-        }
-        GridData data = (GridData) input.getLayoutData();
+        GridData data = (GridData) ScrollFrame.layoutControl(input).getLayoutData();
         if (data.heightHint != height) {
             data.heightHint = height;
             root.layout(true, true);

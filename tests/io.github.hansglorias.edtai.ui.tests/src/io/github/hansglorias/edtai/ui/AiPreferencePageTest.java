@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.eclipse.jface.preference.PreferenceDialog;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Text;
@@ -31,9 +30,9 @@ class AiPreferencePageTest extends AbstractChatTest {
             dialog.getShell().forceActive();
             settle();
             dialog.getShell().layout(true, true);
-            var scroll = assertInstanceOf(ScrolledComposite.class, settings.localDiagnosticsField().getParent().getParent().getParent());
-            waitUntil(() -> scroll.getClientArea().height > 0);
-            assertTrue(scroll.getVerticalBar().getVisible(), "настройки доступны прокруткой в небольшом окне");
+            var scroll = assertInstanceOf(ScrollArea.class, settings.localDiagnosticsField().getParent().getParent().getParent());
+            waitUntil(() -> scroll.viewport().height > 0);
+            assertTrue(scroll.vertical().isShown(), "настройки доступны прокруткой в небольшом окне");
             settings.localDiagnosticsField().setFocus();
             scroll.showControl(settings.localDiagnosticsField());
             settle();
@@ -138,7 +137,7 @@ class AiPreferencePageTest extends AbstractChatTest {
         }
     }
 
-    private static void assertDiagnosticsVisible(AiPreferencePage settings, ScrolledComposite scroll) {
+    private static void assertDiagnosticsVisible(AiPreferencePage settings, ScrollArea scroll) {
         var field = settings.localDiagnosticsField();
         String geometry = "origin=" + scroll.getOrigin() + ", field=" + field.getBounds()
                 + ", scroller=" + scroll.getBounds() + ", shell=" + field.getShell().getBounds()

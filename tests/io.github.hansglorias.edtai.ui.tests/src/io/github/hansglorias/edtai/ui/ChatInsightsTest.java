@@ -9,7 +9,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.ui.texteditor.ITextEditor;
@@ -111,9 +110,9 @@ class ChatInsightsTest extends AbstractChatTest {
                 steps, TokenUsage.step(1000, 100, false), 1200, "Выводы проверки\n".repeat(20))));
         sidebar.setCollapsed(false);
         settle();
-        ScrolledComposite scroll = java.util.Arrays.stream(sidebar.control().getChildren())
-                .filter(ScrolledComposite.class::isInstance).map(ScrolledComposite.class::cast).findFirst().orElseThrow();
-        assertTrue(scroll.getMinHeight() > scroll.getClientArea().height, "длинные шаги доступны прокруткой");
+        ScrollArea scroll = java.util.Arrays.stream(sidebar.control().getChildren())
+                .filter(ScrollArea.class::isInstance).map(ScrollArea.class::cast).findFirst().orElseThrow();
+        assertTrue(scroll.getMinHeight() > scroll.viewport().height, "длинные шаги доступны прокруткой");
         scroll.setOrigin(0, scroll.getMinHeight());
         assertTrue(scroll.getOrigin().y > 0);
         render(view, "subagents-long-report");

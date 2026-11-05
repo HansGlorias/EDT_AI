@@ -44,7 +44,25 @@ class UiIconsTest extends AbstractChatTest {
                 count++;
             }
         }
-        assertEquals(36, count, "18 значков, каждый в двух разрешениях");
+        assertEquals(46, count, "значки и слои ядра, каждый в двух разрешениях");
+    }
+
+    @Test void visibleArtworkIsCenteredInEveryResource() throws Exception {
+        var entries = FrameworkUtil.getBundle(Icons.class).findEntries("icons", "*.png", false);
+        while (entries.hasMoreElements()) {
+            var entry = entries.nextElement();
+            try (var input = entry.openStream()) {
+                ImageData data = new ImageData(input);
+                int left = data.width, top = data.height, right = -1, bottom = -1;
+                for (int y = 0; y < data.height; y++) for (int x = 0; x < data.width; x++) {
+                    if (data.getAlpha(x, y) <= 12) continue;
+                    left = Math.min(left, x); right = Math.max(right, x);
+                    top = Math.min(top, y); bottom = Math.max(bottom, y);
+                }
+                assertTrue(Math.abs(left + right - data.width + 1) <= 1, "центр по горизонтали: " + entry);
+                assertTrue(Math.abs(top + bottom - data.height + 1) <= 1, "центр по вертикали: " + entry);
+            }
+        }
     }
 
     @Test
