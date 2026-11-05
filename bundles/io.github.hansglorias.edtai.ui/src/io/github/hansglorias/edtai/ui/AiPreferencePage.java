@@ -22,7 +22,6 @@ import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.viewers.TableViewerColumn;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
@@ -88,7 +87,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     private Label serverResult;
     private Combo mcpInterval;
     private Button localDiagnostics;
-    private ScrolledComposite scroll;
+    private ThinScrolledComposite scroll;
 
     @Override
     public void init(IWorkbench workbench) {
@@ -97,12 +96,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     @Override
     protected Control createContents(Composite parent) {
-        scroll = new ScrolledComposite(parent, SWT.V_SCROLL | SWT.H_SCROLL) {
+        scroll = new ThinScrolledComposite(parent, SWT.V_SCROLL | SWT.H_SCROLL) {
             @Override
             public Point computeSize(int widthHint, int heightHint, boolean changed) {
                 var preferred = super.computeSize(widthHint, heightHint, changed);
-                if (widthHint == SWT.DEFAULT) preferred.x = Math.min(preferred.x, 850);
-                if (heightHint == SWT.DEFAULT) preferred.y = Math.min(preferred.y, 600);
+                // Страница прокручивается сама. Большой preferred size заставляет
+                // PreferenceDialog добавлять ещё две системные полосы снаружи.
+                if (widthHint == SWT.DEFAULT) preferred.x = Math.min(preferred.x, 400);
+                if (heightHint == SWT.DEFAULT) preferred.y = Math.min(preferred.y, 300);
                 return preferred;
             }
         };
@@ -131,7 +132,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         Dialog.applyDialogFont(page);
         scroll.setContent(page);
         Runnable resize = () -> scroll.setMinSize(page.computeSize(
-                Math.max(650, scroll.getClientArea().width), SWT.DEFAULT));
+                Math.max(650, scroll.viewport().width), SWT.DEFAULT));
         scroll.addListener(SWT.Resize, event -> resize.run());
         resize.run();
         return scroll;
@@ -202,6 +203,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 + " «Restore Defaults» возвращает промпт по умолчанию.");
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).hint(300, systemPrompt.getLineHeight() * 4)
                 .applyTo(systemPrompt);
+        Scrolls.wrap(systemPrompt);
 
         label(group, "Лимит кода, символов:");
         contextLimit = new Text(group, SWT.BORDER);
@@ -298,7 +300,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
             } else {
                 showCheckResult("Моделей на сервере: " + ids.size() + ".");
                 // Диалог с поиском и прокруткой: меню с сотней моделей не помещалось на экран.
-                ElementListSelectionDialog dialog = new ElementListSelectionDialog(listModels.getShell(), new LabelProvider());
+                ElementListSelectionDialog dialog = new ElementListSelectionDialog(listModels.getShell(), new LabelProvider()) {
+                    @Override
+                    protected org.eclipse.ui.dialogs.FilteredList createFilteredList(Composite parent) {
+                        var list = super.createFilteredList(parent);
+                        Scrolls.installTables(list);
+                        return list;
+                    }
+                };
                 dialog.setTitle("Модель");
                 dialog.setMessage("Модели сервера (начните вводить имя для поиска):");
                 dialog.setElements(ids.toArray());
@@ -392,11 +401,12 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         Group group = group(page, "MCP-серверы", 2);
         GridDataFactory.fillDefaults().grab(true, true).applyTo(group);
 
-        serverViewer = CheckboxTableViewer.newCheckList(group, SWT.BORDER | SWT.FULL_SELECTION | SWT.SINGLE);
+        serverViewer = CheckboxTableViewer.newCheckList(group, SWT.BORDER | SWT.FULL_SELECTION | SWT.SINGLE | SWT.NO_SCROLL);
         Table table = serverViewer.getTable();
         table.setHeaderVisible(true);
         table.setLinesVisible(true);
         GridDataFactory.fillDefaults().grab(true, true).hint(SWT.DEFAULT, 120).applyTo(table);
+        Scrolls.wrap(table);
 
         column("Имя", 140, McpServer::name);
         column("Транспорт", 80, server -> server.transport().label());

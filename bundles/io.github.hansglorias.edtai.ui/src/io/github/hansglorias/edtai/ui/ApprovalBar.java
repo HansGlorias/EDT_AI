@@ -64,6 +64,7 @@ final class ApprovalBar {
         arguments = new Text(bar, SWT.MULTI | SWT.READ_ONLY | SWT.WRAP | SWT.V_SCROLL | SWT.BORDER);
         arguments.setFont(JFaceResources.getTextFont());
         GridDataFactory.fillDefaults().grab(true, false).hint(200, arguments.getLineHeight() * 3).applyTo(arguments);
+        Scrolls.wrap(arguments);
 
         Composite buttons = new Composite(bar, SWT.NONE);
         RowLayout row = new RowLayout(SWT.HORIZONTAL);
@@ -106,6 +107,7 @@ final class ApprovalBar {
         boolean empty = shown.isEmpty() || shown.matches("\\{\\s*}");
         arguments.setText(empty ? "" : shown.length() > MAX_ARGUMENTS ? shown.substring(0, MAX_ARGUMENTS) + "…" : shown);
         arguments.setVisible(!empty);
+        Scrolls.layoutControl(arguments).setVisible(!empty);
         ((GridData) arguments.getLayoutData()).exclude = empty;
         boolean focusHere = isInside(bar.getDisplay().getFocusControl(), bar.getParent());
         setVisible(true);

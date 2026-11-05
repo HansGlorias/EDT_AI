@@ -231,6 +231,8 @@ class ChatViewTest extends AbstractChatTest {
         StyledText history = view.history();
         waitUntil(() -> history.getTopPixel() > 0, () -> "лента не прокрутилась вниз");
         assertEquals(ThinScrollBar.WIDTH, view.scrollBar().control().getSize().x);
+        assertEquals(history.getDisplay().getSystemCursor(SWT.CURSOR_ARROW), view.scrollBar().control().getCursor(),
+                "ползунок не наследует текстовый курсор ленты");
         settle();
         Rectangle bottom = view.scrollBar().thumbBounds();
         assertTrue(bottom.y + bottom.height >= view.scrollBar().control().getSize().y - 2, "ползунок внизу: " + bottom);
@@ -253,6 +255,15 @@ class ChatViewTest extends AbstractChatTest {
         assertEquals(0, history.getTopPixel(), "щелчок и протяжка вверх — к началу");
         settle();
         assertEquals(0, view.scrollBar().thumbBounds().y);
+        assertTrue(view.jumpToBottom().getVisible(), "при чтении выше конца видна кнопка вниз");
+        Screenshots.render(view.control(), "chat-scrolled-up");
+        view.jumpToBottom().jump();
+        settle();
+        assertTrue(isLastLineVisible(view));
+        assertFalse(view.jumpToBottom().getVisible());
+        view.newChatForTest();
+        settle();
+        assertFalse(view.jumpToBottom().getVisible(), "в пустом чате кнопка скрыта");
     }
 
     private static boolean isLastLineVisible(ChatView view) {

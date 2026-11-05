@@ -11,10 +11,7 @@ import java.util.function.Consumer;
 
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
-import org.eclipse.jface.layout.TableColumnLayout;
 import org.eclipse.jface.resource.JFaceResources;
-import org.eclipse.jface.viewers.ColumnPixelData;
-import org.eclipse.jface.viewers.ColumnWeightData;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
@@ -22,6 +19,7 @@ import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
@@ -49,7 +47,8 @@ final class ChatHistoryPanel {
     static final String ANSWERING = "отвечает";
     /** Точка «ответ готов» у чата, который ответил в фоне. */
     static final String DONE = "готово";
-    private static final int DOT_SIZE = 12;
+    private static final int DOT_SIZE = 14;
+    private static final int DOT_SLOT = 24;
     private static final DateTimeFormatter TODAY = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter EARLIER = DateTimeFormatter.ofPattern("dd.MM");
     /** Пауза после набора в поиске: каждый поиск читает все диалоги. */
@@ -85,6 +84,7 @@ final class ChatHistoryPanel {
     /** Точки состояния у названия: отвечает — жёлтая, ответил, пока чат не открывали, — зелёная. */
     private Image answeringDot;
     private Image doneDot;
+    private Image emptyDot;
     private int searchGeneration;
 
     ChatHistoryPanel(Composite parent, Callbacks callbacks) {
@@ -126,24 +126,28 @@ final class ChatHistoryPanel {
         GridDataFactory.fillDefaults().grab(true, false).indent(4, 0).exclude(true).applyTo(nothing);
         nothing.setVisible(false);
 
-        // Таблица — единственный ребёнок своего контейнера: так TableColumnLayout сам делит ширину
-        // и не даёт горизонтальной прокрутки (на Windows иначе колонки «плывут»).
         Composite holder = new Composite(panel, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, true).applyTo(holder);
-        TableColumnLayout columns = new TableColumnLayout();
-        holder.setLayout(columns);
-        table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL | SWT.BORDER);
+        holder.setLayout(new FillLayout());
+        table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.NO_SCROLL);
         title = new TableColumn(table, SWT.NONE);
         time = new TableColumn(table, SWT.RIGHT);
-        columns.setColumnData(title, new ColumnWeightData(100, 60));
         GC gc = new GC(table);
         try {
             // Отступы ячейки на Windows больше, чем кажется: с запасом, иначе время обрезается до «19:…».
             int text = Math.max(gc.textExtent("00:00").x, gc.textExtent("00.00").x);
-            columns.setColumnData(time, new ColumnPixelData(text + 3 * gc.textExtent("0").x + 12));
+            time.setWidth(text + 3 * gc.textExtent("0").x + 12);
         } finally {
             gc.dispose();
         }
+        Scrolls.wrap(table);
+        table.addListener(SWT.Resize, event -> title.setWidth(Math.max(0, table.getClientArea().width - time.getWidth())));
+        table.addListener(SWT.MeasureItem, event -> event.height = Math.max(event.height, 30));
+        panel.addListener(SWT.Dispose, event -> {
+            if (answeringDot != null) answeringDot.dispose();
+            if (doneDot != null) doneDot.dispose();
+            if (emptyDot != null) emptyDot.dispose();
+        });
         table.addListener(SWT.Selection, event -> {
             String id = selected();
             if (!filling && id != null) {
@@ -200,7 +204,7 @@ final class ChatHistoryPanel {
                 LocalDateTime updated = LocalDateTime.ofInstant(entry.updated(), ZoneId.systemDefault());
                 TableItem item = new TableItem(table, SWT.NONE);
                 item.setText(new String[] { entry.title(), (updated.toLocalDate().equals(today) ? TODAY : EARLIER).format(updated) });
-                item.setImage(0, answering.contains(entry.id()) ? dot(true) : unread.contains(entry.id()) ? dot(false) : null);
+                item.setImage(0, dot(answering.contains(entry.id()) ? Boolean.TRUE : unread.contains(entry.id()) ? Boolean.FALSE : null));
                 item.setData(answering.contains(entry.id()) ? ANSWERING : unread.contains(entry.id()) ? DONE : null);
                 ids.add(entry.id());
                 if (entry.id().equals(current)) {
@@ -219,35 +223,31 @@ final class ChatHistoryPanel {
     }
 
     /** Круглая точка со сглаживанием: прозрачный фон — и в светлой, и в тёмной теме. */
-    private Image dot(boolean answering) {
-        Image image = answering ? answeringDot : doneDot;
+    private Image dot(Boolean answering) {
+        Image image = answering == null ? emptyDot : answering ? answeringDot : doneDot;
         if (image == null) {
-            RGB color = answering ? new RGB(0xE3, 0xA0, 0x08) : new RGB(0x2D, 0xA4, 0x4E);
+            RGB color = Boolean.TRUE.equals(answering) ? new RGB(0xD9, 0x97, 0x18) : new RGB(0x2D, 0xA4, 0x4E);
             int size = DOT_SIZE;
-            ImageData data = new ImageData(size, size, 24, new PaletteData(0xFF0000, 0xFF00, 0xFF));
+            ImageData data = new ImageData(DOT_SLOT, size, 24, new PaletteData(0xFF0000, 0xFF00, 0xFF));
             double center = (size - 1) / 2.0;
-            double radius = size * 0.34;
             for (int y = 0; y < size; y++) {
-                for (int x = 0; x < size; x++) {
+                for (int x = 0; x < DOT_SLOT; x++) {
                     data.setPixel(x, y, data.palette.getPixel(color));
                     double distance = Math.hypot(x - center, y - center);
-                    data.setAlpha(x, y, (int) Math.round(255 * Math.max(0, Math.min(1, radius + 0.5 - distance))));
+                    double halo = Math.max(0, Math.min(1, 6.5 - distance)) * 0.14;
+                    double ink = Boolean.TRUE.equals(answering) ? Math.max(0, 1 - Math.abs(distance - 3.6))
+                            : Math.max(0, Math.min(1, 3.8 - distance));
+                    data.setAlpha(x, y, answering == null ? 0 : (int) Math.round(255 * Math.max(halo, ink)));
                 }
             }
             image = new Image(panel.getDisplay(), data);
-            if (answering) {
+            if (answering == null) {
+                emptyDot = image;
+            } else if (answering) {
                 answeringDot = image;
             } else {
                 doneDot = image;
             }
-            panel.addListener(SWT.Dispose, event -> {
-                if (answeringDot != null) {
-                    answeringDot.dispose();
-                }
-                if (doneDot != null) {
-                    doneDot.dispose();
-                }
-            });
         }
         return image;
     }

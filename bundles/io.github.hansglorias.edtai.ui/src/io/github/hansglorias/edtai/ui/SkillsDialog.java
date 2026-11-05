@@ -72,9 +72,10 @@ class SkillsDialog extends TitleAreaDialog {
         GridDataFactory.fillDefaults().grab(true, true).applyTo(body);
         GridLayoutFactory.swtDefaults().margins(10, 10).spacing(0, 8).applyTo(body);
 
-        table = new Table(body, SWT.CHECK | SWT.BORDER | SWT.FULL_SELECTION | SWT.SINGLE | SWT.V_SCROLL);
+        table = new Table(body, SWT.CHECK | SWT.BORDER | SWT.FULL_SELECTION | SWT.SINGLE | SWT.NO_SCROLL);
         table.setHeaderVisible(true);
         GridDataFactory.fillDefaults().grab(true, true).hint(760, 300).applyTo(table);
+        Scrolls.wrap(table);
         column("Скилл", 170);
         column("Откуда", 90);
         column("Когда применять", 480);
@@ -99,6 +100,7 @@ class SkillsDialog extends TitleAreaDialog {
 
         details = new Text(body, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.READ_ONLY);
         GridDataFactory.fillDefaults().grab(true, false).hint(760, 180).applyTo(details);
+        Scrolls.wrap(details);
         if (!skills.isEmpty()) {
             table.select(0);
             show(skills.get(0));

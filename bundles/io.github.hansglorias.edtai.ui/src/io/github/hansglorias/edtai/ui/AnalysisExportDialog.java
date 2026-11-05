@@ -62,6 +62,7 @@ final class AnalysisExportDialog extends TitleAreaDialog {
         Text text = new Text(body, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         text.setTextLimit(4000);
         GridDataFactory.fillDefaults().grab(true, true).hint(540, 50).applyTo(text);
+        Scrolls.wrap(text);
         return text;
     }
 
