@@ -40,33 +40,33 @@ class ChatStreamingTest extends AbstractChatTest {
         view.refresh();
         int at = view.history().getText().indexOf("Начало ответа");
         view.history().setSelection(at, at + "Начало".length());
-        ContextGauge during = view.contextRing().gauge();
-        assertNotNull(during, "кольцо окна видно уже во время ответа");
+        ContextGauge during = view.contextUsage().gauge();
+        assertNotNull(during, "процент окна доступен уже во время ответа");
         assertTrue(during.used() > 0 && during.estimated(), during.toString());
-        assertTrue(view.contextRing().getToolTipText().startsWith("Контекст ≈"), view.contextRing().getToolTipText());
+        assertTrue(view.contextUsage().getToolTipText().startsWith("Контекст ≈"), view.contextUsage().getToolTipText());
 
         release.countDown();
         waitUntil(() -> !view.session().isBusy() && view.history().getText().contains("Абзац 59"), () -> view.history().getText());
         view.refresh();
         settle();
-        ContextGauge after = view.contextRing().gauge();
-        assertTrue(after.used() > during.used(), "кольцо растёт вместе с ответом: " + during + " → " + after);
+        ContextGauge after = view.contextUsage().gauge();
+        assertTrue(after.used() > during.used(), "занятость окна растёт вместе с ответом: " + during + " → " + after);
         assertEquals(after.window(), during.window());
 
         assertEquals("Начало", view.history().getSelectionText(), "начало ответа не переписывалось — выделение в нём цело");
         assertTrue(view.history().getText().contains("Абзац 59: текст"), view.history().getText());
         Screenshots.capture(view.control(), "long-answer-streamed");
-        Screenshots.capture(view.contextRing().getParent(), "context-ring");
+        Screenshots.capture(view.contextUsage().getParent(), "context-usage");
     }
 
-    /** Чат открыли заново (как после перезапуска EDT): кольцо — окно последнего запроса, а не одна история. */
+    /** Чат открыли заново (как после перезапуска EDT): счётчик — окно последнего запроса, а не одна история. */
     @Test
     void reopenedChatShowsLastRequestWindow() throws Exception {
         answering(List.of("Ответ."));
         ChatView view = showView();
         ask(view, "Вопрос");
         settle();
-        ContextGauge answered = view.contextRing().gauge();
+        ContextGauge answered = view.contextUsage().gauge();
         String id = view.chats().list().get(0).id();
         assertTrue(answered.used() > view.session().estimateTokens(),
                 "запрос больше истории: в нём ещё системный промпт и инструменты");
@@ -77,12 +77,12 @@ class ChatStreamingTest extends AbstractChatTest {
         settle();
 
         assertNull(view.session().usage(), "открыт заново: данных об ответе в памяти нет");
-        assertEquals(answered.used(), view.contextRing().gauge().used());
+        assertEquals(answered.used(), view.contextUsage().gauge().used());
     }
 
-    /** /compact: пока сжимается — бегущая дуга, потом кольцо сразу меньше и плавно доходит до нового значения. */
+    /** /compact обновляет статичный счётчик контекста, без крутилки в нижней панели. */
     @Test
-    void compactionShrinksRingWithAnimation() throws Exception {
+    void compactionUpdatesStaticContextGauge() throws Exception {
         CountDownLatch release = new CountDownLatch(1);
         server = FakeModelServer.http().handler((request, response) -> {
             if (request.body().contains("Сожми переписку")) {
@@ -96,21 +96,19 @@ class ChatStreamingTest extends AbstractChatTest {
         ChatView view = showView();
         ask(view, "Вопрос");
         settle();
-        ContextGauge before = view.contextRing().gauge();
+        ContextGauge before = view.contextUsage().gauge();
 
         view.input().setText("/compact");
         view.send();
-        waitUntil(() -> view.contextRing().isCompacting(), () -> view.status().getText());
-        assertTrue(view.contextRing().isAnimating(), "во время сжатия по кольцу бежит дуга");
-        Screenshots.capture(view.contextRing().getParent(), "context-ring-compacting");
+        waitUntil(() -> view.contextUsage().isCompacting(), () -> view.status().getText());
+        assertTrue(view.contextUsage().getToolTipText().contains("История сжимается"));
+        Screenshots.capture(view.contextUsage().getParent(), "context-usage-compacting");
 
         release.countDown();
-        waitUntil(() -> !view.session().isBusy() && !view.contextRing().isCompacting(), () -> view.status().getText());
-        ContextGauge after = view.contextRing().gauge();
+        waitUntil(() -> !view.session().isBusy() && !view.contextUsage().isCompacting(), () -> view.status().getText());
+        ContextGauge after = view.contextUsage().gauge();
         assertTrue(after.used() < before.used(), "сразу после сжатия — меньше: " + before + " → " + after);
-        waitUntil(() -> !view.contextRing().isAnimating());
-        assertEquals(after.ratio(), view.contextRing().shownRatio(), 0.001, "анимация дошла до нового значения");
-        // После уведомления «История сжата» — то же число, что у кольца, а не оценка одной истории.
+        // После уведомления «История сжата» — то же число, что у процента, а не оценка одной истории.
         waitUntil(() -> view.status().getText().contains(TokenUsage.describeEstimate(after.used(), after.window())),
                 () -> view.status().getText());
     }

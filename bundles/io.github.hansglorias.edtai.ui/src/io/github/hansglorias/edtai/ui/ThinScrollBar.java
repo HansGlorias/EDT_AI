@@ -32,6 +32,7 @@ final class ThinScrollBar {
     /** Где внутри ползунка взяли мышью; -1 — не тянем. */
     private int grab = -1;
     private Rectangle thumb = new Rectangle(0, 0, 0, 0);
+    private Runnable scrolled = () -> { };
 
     ThinScrollBar(StyledText text) {
         this.text = text;
@@ -50,6 +51,9 @@ final class ThinScrollBar {
         // Лента перерисовывается при прокрутке и при каждом новом тексте — тогда и пересчитываем ползунок.
         text.addListener(SWT.Paint, event -> update());
     }
+
+    /** Уведомление только о прокрутке пользователем, не из Paint. */
+    void onScroll(Runnable listener) { scrolled = listener; }
 
     /** Пересчитывает ползунок: высота ленты или прокрутка изменились. */
     void update() {
@@ -127,6 +131,7 @@ final class ThinScrollBar {
         int top = (int) ((long) Math.max(0, Math.min(track, y - grab)) * range / track);
         text.setTopPixel(top);
         update();
+        scrolled.run();
     }
 
     private void wheel(Event event) {
@@ -137,6 +142,7 @@ final class ThinScrollBar {
         text.setTopPixel(text.getTopPixel() - Integer.signum(event.count) * lines * text.getLineHeight());
         event.doit = false;
         update();
+        scrolled.run();
     }
 
     private void setHover(boolean value) {
