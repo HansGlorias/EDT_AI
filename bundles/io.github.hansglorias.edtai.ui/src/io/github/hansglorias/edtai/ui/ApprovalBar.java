@@ -64,6 +64,7 @@ final class ApprovalBar {
         arguments = new Text(bar, SWT.MULTI | SWT.READ_ONLY | SWT.WRAP | SWT.V_SCROLL | SWT.BORDER);
         arguments.setFont(JFaceResources.getTextFont());
         GridDataFactory.fillDefaults().grab(true, false).hint(200, arguments.getLineHeight() * 3).applyTo(arguments);
+        ScrollFrame.wrap(arguments);
 
         Composite buttons = new Composite(bar, SWT.NONE);
         RowLayout row = new RowLayout(SWT.HORIZONTAL);

@@ -111,7 +111,10 @@ class Chip extends Canvas {
         RGB textColor = !isEnabled() ? mix(back, fore, 0.3) : color != null ? color : mix(back, fore, 0.75);
         gc.setForeground(new Color(textColor));
         if (iconOnly()) {
+            int alpha = gc.getAlpha();
+            if (!isEnabled()) gc.setAlpha(90);
             paintIcon(gc, size);
+            gc.setAlpha(alpha);
             return;
         }
         gc.setFont(font);
@@ -120,7 +123,7 @@ class Chip extends Canvas {
         gc.drawText(text, PAD_X, y, true);
         if (arrow) {
             int x = PAD_X + extent.x + 3;
-            int mid = size.y / 2;
+            int mid = (size.y - 1) / 2;
             gc.setBackground(new Color(textColor));
             gc.fillPolygon(new int[] { x, mid - 1, x + ARROW - 1, mid - 1, x + (ARROW - 1) / 2, mid + 2 });
         }
@@ -131,13 +134,7 @@ class Chip extends Canvas {
     }
 
     protected void paintIcon(GC gc, Point size) {
-        int half = Math.max(3, size.y / 4);
-        int cx = size.x / 2;
-        int cy = size.y / 2;
-        gc.setLineWidth(Math.max(1, size.y / 12));
-        gc.setLineCap(SWT.CAP_ROUND);
-        gc.drawLine(cx - half, cy, cx + half, cy);
-        gc.drawLine(cx, cy - half, cx, cy + half);
+        Icons.paint(gc, "plus", size);
     }
 
     private static RGB mix(RGB from, RGB to, double share) {

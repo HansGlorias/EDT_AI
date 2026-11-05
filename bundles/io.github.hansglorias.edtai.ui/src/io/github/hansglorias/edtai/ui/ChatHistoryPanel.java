@@ -17,6 +17,11 @@ import org.eclipse.jface.viewers.ColumnPixelData;
 import org.eclipse.jface.viewers.ColumnWeightData;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Font;
+import org.eclipse.swt.graphics.FontData;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
@@ -79,6 +84,8 @@ final class ChatHistoryPanel {
     private final Table table;
     private final TableColumn title;
     private final TableColumn time;
+    private final Font dateFont;
+    private TableItem hovered;
     private final Callbacks callbacks;
     private final List<String> ids = new ArrayList<>();
     private boolean filling;
@@ -90,7 +97,7 @@ final class ChatHistoryPanel {
     ChatHistoryPanel(Composite parent, Callbacks callbacks) {
         this.callbacks = callbacks;
         panel = new Composite(parent, SWT.NONE);
-        GridLayoutFactory.fillDefaults().spacing(0, 4).applyTo(panel);
+        GridLayoutFactory.fillDefaults().margins(8, 6).spacing(0, 6).applyTo(panel);
         Composite top = new Composite(panel, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(top);
         GridLayoutFactory.fillDefaults().numColumns(2).applyTo(top);
@@ -132,15 +139,30 @@ final class ChatHistoryPanel {
         GridDataFactory.fillDefaults().grab(true, true).applyTo(holder);
         TableColumnLayout columns = new TableColumnLayout();
         holder.setLayout(columns);
-        table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL | SWT.BORDER);
+        table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.NO_SCROLL);
+        FontData[] fontData = JFaceResources.getDialogFont().getFontData();
+        for (FontData data : fontData) { data.setHeight(Math.max(9, data.getHeight() - 1)); data.setStyle(SWT.NORMAL); }
+        Font font = new Font(table.getDisplay(), fontData);
+        table.setFont(font);
+        FontData[] small = font.getFontData();
+        for (FontData data : small) data.setHeight(Math.max(8, data.getHeight() - 1));
+        dateFont = new Font(table.getDisplay(), small);
+        table.addListener(SWT.Dispose, event -> { font.dispose(); dateFont.dispose(); });
+        table.setCursor(table.getDisplay().getSystemCursor(SWT.CURSOR_ARROW));
+        table.addListener(SWT.MeasureItem, event -> event.height = Math.max(24, event.gc.textExtent("Аа").y + 8));
+        table.addListener(SWT.EraseItem, this::eraseRow);
+        table.addListener(SWT.PaintItem, this::paintRow);
+        table.addListener(SWT.MouseMove, event -> hover(table.getItem(new Point(event.x, event.y))));
+        table.addListener(SWT.MouseExit, event -> hover(null));
         title = new TableColumn(table, SWT.NONE);
         time = new TableColumn(table, SWT.RIGHT);
-        columns.setColumnData(title, new ColumnWeightData(100, 60));
+        columns.setColumnData(title, new ColumnWeightData(100, 32));
         GC gc = new GC(table);
         try {
-            // Отступы ячейки на Windows больше, чем кажется: с запасом, иначе время обрезается до «19:…».
+            gc.setFont(dateFont);
             int text = Math.max(gc.textExtent("00:00").x, gc.textExtent("00.00").x);
-            columns.setColumnData(time, new ColumnPixelData(text + 3 * gc.textExtent("0").x + 12));
+            columns.setColumnData(time, new ColumnPixelData(text + 20));
+            ScrollFrame.columns(table, 32 + text + 20);
         } finally {
             gc.dispose();
         }
@@ -170,6 +192,80 @@ final class ChatHistoryPanel {
         table.setMenu(menu);
     }
 
+    private void hover(TableItem item) {
+        if (hovered == item) return;
+        TableItem previous = hovered;
+        hovered = item;
+        for (TableItem row : new TableItem[] { previous, item }) {
+            if (row == null || row.isDisposed()) continue;
+            Rectangle bounds = row.getBounds(0);
+            table.redraw(0, bounds.y, table.getClientArea().width, table.getItemHeight(), false);
+        }
+    }
+
+    private void eraseRow(Event event) {
+        event.detail &= ~(SWT.SELECTED | SWT.HOT | SWT.FOCUSED | SWT.FOREGROUND | SWT.BACKGROUND);
+        TableItem item = (TableItem) event.item;
+        GC gc = event.gc;
+        gc.setBackground(table.getBackground());
+        gc.fillRectangle(event.x, event.y, event.width, event.height);
+        boolean selected = table.indexOf(item) == table.getSelectionIndex();
+        if (!selected && item != hovered) return;
+        Color fill = new Color(blend(table.getBackground().getRGB(), table.getForeground().getRGB(), selected ? 0.09 : 0.045));
+        try {
+            gc.setAntialias(SWT.ON);
+            gc.setBackground(fill);
+            gc.fillRoundRectangle(6, event.y + 2, Math.max(0, table.getClientArea().width - 12),
+                    Math.max(0, table.getItemHeight() - 4), 8, 8);
+        } finally { fill.dispose(); }
+    }
+
+    private void paintRow(Event event) {
+        TableItem item = (TableItem) event.item;
+        GC gc = event.gc;
+        Font previousFont = gc.getFont();
+        Color previousColor = gc.getForeground();
+        Color color = new Color(blend(table.getBackground().getRGB(), table.getForeground().getRGB(), event.index == 0 ? 0.9 : 0.55));
+        try {
+            gc.setForeground(color);
+            gc.setFont(event.index == 0 ? table.getFont() : dateFont);
+            int height = table.getItemHeight();
+            String text = item.getText(event.index);
+            int x;
+            if (event.index == 0) {
+                Image image = item.getImage(0);
+                if (image != null) gc.drawImage(image, 14, event.y + (height - DOT_SIZE) / 2);
+                x = 14 + DOT_SIZE + 4;
+                text = shorten(gc, text, Math.max(0, title.getWidth() - x - 6));
+            } else {
+                x = table.getClientArea().width - 14 - gc.textExtent(text).x;
+            }
+            gc.drawText(text, x, event.y + (height - gc.textExtent(text).y) / 2, true);
+        } finally {
+            gc.setFont(previousFont);
+            gc.setForeground(previousColor);
+            color.dispose();
+        }
+    }
+
+    private static String shorten(GC gc, String text, int width) {
+        if (gc.textExtent(text).x <= width) return text;
+        if (gc.textExtent("…").x > width) return "";
+        int low = 0, high = text.codePointCount(0, text.length());
+        while (low < high) {
+            int middle = (low + high + 1) / 2;
+            String part = text.substring(0, text.offsetByCodePoints(0, middle)) + "…";
+            if (gc.textExtent(part).x <= width) low = middle; else high = middle - 1;
+        }
+        return text.substring(0, text.offsetByCodePoints(0, low)) + "…";
+    }
+
+    private static RGB blend(RGB from, RGB to, double share) {
+        return new RGB((int) Math.round(from.red + (to.red - from.red) * share),
+                (int) Math.round(from.green + (to.green - from.green) * share),
+                (int) Math.round(from.blue + (to.blue - from.blue) * share));
+    }
+
     private MenuItem item(Menu menu, String text, Consumer<String> action) {
         MenuItem item = new MenuItem(menu, SWT.PUSH);
         item.setText(text);
@@ -191,6 +287,8 @@ final class ChatHistoryPanel {
      * те, что сейчас отвечают, {@code unread} — ответили в фоне, ещё не открыты.
      */
     void show(List<ChatStore.Entry> entries, String current, Set<String> answering, Set<String> unread) {
+        hovered = null;
+        int top = table.getTopIndex();
         filling = true;
         try {
             table.removeAll();
@@ -210,6 +308,8 @@ final class ChatHistoryPanel {
         } finally {
             filling = false;
         }
+        // Только после замены данных, никогда из Paint: GTK может сохранить старый верхний индекс.
+        if (table.getItemCount() > 0) table.setTopIndex(Math.min(top, table.getItemCount() - 1));
         boolean empty = entries.isEmpty() && !query().isBlank();
         if (nothing.getVisible() != empty) {
             nothing.setVisible(empty);
@@ -226,12 +326,15 @@ final class ChatHistoryPanel {
             int size = DOT_SIZE;
             ImageData data = new ImageData(size, size, 24, new PaletteData(0xFF0000, 0xFF00, 0xFF));
             double center = (size - 1) / 2.0;
-            double radius = size * 0.34;
+            double radius = size * 0.25;
             for (int y = 0; y < size; y++) {
                 for (int x = 0; x < size; x++) {
-                    data.setPixel(x, y, data.palette.getPixel(color));
+                    double light = Math.max(0, 0.2 - (y - center) / size * 0.35);
+                    data.setPixel(x, y, data.palette.getPixel(blend(color, new RGB(255, 255, 255), light)));
                     double distance = Math.hypot(x - center, y - center);
-                    data.setAlpha(x, y, (int) Math.round(255 * Math.max(0, Math.min(1, radius + 0.5 - distance))));
+                    double core = Math.max(0, Math.min(1, radius + 0.5 - distance));
+                    double halo = 0.12 * Math.max(0, 1 - distance / (size * 0.48));
+                    data.setAlpha(x, y, (int) Math.round(255 * Math.max(core, halo)));
                 }
             }
             image = new Image(panel.getDisplay(), data);

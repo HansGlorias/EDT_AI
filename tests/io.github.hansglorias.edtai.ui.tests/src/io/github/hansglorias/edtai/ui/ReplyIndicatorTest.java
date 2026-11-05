@@ -29,6 +29,26 @@ import org.eclipse.ui.IWorkbenchPage;
 import org.junit.jupiter.api.Test;
 
 class ReplyIndicatorTest extends AbstractChatTest {
+    @Test void coreAndFrameHaveTheSamePixelCenter() {
+        Image image = new Image(page.getWorkbenchWindow().getShell().getDisplay(), 14, 14);
+        GC gc = new GC(image);
+        try {
+            gc.setBackground(gc.getDevice().getSystemColor(SWT.COLOR_WHITE));
+            gc.fillRectangle(0, 0, 14, 14);
+            ReplyIndicator.paintLogo(gc, new Rectangle(0, 0, 14, 14), 0);
+            ImageData data = image.getImageData();
+            for (boolean core : new boolean[] { false, true }) {
+                double weight = 0, centerX = 0, centerY = 0;
+                for (int y = 0; y < 14; y++) for (int x = 0; x < 14; x++) {
+                    if (core != (x >= 3 && x < 11 && y >= 3 && y < 11)) continue;
+                    int ink = 255 - data.palette.getRGB(data.getPixel(x, y)).red;
+                    weight += ink; centerX += x * ink; centerY += y * ink;
+                }
+                assertEquals(6.5, centerX / weight, 0.2, "центр X, ядро=" + core);
+                assertEquals(6.5, centerY / weight, 0.2, "центр Y, ядро=" + core);
+            }
+        } finally { gc.dispose(); image.dispose(); }
+    }
     @Test void framesDoNotRepaintOrChangeTranscriptAndStopOffscreen() throws Exception {
         Shell shell = new Shell(page.getWorkbenchWindow().getShell(), SWT.SHELL_TRIM);
         try {
@@ -245,7 +265,11 @@ class ReplyIndicatorTest extends AbstractChatTest {
                             : new org.eclipse.swt.graphics.RGB(30, 32, 36);
                     assertNotEquals(background, data.palette.getRGB(data.getPixel(x + 40, 40)), "ядро не исчезает");
                     assertNotEquals(background, data.palette.getRGB(data.getPixel(x + 40, 25)), "верх ромба неподвижен");
-                    assertEquals(background, data.palette.getRGB(data.getPixel(x + 51, 29)), "ромб не вращается");
+                    var outside = data.palette.getRGB(data.getPixel(x + 51, 29));
+                    assertTrue(Math.abs(outside.red - background.red) <= 8
+                            && Math.abs(outside.green - background.green) <= 8
+                            && Math.abs(outside.blue - background.blue) <= 8,
+                            "ромб не вращается (учитываем сглаживание увеличенного PNG): " + outside);
                     for (int y = 8; y < 26; y++) for (int at = x + 8; at < x + 26; at++) {
                         assertEquals(first.getPixel(at, y), data.getPixel(at, y), "углы неподвижны");
                     }

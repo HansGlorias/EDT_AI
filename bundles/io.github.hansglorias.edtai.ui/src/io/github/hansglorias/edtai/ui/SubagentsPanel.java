@@ -11,7 +11,6 @@ import org.eclipse.jface.layout.GridLayoutFactory;
 import org.eclipse.jface.preference.JFacePreferences;
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
@@ -46,7 +45,7 @@ final class SubagentsPanel {
     private final Composite header;
     private final Chip toggle;
     private final Label count;
-    private final ScrolledComposite scroll;
+    private final ScrollArea scroll;
     private final Composite rows;
     private final Runnable changed;
     /** Что показано: при тех же запусках меняются только метрики, без пересоздания строк. */
@@ -82,7 +81,7 @@ final class SubagentsPanel {
         count.setForeground(meta(bar));
         GridDataFactory.fillDefaults().grab(true, false).exclude(true).applyTo(count);
         count.setVisible(false);
-        scroll = new ScrolledComposite(bar, SWT.V_SCROLL);
+        scroll = new ScrollArea(bar, SWT.V_SCROLL);
         GridDataFactory.fillDefaults().grab(true, true).applyTo(scroll);
         scroll.setExpandHorizontal(true);
         scroll.setExpandVertical(true);
@@ -252,6 +251,7 @@ final class SubagentsPanel {
             report.setText(run.report());
             int lines = (int) Math.min(8, Math.max(2, run.report().lines().count()));
             GridDataFactory.fillDefaults().grab(true, false).hint(100, report.getLineHeight() * lines).applyTo(report);
+            ScrollFrame.wrap(report);
         }
     }
 
@@ -279,34 +279,13 @@ final class SubagentsPanel {
     private static void paintState(GC gc, Canvas canvas, Subagents.State state) {
         gc.setBackground(canvas.getParent().getBackground());
         gc.fillRectangle(canvas.getClientArea());
-        gc.setAntialias(SWT.ON);
-        Color color = new Color(switch (state) {
-            case RUNNING -> new RGB(52, 120, 220);
-            case DONE -> new RGB(46, 160, 67);
-            case PARTIAL -> new RGB(214, 140, 20);
-            case FAILED -> new RGB(210, 60, 50);
-            case STOPPED -> new RGB(140, 140, 140);
-        });
-        int size = ICON - 2;
-        gc.setLineWidth(2);
-        if (state == Subagents.State.RUNNING) {
-            gc.setForeground(color);
-            gc.drawOval(1, 1, size - 1, size - 1);
-            gc.setBackground(color);
-            gc.fillOval(size / 2 - 1, size / 2 - 1, 4, 4);
-            return;
-        }
-        gc.setBackground(color);
-        gc.fillOval(0, 0, size + 1, size + 1);
-        gc.setForeground(canvas.getDisplay().getSystemColor(SWT.COLOR_WHITE));
-        switch (state) {
-            case DONE -> gc.drawPolyline(new int[] { 3, 7, 6, 10, 11, 4 });
-            case PARTIAL -> gc.drawLine(3, 7, 10, 7);
-            default -> {
-                gc.drawLine(4, 4, 9, 9);
-                gc.drawLine(9, 4, 4, 9);
-            }
-        }
+        Icons.paint(gc, switch (state) {
+            case RUNNING -> "edtai";
+            case DONE -> Icons.STATUS_OK;
+            case PARTIAL -> "review_warning";
+            case FAILED -> Icons.STATUS_ERROR;
+            case STOPPED -> Icons.STATUS_OFF;
+        }, canvas.getSize());
     }
 
     private static Color meta(Control control) {
@@ -334,7 +313,7 @@ final class SubagentsPanel {
 
     private void resize() {
         if (scroll.isDisposed() || collapsed) return;
-        int height = rows.computeSize(Math.max(1, scroll.getClientArea().width), SWT.DEFAULT).y;
+        int height = rows.computeSize(Math.max(1, scroll.viewport().width), SWT.DEFAULT).y;
         if (scroll.getMinHeight() != height) scroll.setMinHeight(height);
     }
 

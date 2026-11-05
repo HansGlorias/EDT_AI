@@ -22,7 +22,7 @@ class GenerateIcons {
     private static final Color INFO = new Color(0x518DCE);
     private static final List<String> NAMES = List.of("edtai", "history", "new_chat", "settings", "attach",
             "file", "copy", "retry", "edit", "auto", "read_only", "status_ok", "status_error", "status_off",
-            "review", "review_error", "review_warning", "review_info");
+            "review", "review_error", "review_warning", "review_info", "edtai_frame", "edtai_core", "plus", "send", "stop");
 
     public static void main(String[] args) throws Exception {
         Path directory = Path.of("bundles/io.github.hansglorias.edtai.ui/icons");
@@ -70,13 +70,16 @@ class GenerateIcons {
         g.setStroke(new BasicStroke(1.35f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.setColor(INK);
         switch (name) {
-            case "edtai" -> {
+            case "plus" -> { path(g, 8, 3.5, 8, 12.5); path(g, 3.5, 8, 12.5, 8); }
+            case "send" -> { path(g, 8, 12, 8, 4); path(g, 4, 8, 8, 4, 12, 8); }
+            case "stop" -> g.fill(new RoundRectangle2D.Double(4, 4, 8, 8, 1.5, 1.5));
+            case "edtai", "edtai_frame", "edtai_core" -> {
                 g.setColor(BRAND);
-                frame(g);
+                if (!name.equals("edtai_core")) frame(g);
                 Path2D core = new Path2D.Double();
                 core.moveTo(8, 4.5); core.lineTo(11.5, 8); core.lineTo(8, 11.5);
                 core.lineTo(4.5, 8); core.closePath();
-                g.fill(core);
+                if (!name.equals("edtai_frame")) g.fill(core);
             }
             case "history" -> {
                 g.draw(new RoundRectangle2D.Double(1.8, 2, 12.4, 12, 2.6, 2.6));
@@ -155,6 +158,15 @@ class GenerateIcons {
         BufferedImage result = new BufferedImage(16 * scale, 16 * scale, BufferedImage.TYPE_INT_ARGB);
         g = result.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        // Центрируем видимый рисунок, а не только квадрат PNG. Одинаково для 1x и 2x.
+        int left = source.getWidth(), top = source.getHeight(), right = -1, bottom = -1;
+        for (int y = 0; y < source.getHeight(); y++) for (int x = 0; x < source.getWidth(); x++) {
+            if ((source.getRGB(x, y) >>> 24) <= 12) continue;
+            left = Math.min(left, x); right = Math.max(right, x);
+            top = Math.min(top, y); bottom = Math.max(bottom, y);
+        }
+        g.translate((source.getWidth() - 1 - left - right) / (2.0 * sample),
+                (source.getHeight() - 1 - top - bottom) / (2.0 * sample));
         g.drawImage(source, 0, 0, result.getWidth(), result.getHeight(), null);
         g.dispose();
         return result;
