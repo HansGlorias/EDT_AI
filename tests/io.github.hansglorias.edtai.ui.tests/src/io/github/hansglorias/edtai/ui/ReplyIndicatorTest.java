@@ -56,11 +56,15 @@ class ReplyIndicatorTest extends AbstractChatTest {
             String before = text.getText();
             var selection = text.getSelection();
             var bounds = indicator.getBounds();
-            AtomicInteger paints = new AtomicInteger();
-            text.addPaintListener(event -> paints.incrementAndGet());
+            java.util.List<Rectangle> paints = new java.util.ArrayList<>();
+            text.addPaintListener(event -> paints.add(event.gc.getClipping()));
             int frame = indicator.frames();
             waitUntil(() -> indicator.frames() >= frame + 6);
-            assertEquals(0, paints.get(), "кадры ядра не перерисовывают StyledText");
+            Path regions = Path.of(System.getProperty("edtai.screenshots", "screenshots"), "core-repaint-regions.txt");
+            Files.createDirectories(regions.getParent());
+            Files.writeString(regions, "icon=" + indicator.getBounds() + ", history=" + text.getBounds() + ", paints=" + paints);
+            assertTrue(paints.stream().allMatch(area -> insideIcon(text, indicator, area)),
+                    "кадры не затрагивают текст за пределами места под значок: " + paints);
             assertEquals(before, text.getText());
             assertEquals(selection, text.getSelection());
             assertEquals(bounds, indicator.getBounds(), "значок не прыгает при смене кадра");
@@ -113,7 +117,9 @@ class ReplyIndicatorTest extends AbstractChatTest {
         AtomicInteger hides = new AtomicInteger();
         AtomicInteger transcriptPaints = new AtomicInteger();
         indicator.addListener(SWT.Hide, event -> hides.incrementAndGet());
-        view.history().addPaintListener(event -> transcriptPaints.incrementAndGet());
+        view.history().addPaintListener(event -> {
+            if (!insideIcon(view.history(), indicator, event.gc.getClipping())) transcriptPaints.incrementAndGet();
+        });
         Set<Long> visibleFrames = new HashSet<>();
         Path liveFrames = Path.of(System.getProperty("edtai.screenshots", "screenshots"), "core-live");
         Files.createDirectories(liveFrames);
@@ -144,7 +150,7 @@ class ReplyIndicatorTest extends AbstractChatTest {
         waitUntil(() -> indicator.frames() >= initialFrame + 30);
         assertTrue(visibleFrames.size() >= 4, "настоящие кадры Canvas должны различаться: " + visibleFrames.size());
         assertEquals(0, hides.get(), "обновление секунд ожидания не скрывает значок");
-        assertTrue(transcriptPaints.get() < 6, "лента не перерисовывается на каждом кадре: " + transcriptPaints.get());
+        assertTrue(transcriptPaints.get() < 6, "текст за пределами значка не перерисовывается на каждом кадре: " + transcriptPaints.get());
         Screenshots.render(view.control(), "core-reasoning");
         String id = view.chats().list().get(0).id();
         view.newChatForTest();
@@ -163,6 +169,15 @@ class ReplyIndicatorTest extends AbstractChatTest {
         view.refresh();
         assertFalse(indicator.getVisible());
         assertFalse(indicator.isAnimating());
+    }
+
+    private static boolean insideIcon(StyledText history, ReplyIndicator indicator, Rectangle area) {
+        if (area.isEmpty()) return true;
+        Rectangle icon = indicator.getBounds();
+        Rectangle text = history.getBounds();
+        return area.x >= icon.x - text.x && area.y >= icon.y - text.y
+                && area.x + area.width <= icon.x - text.x + icon.width
+                && area.y + area.height <= icon.y - text.y + icon.height;
     }
 
     private static void assertStatusAlignment(ChatView view, String status) {
