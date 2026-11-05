@@ -42,6 +42,8 @@ class ReplyIndicatorTest extends AbstractChatTest {
             settle();
             assertTrue(indicator.getVisible());
             text.setSelection(3, 9);
+            // Каретка GTK сама вызывает Paint каждые полсекунды; здесь измеряем только кадры индикатора.
+            text.getCaret().setVisible(false);
             text.update();
             settle(); // GTK дорисовывает выделение после возврата в цикл событий.
             String before = text.getText();
