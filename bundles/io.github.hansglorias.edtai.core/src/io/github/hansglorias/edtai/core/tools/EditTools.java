@@ -115,7 +115,10 @@ public final class EditTools {
             String lines = edit.replacement().text().isEmpty() ? "удалено у строки " + first
                     : first == last ? "строка " + first : "строки " + first + "–" + last;
             String state = edit.saved() ? "сохранён" : "изменён в редакторе, не сохранён: там были несохранённые правки пользователя";
-            return new Result("Изменено: " + name + ", " + lines + "; файл " + state + ".", lines + (edit.saved() ? "" : ", не сохранён"));
+            ModuleDiagnostics diagnostics = edit.saved() ? ModuleDiagnostics.read(files, project, path, edit.text())
+                    : ModuleDiagnostics.unsaved();
+            return new Result("Изменено: " + name + ", " + lines + "; файл " + state + ".\n\n" + diagnostics.text(),
+                    lines + (edit.saved() ? "" : ", не сохранён"));
         }
     }
 

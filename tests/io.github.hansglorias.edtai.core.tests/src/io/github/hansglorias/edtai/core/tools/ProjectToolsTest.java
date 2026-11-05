@@ -103,7 +103,7 @@ class ProjectToolsTest {
 
     @Test
     void toolsHaveSchemas() {
-        assertEquals(List.of("list_objects", "project_info", "read_module", "search_code"), tools.keySet().stream().sorted().toList());
+        assertEquals(List.of("check_module", "list_objects", "project_info", "read_module", "search_code"), tools.keySet().stream().sorted().toList());
         assertEquals(List.of("module"), tools.get("read_module").inputSchema().get("required"));
         assertEquals("object", tools.get("project_info").inputSchema().get("type"));
         assertEquals("string", Json.stringAt(tools.get("search_code").inputSchema(), "properties", "module", "type"));

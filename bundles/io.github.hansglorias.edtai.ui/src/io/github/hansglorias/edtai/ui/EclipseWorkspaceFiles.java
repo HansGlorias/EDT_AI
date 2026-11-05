@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.ui;
 
 import java.nio.file.Path;
+import java.nio.charset.Charset;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -30,6 +31,8 @@ import org.eclipse.ui.texteditor.ITextEditor;
 import io.github.hansglorias.edtai.core.tools.TextChange;
 import io.github.hansglorias.edtai.core.tools.ToolException;
 import io.github.hansglorias.edtai.core.tools.WorkspaceFiles;
+import io.github.hansglorias.edtai.core.tools.ModuleDiagnostics;
+import io.github.hansglorias.edtai.core.tools.ModuleDiagnostics.Status;
 
 /**
  * Проекты рабочей области Eclipse для инструментов модели. Инструменты
@@ -107,6 +110,44 @@ final class EclipseWorkspaceFiles implements WorkspaceFiles {
         };
         inUi(read);
         return Optional.ofNullable(text.get());
+    }
+
+    @Override
+    public ModuleDiagnostics diagnostics(String project, String path, String expectedText) {
+        // Native storage may block: never wait for it on the display thread.
+        if (Display.getCurrent() != null) return ModuleDiagnostics.unavailable();
+        IFile file = ResourcesPlugin.getWorkspace().getRoot().getProject(project).getFile(path);
+        return diagnostics(file, expectedText, () -> EdtModuleDiagnostics.read(file));
+    }
+
+    ModuleDiagnostics diagnostics(IFile file, String expectedText,
+            java.util.function.Supplier<ModuleDiagnostics> nativeRead) {
+        try {
+            String project = file.getProject().getName();
+            String path = file.getProjectRelativePath().toString();
+            if (unsavedText(project, path).isPresent()) return ModuleDiagnostics.unsaved();
+            long stamp = file.getModificationStamp();
+            if (!savedText(file).equals(withoutBom(expectedText))) return EdtModuleDiagnostics.status(Status.STALE);
+            ModuleDiagnostics result = nativeRead.get();
+            if (Thread.currentThread().isInterrupted()) return ModuleDiagnostics.unavailable();
+            if (unsavedText(project, path).isPresent()) return ModuleDiagnostics.unsaved();
+            if (stamp != file.getModificationStamp() || !savedText(file).equals(withoutBom(expectedText))) {
+                return EdtModuleDiagnostics.status(Status.STALE);
+            }
+            return result;
+        } catch (Exception e) {
+            return ModuleDiagnostics.unavailable();
+        }
+    }
+
+    private static String savedText(IFile file) throws Exception {
+        try (var contents = file.getContents()) {
+            return withoutBom(new String(contents.readAllBytes(), Charset.forName(file.getCharset())));
+        }
+    }
+
+    private static String withoutBom(String text) {
+        return text.startsWith("\uFEFF") ? text.substring(1) : text;
     }
 
     @Override

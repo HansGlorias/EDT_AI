@@ -44,6 +44,11 @@ public interface WorkspaceFiles {
         return Optional.empty();
     }
 
+    /** Снимок диагностик сохранённого текста; свежесть проверяет реализация IDE. */
+    default ModuleDiagnostics diagnostics(String project, String path, String expectedText) {
+        return ModuleDiagnostics.unavailable();
+    }
+
     /**
      * Итог правки файла.
      *

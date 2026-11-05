@@ -64,7 +64,7 @@ class EditToolsTest {
         Tool.Result result = edit.call(Map.of("module", "ОбщийМодуль.Общий", "old_text", "Процедура Б()\n\tВозврат;",
                 "new_text", "Процедура Б()\n\tСообщить(\"Б\");\n\tВозврат;"));
 
-        assertEquals("Изменено: ОбщийМодуль.Общий.Модуль, строки 5–7; файл сохранён.", result.text());
+        assertTrue(result.text().startsWith("Изменено: ОбщийМодуль.Общий.Модуль, строки 5–7; файл сохранён."));
         assertEquals("строки 5–7", result.outcome());
         assertEquals("﻿Процедура А()\r\n\tВозврат;\r\nКонецПроцедуры\r\n\r\nПроцедура Б()\r\n\tСообщить(\"Б\");\r\n\tВозврат;\r\n"
                 + "КонецПроцедуры\r\n", Files.readString(temp.resolve("Демо").resolve(MODULE), StandardCharsets.UTF_8));
