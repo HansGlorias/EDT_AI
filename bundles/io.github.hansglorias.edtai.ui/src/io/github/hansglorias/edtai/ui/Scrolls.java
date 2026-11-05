@@ -154,7 +154,16 @@ final class Scrolls extends Composite {
     }
 
     private int top() {
-        if (content instanceof Text text) return text.getTopPixel();
+        if (content instanceof Text text) {
+            var bar = text.getVerticalBar();
+            if ("gtk".equals(SWT.getPlatform()) && bar != null) {
+                // GTK Text.getTopPixel возвращает начало логической строки,
+                // даже когда её перенесённые части уже ушли выше окна.
+                int range = Math.max(1, bar.getMaximum() - bar.getThumb());
+                return (int) ((long) bar.getSelection() * Math.max(0, totalHeight() - pageHeight()) / range);
+            }
+            return text.getTopPixel();
+        }
         if (content instanceof Table table) return table.getTopIndex() * table.getItemHeight();
         Tree tree = (Tree) content;
         return Math.max(0, visibleItems(tree).indexOf(tree.getTopItem())) * tree.getItemHeight();

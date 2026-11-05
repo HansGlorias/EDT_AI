@@ -73,9 +73,13 @@ class ScrollsTest extends AbstractChatTest {
             settle();
             field.sync();
             assertTrue(field.vertical().isShown());
+            int caretY = text.getCaretLocation().y;
             wheel(text, -3);
-            waitUntil(() -> text.getTopPixel() > 0, () -> "прокрутка внутри одной перенесённой строки: максимум="
+            waitUntil(() -> text.getCaretLocation().y < caretY, () -> "прокрутка внутри одной перенесённой строки: максимум="
                     + text.getVerticalBar().getMaximum() + ", видимая часть=" + text.getVerticalBar().getThumb());
+            int afterFirstWheel = text.getCaretLocation().y;
+            wheel(text, -3);
+            waitUntil(() -> text.getCaretLocation().y < afterFirstWheel, () -> "повторное колесо продолжает прокрутку перенесённой строки");
             Screenshots.capture(shell, "thin-scroll-windows");
         } finally { shell.dispose(); }
     }
