@@ -61,7 +61,7 @@ class ExploreProjectTest {
                         assertFalse(request.body().contains("parent-private-prompt"));
                         assertFalse(request.body().contains("parent-private-history"));
                         assertFalse(request.body().contains("Специалисты:"), "ребёнку не предлагают делегирование");
-                        assertEquals(2048L, body.get("max_tokens"));
+                        assertEquals(4096L, body.get("max_tokens"));
                         assertEquals(List.of("project_info", "list_objects", "read_module", "search_code", "check_module"), toolNames(body, protocol));
                         send(response, protocol, "CHILD_INTERMEDIATE", List.of(call("read_module", Json.object("module", "src/CommonModules/Test/Module.bsl"))), 200, 20);
                     } else if (step == 2) {
@@ -119,7 +119,7 @@ class ExploreProjectTest {
             Tool.Result result = explore.call(Map.of("question", "Read"));
             assertTrue(result.text().contains("status: partial"));
             assertEquals(2, calls.get());
-            assertTrue(result.text().length() <= ExploreProject.MAX_REPORT);
+            assertTrue(result.text().contains("Причина: были ошибки чтения или инструментов"));
         }
     }
 
@@ -179,18 +179,199 @@ class ExploreProjectTest {
     }
 
     @Test
+    void childUsesParentOutputSettingIncludingProtocolDefaults() throws Exception {
+        for (Protocol protocol : Protocol.values()) {
+            for (int limit : new int[] { 0, 1024, 8192 }) {
+                AtomicInteger calls = new AtomicInteger();
+                try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                    send(response, protocol, "Проверено", calls.getAndIncrement() == 0
+                            ? List.of(call("read_module", Map.of("module", "src/CommonModules/Test/Module.bsl")))
+                            : List.of(), 1, 1);
+                })) {
+                    ModelConnection parent = new ModelConnection(protocol, server.url(), "fixed-parent-model", "", limit,
+                            "parent-private-prompt", new TrustSettings(false, Optional.empty()), 32768);
+                    Tool.Result result = new ExploreProject(new ModelClient(), parent, reads(), use -> { }, (id, value) -> { })
+                            .call(Map.of("question", "Read"));
+                    assertEquals("complete", result.outcome());
+                    for (var request : server.requests()) {
+                        Long expected = limit > 0 ? Long.valueOf(limit) : protocol == Protocol.ANTHROPIC
+                                ? Long.valueOf(ModelConnection.ANTHROPIC_DEFAULT_MAX_TOKENS) : null;
+                        assertEquals(expected, Json.parseObject(request.body()).get("max_tokens"));
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void childCanFinishResearchBeyondTwelveRequests() throws Exception {
+        for (Protocol protocol : Protocol.values()) {
+            List<Tool> reads = reads();
+            Files.writeString(temp.resolve("src/CommonModules/Test/Module.bsl"), "fixture\n".repeat(50));
+            AtomicInteger calls = new AtomicInteger();
+            try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                int step = calls.incrementAndGet();
+                send(response, protocol, step == 16 ? "FINISHED_AFTER_FIFTEEN_READS" : "", step == 16 ? List.of()
+                        : List.of(call("read_module", Map.of("module", "src/CommonModules/Test/Module.bsl", "first_line", step))), 1, 1);
+            })) {
+                Tool.Result result = new ExploreProject(new ModelClient(), connection(server, protocol), reads,
+                        use -> { }, (id, value) -> { }).call(Map.of("question", "Read several parts"));
+                assertEquals(16, calls.get());
+                assertEquals("complete", result.outcome(), result.text());
+                assertTrue(result.text().contains("FINISHED_AFTER_FIFTEEN_READS"));
+            }
+        }
+    }
+
+    @Test
+    void fullChildReportIsPreservedInPanelAndParentCanPageItsTail() throws Exception {
+        for (Protocol protocol : Protocol.values()) {
+            AtomicInteger calls = new AtomicInteger();
+            List<ToolUse> progress = new CopyOnWriteArrayList<>();
+            List<Throwable> errors = new CopyOnWriteArrayList<>();
+            String report = "Проверенный вывод.\n".repeat(1200) + "FULL_REPORT_TAIL";
+            try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                try {
+                    int step = calls.getAndIncrement();
+                    if (step == 0) send(response, protocol, "", List.of(call("delegate_task",
+                            Map.of("role", "review", "task", "Review module"))), 1, 1);
+                    else if (step == 1) send(response, protocol, "", List.of(call("read_module",
+                            Map.of("module", "src/CommonModules/Test/Module.bsl"))), 1, 1);
+                    else if (step == 2) send(response, protocol, report, List.of(), 1, 1);
+                    else if (step == 3) {
+                        assertFalse(request.body().contains("FULL_REPORT_TAIL"), "большой отчёт передан первой страницей");
+                        var matcher = java.util.regex.Pattern.compile("result_id: ([a-f0-9-]+)").matcher(request.body());
+                        assertTrue(matcher.find(), request.body());
+                        send(response, protocol, "", List.of(call("read_tool_result",
+                                Map.of("result_id", matcher.group(1), "offset", report.length() - 1000))), 1, 1);
+                    } else {
+                        assertEquals(4, step);
+                        assertTrue(request.body().contains("FULL_REPORT_TAIL"), "хвост отчёта доступен ведущему");
+                        send(response, protocol, "PARENT_FINAL", List.of(), 1, 1);
+                    }
+                } catch (Throwable error) { errors.add(error); throw error; }
+            })) {
+                String result = new ModelChatProvider(() -> connection(server, protocol), new ModelClient(), source(reads()), ToolApprover.ALLOW_ALL)
+                        .reply(List.of(ChatMessage.of(ChatRole.USER, "Review with a specialist")), part -> { }, progress::add, value -> { })
+                        .get(15, TimeUnit.SECONDS);
+                assertEquals(List.of(), errors);
+                assertEquals("PARENT_FINAL", result);
+                assertEquals(5, calls.get());
+                ToolUse child = progress.stream().filter(use -> use.name().equals(ToolUse.SUBAGENT)
+                        && use.status() == ToolUse.Status.DONE).findFirst().orElseThrow();
+                assertEquals(report, child.outcome());
+                assertTrue(progress.stream().anyMatch(use -> use.name().equals("delegate_task") && use.outcome().equals("complete")));
+            }
+        }
+    }
+
+    @Test
+    void actualServerOutputLimitIsExplainedInResultAndPanel() throws Exception {
+        for (Protocol protocol : Protocol.values()) {
+            AtomicInteger calls = new AtomicInteger();
+            List<ToolUse> progress = new CopyOnWriteArrayList<>();
+            try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                boolean last = calls.getAndIncrement() > 0;
+                send(response, protocol, last ? "UNFINISHED_REPORT" : "", last ? List.of()
+                        : List.of(call("read_module", Map.of("module", "src/CommonModules/Test/Module.bsl"))), 1, 1, last);
+            })) {
+                Tool.Result result = new ExploreProject(new ModelClient(), connection(server, protocol), reads(),
+                        progress::add, (id, value) -> { }).call(Map.of("question", "Read"));
+                assertEquals(2, calls.get(), "явный лимит пользователя не обходится новыми генерациями");
+                assertEquals("partial", result.outcome());
+                assertTrue(result.text().contains("сервер остановил генерацию по лимиту токенов ответа"));
+                assertTrue(result.text().contains("UNFINISHED_REPORT"));
+                String shown = progress.get(progress.size() - 1).outcome();
+                assertTrue(shown.startsWith("Завершено частично: сервер остановил генерацию по лимиту токенов ответа"));
+                assertTrue(shown.contains("UNFINISHED_REPORT"));
+            }
+        }
+    }
+
+    @Test
+    void physicalRequestBudgetReservesSummaryAfterOverflowRetry() throws Exception {
+        for (Protocol protocol : Protocol.values()) {
+            AtomicInteger calls = new AtomicInteger();
+            List<Throwable> errors = new CopyOnWriteArrayList<>();
+            try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                try {
+                    int step = calls.getAndIncrement();
+                    if (step == 0) send(response, protocol, "", List.of(call("read_module",
+                            Map.of("module", "src/CommonModules/Test/Module.bsl"))), 1, 1);
+                    else if (step == 1) response.send(400, "application/json", "{\"error\":{\"message\":\"maximum context length exceeded\"}}");
+                    else {
+                        assertEquals(2, step);
+                        assertTrue(request.body().contains(AgentLoop.SUMMARY_ONLY));
+                        send(response, protocol, "SUMMARY_AFTER_RETRY", List.of(), 1, 1);
+                    }
+                } catch (Throwable error) { errors.add(error); throw error; }
+            })) {
+                List<Tool> reads = reads();
+                AgentLoop child = new AgentLoop(new ModelClient(), connection(server, protocol),
+                        List.of(ChatMessage.of(ChatRole.USER, "Read")), problems -> reads, ToolApprover.ALLOW_ALL,
+                        part -> { }, use -> { }, value -> { }, 2, true);
+                assertEquals("SUMMARY_AFTER_RETRY", child.start().get(15, TimeUnit.SECONDS));
+                assertEquals(List.of(), errors);
+                assertTrue(child.incomplete());
+                assertTrue(child.incompleteReason().contains("лимит 2 физических запросов"));
+                assertEquals(3, calls.get());
+            }
+        }
+    }
+
+    @Test
+    void summaryCannotExecuteToolsEvenIfModelIgnoresInstruction() throws Exception {
+        for (Protocol protocol : Protocol.values()) {
+            AtomicInteger calls = new AtomicInteger();
+            AtomicInteger executed = new AtomicInteger();
+            Tool read = new Tool() {
+                public String name() { return "read_fixture"; }
+                public String description() { return "Read fixture"; }
+                public Map<String, Object> inputSchema() { return Map.of("type", "object"); }
+                public String summary(Map<String, Object> input) { return "Read fixture"; }
+                public Result call(Map<String, Object> input) { executed.incrementAndGet(); return new Result("fixture", "read"); }
+            };
+            try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                int step = calls.incrementAndGet();
+                send(response, protocol, step == 3 ? "SUMMARY_WITH_UNEXECUTED_CALL" : "",
+                        List.of(call("read_fixture", Map.of("step", step))), 1, 1);
+            })) {
+                AgentLoop child = new AgentLoop(new ModelClient(), connection(server, protocol),
+                        List.of(ChatMessage.of(ChatRole.USER, "Read")), problems -> List.of(read), ToolApprover.ALLOW_ALL,
+                        part -> { }, use -> { }, value -> { }, 2, true);
+                assertEquals("SUMMARY_WITH_UNEXECUTED_CALL", child.start().get(15, TimeUnit.SECONDS));
+                assertTrue(child.incomplete());
+                assertEquals(3, calls.get());
+                assertEquals(1, executed.get(), "ни вызовы граничного шага, ни вызовы резервного итога не исполняются");
+            }
+        }
+    }
+
+    @Test
     void childStepsAreBoundedAndReportIsPartialAtLimit() throws Exception {
-        AtomicInteger calls = new AtomicInteger();
-        try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
-            int step = calls.incrementAndGet();
-            send(response, Protocol.OPENAI_COMPATIBLE, "", List.of(call("read_module",
-                    Json.object("module", "src/CommonModules/Test/Module.bsl", "first_line", step))), 1, 1);
-        })) {
-            Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read forever"));
-            assertEquals(ExploreProject.MAX_STEPS + 1, calls.get(), "шаги и последний запрос итога без инструментов");
-            assertFalse(server.requests().get(ExploreProject.MAX_STEPS).body().contains("\"tools\""));
-            assertEquals("partial", result.outcome());
-            assertTrue(result.text().length() <= ExploreProject.MAX_REPORT);
+        for (Protocol protocol : Protocol.values()) {
+            AtomicInteger calls = new AtomicInteger();
+            List<ToolUse> progress = new CopyOnWriteArrayList<>();
+            List<Tool> reads = reads();
+            Files.writeString(temp.resolve("src/CommonModules/Test/Module.bsl"), "fixture\n".repeat(100));
+            try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                int step = calls.incrementAndGet();
+                send(response, protocol, step > ExploreProject.MAX_STEPS ? "SUMMARY_AT_LIMIT" : "",
+                        step > ExploreProject.MAX_STEPS ? List.of() : List.of(call("read_module",
+                                Json.object("module", "src/CommonModules/Test/Module.bsl", "first_line", step))), 1, 1);
+            })) {
+                ExploreProject runner = new ExploreProject(new ModelClient(), connection(server, protocol), reads,
+                        progress::add, (id, value) -> { });
+                Tool.Result result = runner.call(Map.of("question", "Read forever"));
+                assertEquals(ExploreProject.MAX_STEPS + 1, calls.get(), "рабочие запросы и резервный текстовый итог");
+                String last = server.requests().get(ExploreProject.MAX_STEPS).body();
+                assertEquals(protocol == Protocol.ANTHROPIC, last.contains("\"tools\""));
+                assertTrue(last.contains(AgentLoop.SUMMARY_ONLY));
+                assertEquals("partial", result.outcome());
+                assertTrue(result.text().contains("лимит 50 шагов"), result.text());
+                assertTrue(result.text().contains("SUMMARY_AT_LIMIT"));
+                assertTrue(progress.get(progress.size() - 1).outcome().contains("лимит 50 шагов"));
+            }
         }
     }
 
@@ -295,25 +476,27 @@ class ExploreProjectTest {
     }
 
     @Test
-    void failureAndHugeFinalAreBoundedWithoutLeakingExceptionOrSnapshotIds() throws Exception {
+    void failureAndMissingReadsAreExplainedWithoutLeakingExceptionOrSnapshotIds() throws Exception {
         try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> response.send(500, "application/json",
                 "{\"error\":{\"message\":\"private-server-error\"}}"))) {
             Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read"));
             assertEquals("failed", result.outcome());
             assertFalse(result.text().contains("private-server-error"));
+            assertTrue(result.text().contains("запрос специалиста завершился ошибкой"));
         }
         try (FakeModelServer server = FakeModelServer.http().handler((request, response) ->
                 send(response, Protocol.OPENAI_COMPATIBLE, "x".repeat(20_000), List.of(), 1, 1))) {
             Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read"));
             assertEquals("partial", result.outcome());
-            assertTrue(result.text().length() <= ExploreProject.MAX_REPORT);
+            assertTrue(result.text().contains("нет подтверждённых чтений проекта"));
+            assertTrue(result.text().contains("x".repeat(20_000)));
         }
         try (FakeModelServer server = FakeModelServer.http().handler((request, response) ->
                 send(response, Protocol.OPENAI_COMPATIBLE, "result_id ".repeat(350), List.of(), 1, 1))) {
             Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read"));
-            assertTrue(result.text().contains("Итог обрезан"), "удаление ссылок тоже может увеличить текст");
+            assertFalse(result.text().contains("result_id"));
+            assertTrue(result.text().contains("[ссылка недоступна] ".repeat(350).stripTrailing()));
             assertTrue(result.text().contains("Перед правкой ведущий обязан перечитать модуль"));
-            assertTrue(result.text().length() <= ExploreProject.MAX_REPORT);
         }
     }
 
@@ -447,6 +630,11 @@ class ExploreProjectTest {
 
     private static void send(FakeModelServer.Response response, Protocol protocol, String text,
             List<Map<String, Object>> calls, int input, int output) throws Exception {
+        send(response, protocol, text, calls, input, output, false);
+    }
+
+    private static void send(FakeModelServer.Response response, Protocol protocol, String text,
+            List<Map<String, Object>> calls, int input, int output, boolean truncated) throws Exception {
         List<Object> tools = new ArrayList<>();
         for (int i = 0; i < calls.size(); i++) {
             var call = calls.get(i);
@@ -457,10 +645,10 @@ class ExploreProjectTest {
         Object body;
         if (protocol == Protocol.ANTHROPIC) {
             if (!text.isEmpty()) tools.add(0, Json.object("type", "text", "text", text));
-            body = Json.object("content", tools, "stop_reason", calls.isEmpty() ? "end_turn" : "tool_use",
+            body = Json.object("content", tools, "stop_reason", truncated ? "max_tokens" : calls.isEmpty() ? "end_turn" : "tool_use",
                     "usage", Json.object("input_tokens", input, "output_tokens", output));
         } else body = Json.object("choices", List.of(Json.object("message", Json.object("role", "assistant", "content", text, "tool_calls", tools),
-                "finish_reason", calls.isEmpty() ? "stop" : "tool_calls")), "usage", Json.object("prompt_tokens", input, "completion_tokens", output));
+                "finish_reason", truncated ? "length" : calls.isEmpty() ? "stop" : "tool_calls")), "usage", Json.object("prompt_tokens", input, "completion_tokens", output));
         response.send(200, "application/json", Json.write(body));
     }
 }

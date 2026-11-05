@@ -62,6 +62,9 @@ final class AgentLoop {
     static final String FINAL = "(Служебная пометка EDT AI: инструменты отключены — вызовы этого шага не выполнены."
             + " Ответь по уже найденному: что выяснил, со ссылками Модуль:строка, что собирался сделать дальше и чего не хватило.)";
 
+    static final String SUMMARY_ONLY = "Лимит работы специалиста достигнут. Больше не вызывай инструменты."
+            + " Дай текстовый итог по уже проверенному, ссылки Модуль:строка и то, чего не удалось проверить.";
+
     /** После скольких шагов подряд, в основном из повторов, инструменты отключаются. */
     static final int MAX_STUCK_STEPS = 2;
 
@@ -92,6 +95,7 @@ final class AgentLoop {
     private final boolean exploration;
     private int requests;
     private boolean incomplete;
+    private String incompleteReason = "";
     private boolean uncertainChildUsage;
     private final Map<String, TokenUsage> childUsage = new HashMap<>();
     private TokenUsage displayedUsage;
@@ -177,6 +181,16 @@ final class AgentLoop {
 
     boolean incomplete() {
         return incomplete || toolsRejected;
+    }
+
+    String incompleteReason() {
+        return !incompleteReason.isEmpty() ? incompleteReason
+                : toolsRejected ? "сервер модели не принял инструменты" : "";
+    }
+
+    private void markIncomplete(String reason) {
+        incomplete = true;
+        if (incompleteReason.isEmpty()) incompleteReason = reason;
     }
 
     private synchronized void publishUsage(TokenUsage parent) {
@@ -274,12 +288,13 @@ final class AgentLoop {
                 continue;
             }
             if (reply.calls().isEmpty() || toolsOff) {
-                incomplete |= reply.truncated() || toolsOff;
+                if (reply.truncated()) markIncomplete("сервер остановил генерацию по лимиту токенов ответа");
+                if (toolsOff && !incomplete) markIncomplete("инструменты отключены до завершения исследования");
                 if (exploration) return ChatMessage.stripTraces(ThinkFilter.strip(reply.text())).strip();
                 return ChatMessage.stripTraces(ThinkFilter.strip(answer.toString())).strip();
             }
             if (step >= maxSteps) {
-                incomplete = true;
+                markIncomplete("достигнут лимит " + maxSteps + " шагов специалиста");
                 if (exploration) {
                     // Работа разведчика не пропадает: последний запрос без инструментов — итог по найденному.
                     if (finalWithoutTools(reply)) continue;
@@ -302,6 +317,7 @@ final class AgentLoop {
             // Модель повторяет одни и те же вызовы: предупреждаем, затем отвечаем без инструментов.
             stuckSteps = blockedInStep > 0 && blockedInStep * 2 >= reply.calls().size() ? stuckSteps + 1 : 0;
             if (stuckSteps >= MAX_STUCK_STEPS) {
+                markIncomplete("модель повторяла уже выполненные вызовы инструментов");
                 onTool.accept(new ToolUse("loop", "tools", "Повторы вызовов", "модель повторяла одни и те же вызовы "
                         + stuckSteps + " шага подряд — инструменты отключены, ответ по найденному", ToolUse.Status.FAILED));
                 transcript.add(reply, withNote(results, FINAL));
@@ -362,13 +378,13 @@ final class AgentLoop {
     }
 
     /**
-     * Следующий запрос — последний и без инструментов: вызовы шага не выполняются, модель отвечает по
-     * найденному. Anthropic не принимает историю с вызовами без описаний инструментов — там нельзя.
+     * Следующий запрос — последний: вызовы шага не выполняются, модель отвечает по найденному.
+     * Для Anthropic сохраняются описания инструментов, необходимые для истории tool_use/tool_result.
      *
      * @return будет ли такой запрос
      */
     private boolean finalWithoutTools(ModelReply reply) {
-        if (toolsOff || base.protocol() == Protocol.ANTHROPIC) {
+        if (toolsOff) {
             return false;
         }
         List<ProtocolAdapter.ToolResult> results = new ArrayList<>();
@@ -445,8 +461,13 @@ final class AgentLoop {
         RequestContext context = diagnosticRun == null ? null : new RequestContext(diagnosticRun, RequestType.ANSWER, 0);
         while (true) {
             checkCancelled();
-            if (exploration && ++requests > maxSteps + (toolsOff ? 1 : 0)) {
-                incomplete = true;
+            if (exploration && requests == maxSteps && !toolsOff) {
+                markIncomplete("достигнут лимит " + maxSteps + " физических запросов специалиста");
+                toolsOff = true;
+                if (base.protocol() != Protocol.ANTHROPIC) tools = List.of();
+            }
+            if (exploration && ++requests > maxSteps + 1) {
+                markIncomplete("исчерпан резерв последнего запроса итога специалиста");
                 throw new ModelException("Лимит физических запросов разведки исчерпан");
             }
             RequestDiagnostics attempt = client.begin(context);
@@ -519,6 +540,7 @@ final class AgentLoop {
 
     /** Подключение; если есть инструменты — с правилами работы с ними в системном промпте. */
     private ModelConnection connection() {
+        if (exploration && toolsOff) return base.withSystemPromptPart(SUMMARY_ONLY);
         if (exploration || tools.isEmpty()) return base;
         ModelConnection connection = base.withSystemPromptPart(ProjectBrief.TOOL_RULES);
         return tools.stream().anyMatch(DelegateTask.class::isInstance)
