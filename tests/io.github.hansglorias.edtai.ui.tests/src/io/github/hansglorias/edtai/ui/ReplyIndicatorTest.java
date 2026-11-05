@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -13,6 +15,7 @@ import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
@@ -99,14 +102,42 @@ class ReplyIndicatorTest extends AbstractChatTest {
         waitUntil(() -> view.history().getText().contains("рассуждает") && view.replyIndicator().getVisible(),
                 () -> "лента=" + view.history().getClientArea() + ", текст=" + view.history().getText());
         ReplyIndicator indicator = view.replyIndicator();
+        assertStatusAlignment(view, "рассуждает");
         assertEquals(view.history().getParent(), indicator.getParent(), "анимация рядом с лентой, вне StyledText");
         assertTrue(indicator.getBounds().x + indicator.getSize().x <= view.history().getBounds().x);
         AtomicInteger hides = new AtomicInteger();
         AtomicInteger transcriptPaints = new AtomicInteger();
         indicator.addListener(SWT.Hide, event -> hides.incrementAndGet());
         view.history().addPaintListener(event -> transcriptPaints.incrementAndGet());
+        Set<Long> visibleFrames = new HashSet<>();
+        Path liveFrames = Path.of(System.getProperty("edtai.screenshots", "screenshots"), "core-live");
+        Files.createDirectories(liveFrames);
+        AtomicInteger captured = new AtomicInteger();
+        // После вывода буфера: copyArea из Paint GC на Windows не учитывает начало частичного буфера.
+        indicator.addPaintListener(event -> indicator.getDisplay().asyncExec(() -> {
+            if (indicator.isDisposed() || !indicator.isVisible()) return;
+            Image image = new Image(indicator.getDisplay(), ReplyIndicator.SIZE, ReplyIndicator.SIZE);
+            GC painted = new GC(indicator);
+            try {
+                Rectangle area = indicator.logoBounds();
+                painted.copyArea(image, area.x, area.y);
+                ImageData data = image.getImageData();
+                long hash = 1;
+                for (int y = 0; y < data.height; y++) for (int x = 0; x < data.width; x++) {
+                    hash = 31 * hash + data.palette.getRGB(data.getPixel(x, y)).hashCode();
+                }
+                visibleFrames.add(hash);
+                int frame = captured.getAndIncrement();
+                if (frame < 32) {
+                    ImageLoader loader = new ImageLoader();
+                    loader.data = new ImageData[] { data };
+                    loader.save(liveFrames.resolve(String.format("frame-%02d.png", frame)).toString(), SWT.IMAGE_PNG);
+                }
+            } finally { painted.dispose(); image.dispose(); }
+        }));
         int initialFrame = indicator.frames();
         waitUntil(() -> indicator.frames() >= initialFrame + 30);
+        assertTrue(visibleFrames.size() >= 4, "настоящие кадры Canvas должны различаться: " + visibleFrames.size());
         assertEquals(0, hides.get(), "обновление секунд ожидания не скрывает значок");
         assertTrue(transcriptPaints.get() < 6, "лента не перерисовывается на каждом кадре: " + transcriptPaints.get());
         Screenshots.render(view.control(), "core-reasoning");
@@ -120,12 +151,50 @@ class ReplyIndicatorTest extends AbstractChatTest {
         waitUntil(() -> view.history().getText().contains("Готовлю ответ"));
         assertSame(indicator, view.replyIndicator());
         assertTrue(indicator.isAnimating());
+        assertStatusAlignment(view, "пишет ответ");
         Screenshots.render(view.control(), "core-writing");
         finish.countDown();
         waitUntil(() -> !view.session().isBusy());
         view.refresh();
         assertFalse(indicator.getVisible());
         assertFalse(indicator.isAnimating());
+    }
+
+    private static void assertStatusAlignment(ChatView view, String status) {
+        int offset = view.history().getText().lastIndexOf(status);
+        assertTrue(offset >= 0, view.history().getText());
+        Rectangle glyph = view.history().getTextBounds(offset, offset);
+        Rectangle logo = view.replyIndicator().logoBounds();
+        assertEquals(14, logo.width);
+        assertEquals(14, logo.height);
+        assertEquals((ReplyIndicator.GUTTER - logo.width) / 2, logo.x);
+        assertTrue(Math.abs(2 * glyph.y + glyph.height - 2 * logo.y - logo.height) <= 1,
+                "ядро по центру строки состояния: " + glyph + " / " + logo);
+    }
+
+    @Test void rotationChangesPixelsAtActualSizeInBothThemes() {
+        for (boolean dark : new boolean[] { false, true }) {
+            ImageData[] frames = new ImageData[2];
+            for (int frame = 0; frame < 2; frame++) {
+                Image image = new Image(page.getWorkbenchWindow().getShell().getDisplay(), 14, 14);
+                GC gc = new GC(image);
+                Color background = dark ? new Color(30, 32, 36) : new Color(255, 255, 255);
+                try {
+                    gc.setBackground(background);
+                    gc.fillRectangle(0, 0, 14, 14);
+                    ReplyIndicator.paintLogo(gc, new Rectangle(0, 0, 14, 14), frame * 0.5);
+                    frames[frame] = image.getImageData();
+                } finally { background.dispose(); gc.dispose(); image.dispose(); }
+            }
+            int changed = 0;
+            for (int y = 0; y < 14; y++) for (int x = 0; x < 14; x++) {
+                boolean differs = !frames[0].palette.getRGB(frames[0].getPixel(x, y))
+                        .equals(frames[1].palette.getRGB(frames[1].getPixel(x, y)));
+                if (x < 4 && y < 4) assertFalse(differs, "углы неподвижны");
+                if (differs) changed++;
+            }
+            assertTrue(changed >= 8, "вращение должно быть видно при 14 px: " + changed);
+        }
     }
 
     @Test void logoKeepsCornersAndCoreVisibleOnEveryFrame() throws Exception {

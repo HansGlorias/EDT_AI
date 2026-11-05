@@ -5,16 +5,15 @@ import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Path;
-import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Canvas;
 
 /** Ядро EDT AI на левом поле активного ответа. Кадр меняет только собственный Canvas. */
 final class ReplyIndicator extends Canvas {
-    static final int SIZE = 20;
+    static final int SIZE = 14;
     static final int GUTTER = 24;
     private static final int FRAME_MS = 40;
-    private static final long PERIOD_NANOS = 2_400_000_000L;
+    private static final long PERIOD_NANOS = 1_600_000_000L;
     private final StyledText history;
     private final Runnable frame = this::frame;
     private final long started = System.nanoTime();
@@ -34,7 +33,7 @@ final class ReplyIndicator extends Canvas {
         addListener(SWT.Paint, event -> {
             event.gc.setBackground(history.getBackground());
             event.gc.fillRectangle(getClientArea());
-            if (anchor >= 0) paintLogo(event.gc, new Rectangle(0, logoY, SIZE, SIZE), phase);
+            if (anchor >= 0) paintLogo(event.gc, logoBounds(), phase);
         });
         addListener(SWT.Dispose, event -> getDisplay().timerExec(-1, frame));
         history.addListener(SWT.Resize, event -> queuePosition());
@@ -64,8 +63,8 @@ final class ReplyIndicator extends Canvas {
         boolean visible = anchor >= 0 && anchor < history.getCharCount() && history.isVisible();
         int previousY = logoY;
         if (visible) {
-            Point at = history.getLocationAtOffset(anchor);
-            logoY = at.y + (history.getLineHeight(anchor) - SIZE) / 2;
+            Rectangle glyph = history.getTextBounds(anchor, anchor);
+            logoY = glyph.y + (glyph.height - SIZE) / 2;
             visible = logoY >= 0 && logoY + SIZE <= history.getClientArea().height;
         }
         if (previousY != logoY) { redraw(0, previousY, GUTTER, SIZE, false); redraw(0, logoY, GUTTER, SIZE, false); }
@@ -113,13 +112,16 @@ final class ReplyIndicator extends Canvas {
             corner(corners, x, y, scale, 1.9f, 10.7f, 1.9f, 14.1f, 5.3f, 14.1f);
             corner(corners, x, y, scale, 10.7f, 14.1f, 14.1f, 14.1f, 14.1f, 10.7f);
             gc.drawPath(corners);
-            float radius = 3.5f * scale * (float) (0.91 + 0.09 * Math.cos(2 * Math.PI * phase));
+            float radius = 3.5f * scale;
             float cx = x + 8 * scale;
             float cy = y + 8 * scale;
-            core.moveTo(cx, cy - radius);
-            core.lineTo(cx + radius, cy);
-            core.lineTo(cx, cy + radius);
-            core.lineTo(cx - radius, cy);
+            // Четверть оборота: в конце цикла квадрат совпадает с началом, без скачка и паузы.
+            for (int vertex = 0; vertex < 4; vertex++) {
+                double angle = Math.PI / 2 * (phase + vertex - 1);
+                float px = cx + radius * (float) Math.cos(angle);
+                float py = cy + radius * (float) Math.sin(angle);
+                if (vertex == 0) core.moveTo(px, py); else core.lineTo(px, py);
+            }
             core.close();
             gc.fillPath(core);
         } finally {
@@ -136,4 +138,5 @@ final class ReplyIndicator extends Canvas {
 
     boolean isAnimating() { return scheduled; }
     int frames() { return frames; }
+    Rectangle logoBounds() { return new Rectangle((GUTTER - SIZE) / 2, logoY, SIZE, SIZE); }
 }

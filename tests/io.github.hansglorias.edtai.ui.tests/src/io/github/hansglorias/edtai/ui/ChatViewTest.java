@@ -159,7 +159,7 @@ class ChatViewTest extends AbstractChatTest {
         assertEquals("", view.input().getText());
         waitUntil(() -> view.history().getText().contains("часовой пояс") && ChatView.STOP.equals(view.sendButton().getText()));
         assertFalse(view.isEmptyStateShown());
-        assertTrue(view.history().getText().contains("пишет…"), view.history().getText());
+        assertTrue(view.history().getText().contains("пишет ответ…"), view.history().getText());
         assertTrue(view.sendButton().isBusy(), "на кнопке квадрат «Стоп»");
         assertTrue(view.sendButton().isEnabled());
         assertTrue(view.status().getText().matches("test-model · пишет ответ… \\d+ с"), view.status().getText());
@@ -181,7 +181,7 @@ class ChatViewTest extends AbstractChatTest {
         assertFalse(text.contains("   " + MessageRenderer.RETRY), "подписи действий не текстом: " + text);
         assertTrue(text.contains("На сервере используйте ТекущаяДатаСеанса() — она учитывает часовой пояс сеанса.\n\n"
                 + "bsl   Копировать   Вставить в редактор\nДата = ТекущаяДатаСеанса();\n\nТекущаяДата() возвращает"), text);
-        assertFalse(text.contains("пишет…"));
+        assertFalse(text.contains("пишет ответ…"));
         assertTrue(server.requests().get(0).body().contains(QUESTION));
         Screenshots.capture(view.control(), "chat-answer");
     }
