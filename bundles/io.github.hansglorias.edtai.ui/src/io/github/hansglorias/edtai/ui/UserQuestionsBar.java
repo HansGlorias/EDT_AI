@@ -11,6 +11,7 @@ import org.eclipse.jface.layout.GridLayoutFactory;
 import org.eclipse.jface.preference.JFacePreferences;
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
@@ -52,7 +53,7 @@ final class UserQuestionsBar {
 
     private final Composite bar;
     private final Label progress;
-    private final ThinScrolledComposite scroll;
+    private final ScrolledComposite scroll;
     private final Composite fields;
     private final Button submit;
     private final Runnable changed;
@@ -86,7 +87,7 @@ final class UserQuestionsBar {
         hint.setForeground(meta(bar));
         GridDataFactory.fillDefaults().grab(true, false).hint(200, SWT.DEFAULT).applyTo(hint);
 
-        scroll = new ThinScrolledComposite(bar, SWT.V_SCROLL);
+        scroll = new ScrolledComposite(bar, SWT.V_SCROLL);
         GridDataFactory.fillDefaults().grab(true, false).hint(200, 300).applyTo(scroll);
         scroll.setExpandHorizontal(true);
         scroll.setExpandVertical(true);
@@ -161,7 +162,6 @@ final class UserQuestionsBar {
             text.setTextLimit(4000);
             text.setMessage(question.options().isEmpty() ? "Ваш ответ…" : "Свой вариант ответа…");
             GridDataFactory.fillDefaults().grab(true, false).indent(4, 2).hint(200, text.getLineHeight() * 2).applyTo(text);
-            Scrolls.wrap(text);
             text.setText(value.texts.getOrDefault(question.id(), ""));
             text.addModifyListener(event -> {
                 if (pending == value) {
@@ -241,7 +241,7 @@ final class UserQuestionsBar {
 
     private void resize() {
         if (scroll.isDisposed()) return;
-        Point size = fields.computeSize(Math.max(100, scroll.viewport().width), SWT.DEFAULT);
+        Point size = fields.computeSize(Math.max(100, scroll.getClientArea().width), SWT.DEFAULT);
         scroll.setMinSize(size);
         // Короткая форма не занимает лишнего места, длинная — не выше 300 пикселей с прокруткой.
         GridData data = (GridData) scroll.getLayoutData();

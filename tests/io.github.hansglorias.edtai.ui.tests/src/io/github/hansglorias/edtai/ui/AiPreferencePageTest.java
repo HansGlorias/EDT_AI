@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.eclipse.jface.preference.PreferenceDialog;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Text;
@@ -30,13 +31,9 @@ class AiPreferencePageTest extends AbstractChatTest {
             dialog.getShell().forceActive();
             settle();
             dialog.getShell().layout(true, true);
-            var scroll = assertInstanceOf(ThinScrolledComposite.class, settings.localDiagnosticsField().getParent().getParent().getParent());
+            var scroll = assertInstanceOf(ScrolledComposite.class, settings.localDiagnosticsField().getParent().getParent().getParent());
             waitUntil(() -> scroll.getClientArea().height > 0);
-            assertTrue(scroll.vertical().isShown(), "настройки доступны тонкой прокруткой в небольшом окне");
-            for (var ancestor = scroll.getParent(); ancestor != null; ancestor = ancestor.getParent()) {
-                if (ancestor.getVerticalBar() != null) assertFalse(ancestor.getVerticalBar().getVisible(), "нет второй системной полосы");
-                if (ancestor.getHorizontalBar() != null) assertFalse(ancestor.getHorizontalBar().getVisible(), "нет второй системной полосы");
-            }
+            assertTrue(scroll.getVerticalBar().getVisible(), "настройки доступны прокруткой в небольшом окне");
             settings.localDiagnosticsField().setFocus();
             scroll.showControl(settings.localDiagnosticsField());
             settle();
@@ -141,7 +138,7 @@ class AiPreferencePageTest extends AbstractChatTest {
         }
     }
 
-    private static void assertDiagnosticsVisible(AiPreferencePage settings, ThinScrolledComposite scroll) {
+    private static void assertDiagnosticsVisible(AiPreferencePage settings, ScrolledComposite scroll) {
         var field = settings.localDiagnosticsField();
         String geometry = "origin=" + scroll.getOrigin() + ", field=" + field.getBounds()
                 + ", scroller=" + scroll.getBounds() + ", shell=" + field.getShell().getBounds()

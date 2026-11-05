@@ -65,13 +65,6 @@ final class ModuleSelectionDialog extends FilteredItemsSelectionDialog {
     }
 
     @Override
-    protected Control createDialogArea(Composite parent) {
-        Control area = super.createDialogArea(parent);
-        if (area instanceof Composite composite) Scrolls.installTables(composite);
-        return area;
-    }
-
-    @Override
     protected Control createExtendedContentArea(Composite parent) {
         return null;
     }

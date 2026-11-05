@@ -46,8 +46,6 @@ class ChatInsightsTest extends AbstractChatTest {
                 List.of(), tools, List.of(), stats);
         view.session().restore(List.of(new ChatMessage(ChatRole.USER, "Проверь проведение", T0, ChatMessage.Status.DONE), answer));
         view.refresh();
-        view.control().setSize(720, 620);
-        view.control().layout(true, true);
         settle();
 
         String text = view.history().getText();
@@ -56,22 +54,6 @@ class ChatInsightsTest extends AbstractChatTest {
         assertTrue(view.subagentsPanel().isShown());
         assertEquals("Специалисты · 1 — 1 готово", view.subagentsPanel().titleText());
         view.subagentsPanel().expand(run);
-        settle();
-        var panel = view.subagentsPanel();
-        var panelPosition = panel.control().toDisplay(0, 0);
-        assertTrue(panelPosition.x >= view.history().toDisplay(view.history().getSize().x, 0).x,
-                "специалисты справа от ленты");
-        assertTrue(panel.control().getSize().y > view.history().getSize().y, "панель сбоку на всю высоту, включая ввод");
-        panel.setCollapsed(true);
-        view.refresh();
-        settle();
-        assertTrue(panel.isCollapsed(), "обновление метрик не разворачивает панель");
-        assertEquals(32, panel.control().getSize().x);
-        render(view, "subagents-collapsed");
-        panel.setCollapsed(false);
-        settle();
-        assertFalse(panel.isCollapsed());
-        assertTrue(panel.control().getSize().x > 200);
 
         view.linkAction(MessageRenderer.SHOW_STATS).run();
         settle();

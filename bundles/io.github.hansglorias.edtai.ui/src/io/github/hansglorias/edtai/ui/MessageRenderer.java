@@ -206,7 +206,6 @@ final class MessageRenderer {
      */
     Placement render(ChatMessage message, int index, boolean separator, Set<Action> actions, int offset, StringBuilder text,
             List<StyleRange> styles, List<int[]> codeRanges, String pending) {
-        pendingOffset = -1;
         if (separator) {
             text.append("\n\n");
         }
@@ -247,14 +246,6 @@ final class MessageRenderer {
                 };
                 if (!parts.isEmpty()) {
                     text.append('\n');
-                }
-                if (message.status() == ChatMessage.Status.STREAMING && !placeholder.isEmpty()) {
-                    StyleRange indicator = style(offset + text.length(), 1, metaColor(), SWT.NORMAL);
-                    indicator.metrics = new org.eclipse.swt.graphics.GlyphMetrics(14, 2, 22);
-                    indicator.data = PendingIcon.INSTANCE;
-                    pendingOffset = indicator.start;
-                    styles.add(indicator);
-                    text.append('\uFFFC');
                 }
                 styles.add(style(offset + text.length(), placeholder.length(), metaColor(), SWT.ITALIC));
                 text.append(placeholder);
@@ -724,9 +715,7 @@ final class MessageRenderer {
 
     /** Рисует миниатюру на её месте в ленте, в тонкой рамке. */
     void paintObject(PaintObjectEvent event) {
-        if (event.style.data == PendingIcon.INSTANCE) {
-            ActivityIndicator.paint(event.gc, event.x + 2, event.y + 2, 11, linkColor(), activityPhase);
-        } else if (event.style.data instanceof Thumbnail thumbnail && !thumbnail.image().isDisposed()) {
+        if (event.style.data instanceof Thumbnail thumbnail && !thumbnail.image().isDisposed()) {
             // event.y — верх места под эту картинку (не строки): картинки разной высоты стоят по нижнему краю.
             event.gc.drawImage(thumbnail.image(), event.x + 1, event.y + 1);
             event.gc.setForeground(metaColor());
@@ -735,20 +724,6 @@ final class MessageRenderer {
             event.gc.drawImage(icon.image(), event.x + 2, event.y);
         } else if (event.style.data instanceof ActionIcon icon && !icon.image().isDisposed()) {
             event.gc.drawImage(icon.image(), event.x, event.y);
-        }
-    }
-
-    private enum PendingIcon { INSTANCE }
-    private int activityPhase;
-    private int pendingOffset = -1;
-
-    void activityFrame(int phase) {
-        activityPhase = phase;
-        if (pendingOffset >= 0 && pendingOffset < history.getCharCount()) {
-            StyleRange style = history.getStyleRangeAtOffset(pendingOffset);
-            if (style == null || style.data != PendingIcon.INSTANCE) return;
-            var point = history.getLocationAtOffset(pendingOffset);
-            if (point.y >= -20 && point.y < history.getClientArea().height) history.redraw(point.x, point.y, 22, 22, false);
         }
     }
 

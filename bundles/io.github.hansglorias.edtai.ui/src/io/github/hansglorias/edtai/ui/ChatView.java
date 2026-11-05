@@ -103,6 +103,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
+import org.eclipse.swt.widgets.ScrollBar;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.ToolItem;
@@ -413,8 +414,6 @@ public class ChatView extends ViewPart {
     private Action historyAction;
     private ChatHistoryPanel historyPanel;
     private ThinScrollBar scrollBar;
-    private JumpToBottom jumpToBottom;
-    private ActivityIndicator activityIndicator;
     private Composite top;
     /** Правая часть: лента, панели над вводом, ввод, строка состояния. Список чатов — слева на всю высоту. */
     private Composite column;
@@ -709,22 +708,22 @@ public class ChatView extends ViewPart {
             }
         });
         column = new Composite(sash, SWT.NONE);
-        GridLayoutFactory.fillDefaults().numColumns(2).spacing(0, 0).applyTo(column);
-        Composite conversation = new Composite(column, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, true).hint(0, SWT.DEFAULT).applyTo(conversation);
-        GridLayoutFactory.fillDefaults().spacing(0, 6).extendedMargins(0, 0, 0, 2).applyTo(conversation);
+        GridLayoutFactory.fillDefaults().spacing(0, 6).extendedMargins(0, 0, 0, 2).applyTo(column);
         sash.setWeights(historyWeights);
         sash.setMaximizedControl(historyShown ? null : column);
-        top = new Composite(conversation, SWT.NONE);
+        top = new Composite(column, SWT.NONE);
         GridDataFactory.fillDefaults().grab(true, true).applyTo(top);
         topLayout = new StackLayout();
         top.setLayout(topLayout);
         createHistory(top);
         createEmptyState(top);
-        approvalBar = new ApprovalBar(conversation, this::approvalChanged);
-        questionsBar = new UserQuestionsBar(conversation, this::approvalChanged);
-        createPlanBar(conversation);
-        queueBar = new QueueBar(conversation, new QueueBar.Callbacks() {
+        subagentsPanel = new SubagentsPanel(column, () -> {
+            if (root != null && status != null) root.layout(true, true);
+        });
+        approvalBar = new ApprovalBar(column, this::approvalChanged);
+        questionsBar = new UserQuestionsBar(column, this::approvalChanged);
+        createPlanBar(column);
+        queueBar = new QueueBar(column, new QueueBar.Callbacks() {
             @Override
             public void edit(QueueBar.Queued message) {
                 returnToInput(message);
@@ -735,21 +734,12 @@ public class ChatView extends ViewPart {
                 root.layout(true, true);
             }
         });
-        createContextBar(conversation);
-        createInput(conversation);
+        createContextBar(column);
+        createInput(column);
 
-        Composite statusRow = new Composite(conversation, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, false).applyTo(statusRow);
-        GridLayoutFactory.fillDefaults().numColumns(2).spacing(2, 0).applyTo(statusRow);
-        activityIndicator = new ActivityIndicator(statusRow);
-        GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.CENTER).applyTo(activityIndicator);
-        activityIndicator.onFrame(phase -> renderer.activityFrame(phase));
-        status = new Label(statusRow, SWT.NONE);
+        status = new Label(column, SWT.NONE);
         status.setForeground(metaColor());
         GridDataFactory.fillDefaults().grab(true, false).indent(4, 0).applyTo(status);
-        subagentsPanel = new SubagentsPanel(column, () -> {
-            if (root != null && status != null) root.layout(true, true);
-        });
 
         createActions();
 
@@ -777,8 +767,6 @@ public class ChatView extends ViewPart {
         history.setMargins(24, 24, 36, 24);
         history.setLineSpacing(2);
         scrollBar = new ThinScrollBar(history);
-        jumpToBottom = new JumpToBottom(history);
-        scrollBar.onChange(jumpToBottom::sync);
         renderer = new MessageRenderer(history, new MessageRenderer.Callbacks() {
             @Override
             public void copy(String text) {
@@ -1010,7 +998,6 @@ public class ChatView extends ViewPart {
         input = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         input.setMessage("Сообщение (Enter — отправить, Shift+Enter — новая строка)");
         GridDataFactory.fillDefaults().grab(true, false).applyTo(input);
-        Scrolls.wrap(input);
         input.addListener(SWT.KeyDown, this::onInputKey);
         input.addModifyListener(event -> {
             if (!recalling) {
@@ -1926,7 +1913,11 @@ public class ChatView extends ViewPart {
         int needed = (content + lineHeight - 1) / lineHeight;
         int lines = Math.max(MIN_INPUT_LINES, Math.min(MAX_INPUT_LINES, needed));
         int height = lines * lineHeight + trim;
-        Scrolls.wrap(input).sync();
+        // Полоса прокрутки — только когда текст не помещается: пустая полоса в поле выглядит как рамка.
+        ScrollBar bar = input.getVerticalBar();
+        if (bar != null && bar.getVisible() != needed > MAX_INPUT_LINES) {
+            bar.setVisible(needed > MAX_INPUT_LINES);
+        }
         GridData data = (GridData) input.getLayoutData();
         if (data.heightHint != height) {
             data.heightHint = height;
@@ -3397,7 +3388,6 @@ public class ChatView extends ViewPart {
             topLayout.topControl = shown;
             top.layout(true);
         }
-        scrollBar.update();
     }
 
     private void updateSendButton() {
@@ -3443,8 +3433,6 @@ public class ChatView extends ViewPart {
     }
 
     private void updateStatus() {
-        activityIndicator.setActive(session.isBusy() && (questionsBar == null || !questionsBar.isShown())
-                && (approvalBar == null || !approvalBar.isShown()));
         updateContextRing();
         String text;
         if (notice != null) {
@@ -3799,9 +3787,6 @@ public class ChatView extends ViewPart {
     ThinScrollBar scrollBar() {
         return scrollBar;
     }
-
-    JumpToBottom jumpToBottom() { return jumpToBottom; }
-    ActivityIndicator activityIndicator() { return activityIndicator; }
 
     ChatHistoryPanel historyPanel() {
         return historyPanel;
