@@ -41,7 +41,9 @@ class ChatHistoryResizeTest extends AbstractChatTest {
                 shell.layout(true, true);
                 settle();
                 assertLayout(panel.table());
-                assertTrue(((Scrolls) panel.table().getParent()).vertical().isShown(), "длинная история требует прокрутки");
+                waitUntil(() -> ((Scrolls) panel.table().getParent()).vertical().isShown(),
+                        () -> "длинная история: строк=" + panel.table().getItemCount() + ", высота строки="
+                                + panel.table().getItemHeight() + ", таблица=" + panel.table().getClientArea());
             }
             Screenshots.capture(panel.control(), "history-resized");
 

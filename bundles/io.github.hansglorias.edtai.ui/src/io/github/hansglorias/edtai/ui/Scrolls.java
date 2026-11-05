@@ -24,6 +24,7 @@ final class Scrolls extends Composite {
     private int x;
     private boolean syncing;
     private boolean fitWidth;
+    private boolean syncQueued;
 
     /** Вызывать после задания layoutData; оно остаётся общим с обёрткой. */
     static Scrolls wrap(Scrollable control) {
@@ -77,8 +78,9 @@ final class Scrolls extends Composite {
             }
             protected void layout(Composite parent, boolean changed) { arrange(); }
         });
-        control.addListener(SWT.Paint, event -> sync());
-        control.addListener(SWT.Resize, event -> sync());
+        control.addListener(SWT.Paint, event -> { sync(); syncAfterLayout(); });
+        control.addListener(SWT.Resize, event -> { sync(); syncAfterLayout(); });
+        control.addListener(SWT.Show, event -> syncAfterLayout());
         control.addListener(SWT.KeyUp, event -> sync());
         control.addListener(SWT.MouseUp, event -> sync());
         if (control instanceof Text) control.addListener(SWT.Modify, event -> sync());
@@ -115,6 +117,16 @@ final class Scrolls extends Composite {
     void fitWidth() {
         fitWidth = true;
         layout();
+    }
+
+    private void syncAfterLayout() {
+        if (syncQueued) return;
+        syncQueued = true;
+        getDisplay().asyncExec(() -> {
+            syncQueued = false;
+            // GTK измеряет строки таблицы во время отрисовки: берём окончательную высоту после неё.
+            if (!isDisposed()) sync();
+        });
     }
 
     private int contentWidth() {
