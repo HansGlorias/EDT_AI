@@ -478,11 +478,19 @@ final class AgentLoop {
                 TokenUsage sending = TokenUsage.sending(usage, request.estimatedInputTokens());
                 publishUsage(exploration ? uncertain(sending) : sending);
                 ModelReply reply;
+                String prior = answer.toString();
+                String gap = !separate || prior.isEmpty() || prior.endsWith("\n\n") ? ""
+                        : prior.endsWith("\n") ? "\n" : "\n\n";
                 try {
                     reply = await(client.request(connection, request, this::text, onReasoning, attempt, RequestBudget.chars(connection) >> shrink));
                 } catch (Exception e) {
                     // Без usage прерванного/ошибочного запроса известна только часть расхода ребёнка.
                     if (exploration) uncertainChildUsage = true;
+                    if (e instanceof GenerationStoppedException stopped) {
+                        markIncomplete("повторяющаяся генерация остановлена");
+                        throw new GenerationStoppedException(ChatMessage.stripTraces(prior
+                                + (stopped.safeText().isEmpty() ? "" : gap + stopped.safeText())).stripTrailing());
+                    }
                     throw e;
                 }
                 TokenUsage estimate = estimate(request.estimatedInputChars(), reply);

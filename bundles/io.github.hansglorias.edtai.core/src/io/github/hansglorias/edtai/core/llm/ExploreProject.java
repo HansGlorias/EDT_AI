@@ -166,6 +166,11 @@ final class ExploreProject implements Tool {
             throw e;
         } catch (ExecutionException e) {
             String reason = child.incomplete() ? child.incompleteReason() : "запрос специалиста завершился ошибкой";
+            if (e.getCause() instanceof GenerationStoppedException stopped) {
+                String shown = "Завершено частично: " + reason + ".\n\n" + clean(stopped.safeText());
+                progress.accept(new ToolUse(id, ToolUse.SUBAGENT, title, shown, ToolUse.Status.DONE).withUsage(spent[0]));
+                return report("partial", stopped.safeText(), checked, reason);
+            }
             progress.accept(ToolUse.failed(id, ToolUse.SUBAGENT, title, ToolUse.Problem.FAILED, reason).withUsage(spent[0]));
             return report(child.incomplete() ? "partial" : "failed",
                     "Используй проверенную область и прочитай код самостоятельно.", checked, reason);

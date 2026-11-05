@@ -11,6 +11,7 @@ import java.util.concurrent.ExecutionException;
 
 import io.github.hansglorias.edtai.core.chat.ChatMessage.Status;
 import io.github.hansglorias.edtai.core.context.ContextItem;
+import io.github.hansglorias.edtai.core.llm.GenerationStoppedException;
 
 /**
  * История одного диалога и отправка сообщений провайдеру. Одновременно
@@ -540,7 +541,10 @@ public final class ChatSession {
             });
             request.clock.finish(now);
             Throwable cause = unwrap(error);
-            String partial = request.text.toString();
+            String partial = cause instanceof GenerationStoppedException stopped ? stopped.safeText() : request.text.toString();
+            if (cause instanceof GenerationStoppedException) {
+                request.tools.replaceAll(use -> use.at() < 0 ? use : use.withAt(Math.min(partial.length(), use.at())));
+            }
             if (cause == null) {
                 String text = answer != null ? answer : partial;
                 // Итоговый текст бывает короче потока (убраны пробелы и рассуждения в начале): сдвигаем места вызовов.

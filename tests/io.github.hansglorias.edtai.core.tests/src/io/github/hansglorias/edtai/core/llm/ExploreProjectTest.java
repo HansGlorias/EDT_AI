@@ -229,7 +229,8 @@ class ExploreProjectTest {
             AtomicInteger calls = new AtomicInteger();
             List<ToolUse> progress = new CopyOnWriteArrayList<>();
             List<Throwable> errors = new CopyOnWriteArrayList<>();
-            String report = "Проверенный вывод.\n".repeat(1200) + "FULL_REPORT_TAIL";
+            String report = java.util.stream.IntStream.range(0, 1200).mapToObj(i -> "Проверенный вывод " + i + ".\n")
+                    .collect(java.util.stream.Collectors.joining()) + "FULL_REPORT_TAIL";
             try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
                 try {
                     int step = calls.getAndIncrement();
@@ -485,14 +486,14 @@ class ExploreProjectTest {
             assertTrue(result.text().contains("запрос специалиста завершился ошибкой"));
         }
         try (FakeModelServer server = FakeModelServer.http().handler((request, response) ->
-                send(response, Protocol.OPENAI_COMPATIBLE, "x".repeat(20_000), List.of(), 1, 1))) {
+                send(response, Protocol.OPENAI_COMPATIBLE, "```text\n" + "x".repeat(20_000) + "\n```", List.of(), 1, 1))) {
             Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read"));
             assertEquals("partial", result.outcome());
             assertTrue(result.text().contains("нет подтверждённых чтений проекта"));
             assertTrue(result.text().contains("x".repeat(20_000)));
         }
         try (FakeModelServer server = FakeModelServer.http().handler((request, response) ->
-                send(response, Protocol.OPENAI_COMPATIBLE, "result_id ".repeat(350), List.of(), 1, 1))) {
+                send(response, Protocol.OPENAI_COMPATIBLE, "```text\n" + "result_id ".repeat(350) + "\n```", List.of(), 1, 1))) {
             Tool.Result result = explorer(server, reads()).call(Map.of("question", "Read"));
             assertFalse(result.text().contains("result_id"));
             assertTrue(result.text().contains("[ссылка недоступна] ".repeat(350).stripTrailing()));
@@ -561,6 +562,30 @@ class ExploreProjectTest {
                     Map.<String, Object>of("role", "verify", "task", "x", "scope", 7),
                     Map.<String, Object>of("role", "review", "task", "x", "extra", "x"))) {
                 assertThrows(ToolException.class, () -> delegate.call(input));
+            }
+        }
+    }
+
+    @Test
+    void corruptChildKeepsItsPrefixAndCheckedAreaWithoutRetry() throws Exception {
+        for (Protocol protocol : Protocol.values()) {
+            AtomicInteger requests = new AtomicInteger();
+            List<ToolUse> progress = new CopyOnWriteArrayList<>();
+            try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                if (requests.getAndIncrement() == 0) send(response, protocol, "Нашёл модуль.",
+                        List.of(call("read_module", Map.of("module", "src/CommonModules/Test/Module.bsl"))), 1, 1);
+                else send(response, protocol, "Найдена полезная связь.\n\n" + "</function_results>".repeat(1500), List.of(), 1, 1);
+            })) {
+                ExploreProject runner = new ExploreProject(new ModelClient(), connection(server, protocol), reads(),
+                        progress::add, (id, usage) -> { });
+                Tool.Result report = runner.call(Map.of("question", "Найди связи"));
+                assertEquals("partial", report.outcome());
+                assertTrue(report.text().contains("Найдена полезная связь."));
+                assertTrue(report.text().contains("read_module") || report.text().contains("Читает модуль"));
+                assertFalse(report.text().contains("</function_results>"));
+                assertTrue(progress.stream().anyMatch(use -> use.name().equals(ToolUse.SUBAGENT)
+                        && use.status() == ToolUse.Status.DONE && use.outcome().contains("Найдена полезная связь.")));
+                assertEquals(2, requests.get());
             }
         }
     }
