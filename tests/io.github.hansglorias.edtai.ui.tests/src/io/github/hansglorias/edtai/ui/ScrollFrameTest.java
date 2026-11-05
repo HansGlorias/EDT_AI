@@ -192,6 +192,12 @@ class ScrollFrameTest extends AbstractChatTest {
             list.horizontal().control().notifyListeners(SWT.MouseDown, down);
             list.horizontal().control().notifyListeners(SWT.MouseUp, new Event());
             assertTrue(table.getLocation().x < 0, "горизонтальная прокрутка открывает правые колонки");
+            Event horizontalWheel = new Event(); horizontalWheel.count = 100;
+            table.notifyListeners(SWT.MouseHorizontalWheel, horizontalWheel);
+            assertEquals(0, table.getLocation().x);
+            horizontalWheel = new Event(); horizontalWheel.count = -3;
+            table.notifyListeners(SWT.MouseHorizontalWheel, horizontalWheel);
+            assertTrue(table.getLocation().x < 0, "горизонтальный жест работает и над самой таблицей");
             text.setText("коротко");
             settle();
             field.sync();
@@ -274,6 +280,14 @@ class ScrollFrameTest extends AbstractChatTest {
             scroll.showControl(last);
             assertTrue(scroll.getOrigin().y > 600);
             assertTrue(scroll.getOrigin().x > 0);
+            scroll.setOrigin(0, 0);
+            scroll.setShowFocusedControl(true);
+            last.notifyListeners(SWT.FocusIn, new Event());
+            assertTrue(scroll.getOrigin().x > 0 && scroll.getOrigin().y > 600, "фокус открывает поле по обеим осям");
+            scroll.setOrigin(0, 0);
+            Event across = new Event(); across.count = -3;
+            last.notifyListeners(SWT.MouseHorizontalWheel, across);
+            assertTrue(scroll.getOrigin().x > 0 && scroll.getOrigin().y == 0, "горизонтальный жест не двигает вертикаль");
             scroll.setOrigin(0, 0);
             wheel(last, -3);
             assertTrue(scroll.getOrigin().y > 0, "колесо над дочерней кнопкой прокручивает форму");

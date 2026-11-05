@@ -76,6 +76,7 @@ final class ThinScrollBar {
         bar.addListener(SWT.MouseEnter, event -> setHover(true));
         bar.addListener(SWT.MouseExit, event -> setHover(false));
         bar.addListener(SWT.MouseVerticalWheel, this::wheel);
+        if (horizontal) bar.addListener(SWT.MouseHorizontalWheel, this::wheel);
         bar.addListener(SWT.Dispose, event -> disposeColors());
     }
 
@@ -166,7 +167,7 @@ final class ThinScrollBar {
     }
 
     private void wheel(Event event) {
-        if (event.count == 0) {
+        if (event.count == 0 || !event.doit) {
             return;
         }
         int lines = Math.abs(event.count) >= WHEEL_LINES ? Math.abs(event.count) : WHEEL_LINES;

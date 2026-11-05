@@ -164,7 +164,7 @@ class AiPreferencePageTest extends AbstractChatTest {
             assertEquals("test-first-token", store.loadToken(store.providers().get(0).id()));
             assertEquals("test-second-token", store.loadToken(store.providers().get(1).id()));
             dialog.getShell().setSize(900, 800);
-            var scroll = (ScrolledComposite) settings.providerNameField().getParent().getParent().getParent();
+            var scroll = (ScrollArea) settings.providerNameField().getParent().getParent().getParent();
             scroll.setOrigin(0, 0);
             Screenshots.capture(dialog.getShell(), "preferences-providers");
             settings.deleteProvider();

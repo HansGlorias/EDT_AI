@@ -27,12 +27,9 @@ class ScrollArea extends Composite {
     };
     private final Listener focus = event -> {
         if (!showFocusedControl || !(event.widget instanceof Control control) || !inside(control)) return;
-        Point at = toControl(control.toDisplay(0, 0));
-        Rectangle page = viewport();
-        int y = at.y < 0 ? origin.y + at.y : at.y + control.getSize().y > page.height
-                ? origin.y + at.y + control.getSize().y - page.height : origin.y;
-        setOrigin(origin.x, y);
+        showControl(control);
     };
+    private final Listener acrossWheel = this::acrossWheel;
 
     ScrollArea(Composite parent, int style) {
         super(parent, style & ~(SWT.V_SCROLL | SWT.H_SCROLL));
@@ -48,9 +45,11 @@ class ScrollArea extends Composite {
             protected void layout(Composite parent, boolean changed) { arrange(); }
         });
         getDisplay().addFilter(SWT.MouseVerticalWheel, wheel);
+        getDisplay().addFilter(SWT.MouseHorizontalWheel, acrossWheel);
         getDisplay().addFilter(SWT.FocusIn, focus);
         addListener(SWT.Dispose, event -> {
             getDisplay().removeFilter(SWT.MouseVerticalWheel, wheel);
+            getDisplay().removeFilter(SWT.MouseHorizontalWheel, acrossWheel);
             getDisplay().removeFilter(SWT.FocusIn, focus);
         });
         addListener(SWT.Resize, event -> arrange());
@@ -98,11 +97,23 @@ class ScrollArea extends Composite {
     }
 
     private boolean owns(Control control, int count) {
+        if (control == vertical.control() || control == horizontal.control()) return false;
         for (Control item = control; item != null; item = item.getParent()) {
             if (item == this) return true;
             if (item instanceof ScrollArea || item instanceof ScrollFrame scroll && scroll.canScroll(count)) return false;
         }
         return false;
+    }
+
+    private void acrossWheel(org.eclipse.swt.widgets.Event event) {
+        if (!across || event.count == 0 || !event.doit || !(event.widget instanceof Control control)
+                || control == horizontal.control() || !inside(control)) return;
+        for (Control item = control; item != this; item = item.getParent()) {
+            if (item instanceof ScrollArea area && area.horizontal().isShown()) return;
+            if (item instanceof ScrollFrame frame && frame.horizontal().isShown()) return;
+        }
+        setOrigin(origin.x - event.count * 20, origin.y);
+        event.doit = false;
     }
 
     void setContent(Control value) { content = value; arrange(); }

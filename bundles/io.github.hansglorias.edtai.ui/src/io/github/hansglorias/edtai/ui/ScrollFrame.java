@@ -99,6 +99,14 @@ final class ScrollFrame extends Composite {
             scrollTop(top() - event.count * lineHeight());
             event.doit = false;
         });
+        org.eclipse.swt.widgets.Listener across = event -> {
+            if (event.count == 0 || !event.doit || contentWidth() <= getClientArea().width - ThinScrollBar.WIDTH) return;
+            x = Math.max(0, Math.min(contentWidth() - getClientArea().width + ThinScrollBar.WIDTH, x - event.count * 24));
+            layout();
+            event.doit = false;
+        };
+        control.addListener(SWT.MouseHorizontalWheel, across);
+        vertical.control().addListener(SWT.MouseHorizontalWheel, across);
         if (control instanceof Tree) {
             control.addListener(SWT.Expand, event -> getDisplay().asyncExec(() -> { if (!isDisposed()) sync(); }));
             control.addListener(SWT.Collapse, event -> getDisplay().asyncExec(() -> { if (!isDisposed()) sync(); }));
