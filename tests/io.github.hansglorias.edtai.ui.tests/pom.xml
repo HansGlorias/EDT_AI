@@ -45,8 +45,8 @@
           <useUIThread>true</useUIThread>
           <application>org.eclipse.ui.ide.workbench</application>
           <argLine>${ui.test.vmargs}</argLine>
-          <!-- Не читать Secure Storage установленной EDT пользователя. -->
-          <appArgLine>-eclipse.keyring "${project.build.directory}/secure-storage"</appArgLine>
+          <!-- Изолированное хранилище и тестовый мастер-пароль: без ОС-модулей и диалогов. -->
+          <appArgLine>-eclipse.keyring "${project.build.directory}/secure-storage" -eclipse.password "${project.basedir}/test-password.txt"</appArgLine>
           <systemProperties>
             <edtai.screenshots>${project.build.directory}/screenshots</edtai.screenshots>
           </systemProperties>

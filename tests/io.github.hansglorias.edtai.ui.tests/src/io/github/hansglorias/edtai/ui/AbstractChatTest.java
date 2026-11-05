@@ -57,6 +57,8 @@ abstract class AbstractChatTest {
     void prepareWorkbench() throws Exception {
         page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
         page.getWorkbenchWindow().getShell().setBounds(0, 0, 720, 780);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(SettingsStore.KEY_PROVIDERS);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(SettingsStore.KEY_ACTIVE_PROVIDER);
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);
@@ -83,6 +85,8 @@ abstract class AbstractChatTest {
         if (server != null) {
             server.close();
         }
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(SettingsStore.KEY_PROVIDERS);
+        InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(SettingsStore.KEY_ACTIVE_PROVIDER);
         SettingsStore.workspace().save(AiSettings.defaults());
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.AUTO_APPROVE);
         InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER).remove(ChatView.READ_ONLY);

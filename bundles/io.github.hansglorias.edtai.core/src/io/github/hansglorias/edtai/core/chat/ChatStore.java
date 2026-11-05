@@ -184,7 +184,7 @@ public final class ChatStore {
     public ChatModel model(String id) {
         Object entry = models().get(id);
         return entry == null ? ChatModel.NONE
-                : new ChatModel(Json.stringAt(entry, "model"), Json.stringAt(entry, "baseUrl"));
+                : new ChatModel(Json.stringAt(entry, "model"), Json.stringAt(entry, "baseUrl"), Json.stringAt(entry, "providerId"));
     }
 
     /** Привязывает модель к диалогу; {@link ChatModel#NONE} — снять привязку. */
@@ -194,7 +194,7 @@ public final class ChatStore {
         if (model.isEmpty()) {
             models.remove(id);
         } else {
-            models.put(id, Json.object("model", model.model(), "baseUrl", model.baseUrl()));
+            models.put(id, Json.object("model", model.model(), "baseUrl", model.baseUrl(), "providerId", model.providerId()));
         }
         if (!Objects.equals(before, models.get(id))) {
             writeModels(models);

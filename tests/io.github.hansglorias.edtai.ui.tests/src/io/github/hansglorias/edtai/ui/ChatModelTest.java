@@ -19,6 +19,9 @@ import io.github.hansglorias.edtai.core.chat.ChatModel;
 import io.github.hansglorias.edtai.core.chat.ChatStore;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
+import io.github.hansglorias.edtai.core.settings.ApiProvider;
+import io.github.hansglorias.edtai.core.settings.AiSettings;
+import io.github.hansglorias.edtai.core.settings.Protocol;
 
 /** Выбор модели в поле ввода: список с сервера, недавние, {@code /model}. */
 class ChatModelTest extends AbstractChatTest {
@@ -130,4 +133,154 @@ class ChatModelTest extends AbstractChatTest {
         assertEquals("test-model", view.modelButton().getText());
         assertEquals(new ChatModel("test-model", server.url()), saved.model(second), "смена модели в настройках — открытому чату");
     }
+    @Test
+    void providersRoutePerChatWithOwnTokensAndModelLists() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (request.method().equals("GET")) {
+                response.send(200, "application/json", "{\"data\":[{\"id\":\"first-only\"}]}");
+            } else response.sse(List.of(openAiPart("первый"), "data: [DONE]\n\n"), 5);
+        });
+        try (FakeModelServer secondServer = FakeModelServer.http().handler((request, response) -> {
+            if (request.method().equals("GET")) {
+                response.send(200, "application/json", "{\"data\":[{\"id\":\"second-only\"}]}");
+            } else response.sse(List.of(openAiPart("второй"), "data: [DONE]\n\n"), 5);
+        })) {
+            configure(server);
+            SettingsStore store = SettingsStore.workspace();
+            ApiProvider first = store.providers().get(0);
+            ApiProvider second = new ApiProvider("second", "Второй", Protocol.OPENAI_COMPATIBLE, secondServer.url(),
+                    "second-model", 0, 16384, false, "");
+            store.saveProviders(List.of(first, second), first.id());
+            store.saveToken(first.id(), "test-first-secret");
+            store.saveToken(second.id(), "test-second-secret");
+            try {
+                ChatView view = showView();
+                ask(view, "Первый вопрос");
+                String firstId = view.chats().list().get(0).id();
+                view.newChatForTest();
+                view.chooseProvider(second.id());
+                settle();
+                assertEquals(second.id(), view.chatSettings().providerId());
+                view.loadModels(false);
+                waitUntil(() -> view.modelChoices().contains("second-only"));
+                assertFalse(view.modelChoices().contains("first-only"));
+                Menu menu = view.modelMenu();
+                assertTrue(menu.getItems()[0].getText().contains("Второй"));
+                menu.dispose();
+                Screenshots.capture(view.control(), "provider-picker");
+                ask(view, "Второй вопрос");
+                String secondId = view.chats().list().get(0).id();
+                assertTrue(view.history().getText().contains("второй"));
+                view.openChatForTest(firstId);
+                settle();
+                assertEquals(first.id(), view.chatSettings().providerId());
+                view.loadModels(false);
+                waitUntil(() -> view.modelChoices().contains("first-only"));
+                assertFalse(view.modelChoices().contains("second-only"));
+                ask(view, "Снова первый");
+                assertEquals("первый", view.session().messages().get(view.session().messages().size() - 1).text());
+                ChatStore reopened = new ChatStore(stateLocation().resolve(ChatView.CHATS_DIRECTORY));
+                assertEquals(first.id(), reopened.model(firstId).providerId());
+                assertEquals(second.id(), reopened.model(secondId).providerId());
+                for (var request : server.requests()) assertEquals("Bearer test-first-secret", request.header("Authorization"));
+                for (var request : secondServer.requests()) assertEquals("Bearer test-second-secret", request.header("Authorization"));
+                assertEquals(2, server.requests().stream().filter(r -> r.method().equals("POST")).count());
+                assertEquals(1, secondServer.requests().stream().filter(r -> r.method().equals("POST")).count());
+            } finally {
+                store.saveToken(first.id(), "");
+                store.saveToken(second.id(), "");
+            }
+        }
+    }
+
+    @Test
+    void switchingProviderDuringToolStepKeepsRunningReplyOnOriginalServer() throws Exception {
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var posts = new java.util.concurrent.atomic.AtomicInteger();
+        server = FakeModelServer.http().handler((request, response) -> {
+            if (posts.incrementAndGet() == 1) {
+                entered.countDown();
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                response.sse(List.of("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call1\",\"type\":\"function\",\"function\":{\"name\":\"list_objects\",\"arguments\":\"{}\"}}]}}]}\n\n",
+                        "data: [DONE]\n\n"), 5);
+            } else response.sse(List.of(openAiPart("исходный сервер"), "data: [DONE]\n\n"), 5);
+        });
+        configure(server);
+        SettingsStore store = SettingsStore.workspace();
+        ApiProvider first = store.providers().get(0);
+        ApiProvider second = new ApiProvider("offline", "Другой", Protocol.OPENAI_COMPATIBLE,
+                "https://example.invalid", "other", 0, 8192, false, "");
+        store.saveProviders(List.of(first, second), first.id());
+        ChatView view = showView();
+        view.input().setText("Вопрос с инструментом");
+        view.send();
+        waitUntil(() -> entered.getCount() == 0);
+        view.chooseProvider(second.id());
+        settle();
+        release.countDown();
+        waitUntil(() -> !view.session().isBusy());
+        view.refresh();
+        assertEquals(second.id(), view.chatSettings().providerId());
+        assertEquals(2, posts.get(), "следующий шаг цикла остался на исходном подключении");
+        assertTrue(view.history().getText().contains("исходный сервер"), view.history().getText());
+    }
+
+    @Test
+    void deletedProviderRequiresExplicitSelectionEvenIfOnlyOneRemains() throws Exception {
+        ChatView view = serverWithModels();
+        SettingsStore store = SettingsStore.workspace();
+        ask(view, "Старый чат до появления профилей");
+        ApiProvider first = store.providers().get(0);
+        ApiProvider second = ApiProvider.of("other", "Оставшийся", store.load().withModel("other-model"));
+        store.saveProviders(List.of(first, second), first.id());
+        settle();
+        store.saveProviders(List.of(second), second.id());
+        settle();
+        assertFalse(view.chatSettings().isConfigured(), "текущий чат не переназначается при удалении его профиля");
+        view.chooseModel("cannot-reroute");
+        assertTrue(view.status().getText().contains("Провайдер удалён"));
+        assertEquals("other-model", store.load().model());
+        Menu menu = view.modelMenu();
+        assertTrue(menu.getItems()[0].getText().contains("Удалённый провайдер"));
+        MenuItem item = menu.getItems()[0].getMenu().getItems()[0];
+        item.setSelection(true);
+        item.notifyListeners(SWT.Selection, new Event());
+        menu.dispose();
+        settle();
+        assertEquals(second.id(), view.chatSettings().providerId());
+        assertTrue(view.chatSettings().isConfigured());
+    }
+
+    @Test
+    void lateModelListAndPendingCommandCannotChangeAnotherProvider() throws Exception {
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        server = FakeModelServer.http().handler((request, response) -> {
+            entered.countDown();
+            release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            response.send(200, "application/json", "{\"data\":[{\"id\":\"first-only\"}]}");
+        });
+        try (FakeModelServer secondServer = FakeModelServer.http().handler((request, response) ->
+                response.send(200, "application/json", "{\"data\":[{\"id\":\"second-only\"}]}"))) {
+            configure(server);
+            SettingsStore store = SettingsStore.workspace();
+            ApiProvider first = store.providers().get(0);
+            ApiProvider second = new ApiProvider("late", "Второй", Protocol.OPENAI_COMPATIBLE, secondServer.url(),
+                    "second-model", 0, 0, false, "");
+            store.saveProviders(List.of(first, second), first.id());
+            ChatView view = showView();
+            view.input().setText("/model first-only");
+            view.send();
+            waitUntil(() -> entered.getCount() == 0);
+            view.chooseProvider(second.id());
+            settle();
+            release.countDown();
+            waitUntil(() -> view.modelChoices().contains("second-only"));
+            assertFalse(view.modelChoices().contains("first-only"));
+            assertEquals("second-model", view.chatSettings().model());
+            assertEquals("second-model", store.provider(second.id()).model());
+        } finally { release.countDown(); }
+    }
+
 }

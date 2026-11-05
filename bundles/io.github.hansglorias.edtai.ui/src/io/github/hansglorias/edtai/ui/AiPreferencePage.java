@@ -3,7 +3,10 @@ package io.github.hansglorias.edtai.ui;
 import java.nio.file.Path;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Function;
@@ -43,6 +46,7 @@ import io.github.hansglorias.edtai.core.llm.ModelConnection;
 import io.github.hansglorias.edtai.core.mcp.McpException;
 import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
+import io.github.hansglorias.edtai.core.settings.ApiProvider;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
@@ -60,6 +64,17 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     private final SettingsStore store = SettingsStore.workspace();
     private final List<McpServer> servers = new ArrayList<>();
+
+    private final List<ApiProvider> providers = new ArrayList<>();
+    private final Map<String, String> tokenEdits = new HashMap<>();
+    private final List<String> deletedProviders = new ArrayList<>();
+    private Combo providerChoice;
+    private Text providerName;
+    private Button deleteProvider;
+    private String providerId = ApiProvider.DEFAULT_ID;
+    private boolean catalogChanged;
+    private boolean filling;
+    private int connectionRevision;
 
     private Combo protocol;
     private Text baseUrl;
@@ -112,6 +127,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         Composite page = new Composite(scroll, SWT.NONE);
         GridLayoutFactory.fillDefaults().applyTo(page);
 
+        providers.addAll(store.providers());
+        providerId = store.activeProviderId();
+        catalogChanged = !store.load().providerId().isEmpty();
+        createProvidersGroup(page);
         createConnectionGroup(page);
         createCertificatesGroup(page);
         createMcpGroup(page);
@@ -125,7 +144,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
                 + "\nСостояние журнала — в подсказке строки состояния чата.");
         GridDataFactory.fillDefaults().grab(true, false).hint(400, SWT.DEFAULT).applyTo(diagnosticInfo);
 
+        filling = true;
         fill(store.load());
+        refreshProviders();
+        filling = false;
         updateTokenState();
         validate();
         Dialog.applyDialogFont(page);
@@ -135,6 +157,89 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         scroll.addListener(SWT.Resize, event -> resize.run());
         resize.run();
         return scroll;
+    }
+
+    private void createProvidersGroup(Composite page) {
+        Group group = group(page, "API-провайдеры", 3);
+        providerChoice = new Combo(group, SWT.READ_ONLY);
+        GridDataFactory.fillDefaults().hint(220, SWT.DEFAULT).applyTo(providerChoice);
+        providerChoice.addListener(SWT.Selection, event -> switchProvider(providerChoice.getSelectionIndex()));
+        Button add = button(group, "Добавить");
+        GridDataFactory.fillDefaults().applyTo(add);
+        add.addListener(SWT.Selection, event -> addProvider());
+        deleteProvider = button(group, "Удалить");
+        GridDataFactory.fillDefaults().applyTo(deleteProvider);
+        deleteProvider.addListener(SWT.Selection, event -> deleteProvider());
+        label(group, "Имя:");
+        providerName = new Text(group, SWT.BORDER);
+        GridDataFactory.fillDefaults().hint(260, SWT.DEFAULT).span(2, 1).applyTo(providerName);
+        providerName.addModifyListener(event -> {
+            if (!filling) { catalogChanged = true; validate(); }
+        });
+    }
+
+    private int providerIndex() {
+        for (int i = 0; i < providers.size(); i++) if (providers.get(i).id().equals(providerId)) return i;
+        return 0;
+    }
+
+    private void refreshProviders() {
+        providerChoice.setItems(providers.stream().map(ApiProvider::name).toArray(String[]::new));
+        providerChoice.select(providerIndex());
+        providerName.setText(providers.get(providerIndex()).name());
+        deleteProvider.setEnabled(providers.size() > 1);
+    }
+
+    private boolean stageProvider() {
+        validate();
+        if (!isValid()) { providerChoice.select(providerIndex()); return false; }
+        providers.set(providerIndex(), ApiProvider.of(providerId, providerName.getText(), current()));
+        if (!token.getText().isEmpty()) tokenEdits.put(providerId, token.getText());
+        else if (tokenRemovalRequested) tokenEdits.put(providerId, "");
+        return true;
+    }
+
+    void switchProvider(int index) {
+        if (index < 0 || index >= providers.size() || !stageProvider()) return;
+        AiSettings shared = current();
+        providerId = providers.get(index).id();
+        catalogChanged = true;
+        showProvider(shared);
+    }
+
+    void addProvider() {
+        if (!stageProvider()) return;
+        AiSettings shared = current();
+        providerId = UUID.randomUUID().toString();
+        providers.add(ApiProvider.of(providerId, "Провайдер " + (providers.size() + 1), AiSettings.defaults()));
+        catalogChanged = true;
+        showProvider(shared);
+    }
+
+    void deleteProvider() {
+        if (providers.size() < 2) return;
+        AiSettings shared = current();
+        deletedProviders.add(providerId);
+        tokenEdits.remove(providerId);
+        providers.remove(providerIndex());
+        providerId = providers.get(0).id();
+        catalogChanged = true;
+        showProvider(shared);
+    }
+
+    private void showProvider(AiSettings shared) {
+        connectionRevision++;
+        filling = true;
+        fill(providers.get(providerIndex()).apply(shared));
+        tokenRemovalRequested = tokenEdits.containsKey(providerId) && tokenEdits.get(providerId).isEmpty();
+        token.setText(tokenEdits.getOrDefault(providerId, ""));
+        refreshProviders();
+        filling = false;
+        updateTokenState();
+        checkResult.setText("");
+        checkButton.setEnabled(true);
+        listModels.setEnabled(true);
+        validate();
     }
 
     private void createConnectionGroup(Composite page) {
@@ -282,11 +387,12 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
             showCheckResult("Не удалось прочитать токен из Secure Storage: " + e.getMessage());
             return;
         }
+        int revision = connectionRevision;
         listModels.setEnabled(false);
         showCheckResult("Загружаю список моделей…");
         Display display = listModels.getDisplay();
         new ModelClient().models(ModelConnection.of(settings, tokenValue)).whenComplete((ids, error) -> display.asyncExec(() -> {
-            if (listModels.isDisposed()) {
+            if (listModels.isDisposed() || revision != connectionRevision) {
                 return;
             }
             listModels.setEnabled(true);
@@ -315,7 +421,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     /** Токен из поля, а если оно пусто — сохранённый (если его не удаляют). */
     private String tokenValue() throws Exception {
-        return !token.getText().isEmpty() ? token.getText() : tokenRemovalRequested || !store.hasToken() ? "" : store.loadToken();
+        return !token.getText().isEmpty() ? token.getText() : tokenRemovalRequested || !store.hasToken(providerId) ? "" : store.loadToken(providerId);
     }
 
     /** Короткий запрос к модели с текущими значениями полей, ещё не сохранёнными. */
@@ -336,12 +442,13 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
             showCheckResult("Не удалось прочитать токен из Secure Storage: " + e.getMessage());
             return;
         }
+        int revision = connectionRevision;
         checkButton.setEnabled(false);
         showCheckResult("Проверяю…");
         Display display = checkButton.getDisplay();
         check = new ModelClient().check(ModelConnection.of(settings, tokenValue));
         check.whenComplete((result, error) -> display.asyncExec(() -> {
-            if (checkButton.isDisposed()) {
+            if (checkButton.isDisposed() || revision != connectionRevision) {
                 return;
             }
             checkButton.setEnabled(true);
@@ -560,7 +667,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         return new AiSettings(Protocol.values()[Math.max(0, protocol.getSelectionIndex())], baseUrl.getText(),
                 model.getText(), Math.max(0, maxTokensValue()), systemPrompt.getText(), Math.max(0, number(contextLimit)),
                 toolsEnabled.getSelection(), useSystemTrustStore.getSelection(), caFile.getText(), servers, Math.max(0, number(modelWindow)),
-                List.of(0, 3, 5, 10).get(Math.max(0, mcpInterval.getSelectionIndex())));
+                List.of(0, 3, 5, 10).get(Math.max(0, mcpInterval.getSelectionIndex())), catalogChanged ? providerId : "");
     }
 
     private int maxTokensValue() {
@@ -585,7 +692,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         if (baseUrl == null || maxTokens == null || contextLimit == null || modelWindow == null || caFile == null || serverViewer == null) {
             return;
         }
+        if (filling) return;
         List<String> errors = new ArrayList<>(SettingsValidator.validate(current()));
+        if (providerName.getText().isBlank()) errors.add(0, "Укажите имя провайдера");
         if (number(modelWindow) < 0) {
             errors.add(0, "Окно модели: нужно целое положительное число или пусто");
         }
@@ -619,7 +728,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     private boolean hasSavedToken() {
         try {
-            return store.hasToken();
+            return store.hasToken(providerId);
         } catch (RuntimeException e) {
             Platform.getLog(getClass()).warn("Secure Storage недоступно", e);
             return false;
@@ -644,6 +753,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     @Override
     public void dispose() {
+        tokenEdits.clear();
         if (check != null) {
             check.cancel(true);
         }
@@ -652,7 +762,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     @Override
     protected void performDefaults() {
+        filling = true;
         fill(AiSettings.defaults());
+        filling = false;
         localDiagnostics.setSelection(false);
         validate();
         super.performDefaults();
@@ -665,17 +777,18 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         if (!isValid()) {
             return false;
         }
+        if (!stageProvider()) return false;
         try {
+            for (var entry : tokenEdits.entrySet()) store.saveToken(entry.getKey(), entry.getValue());
+            if (catalogChanged) store.saveProviders(providers, providerId);
             store.save(settings);
             var preferences = org.eclipse.core.runtime.preferences.InstanceScope.INSTANCE.getNode(SettingsStore.QUALIFIER);
             preferences.putBoolean(UiDiagnosticLog.ENABLED, localDiagnostics.getSelection());
             preferences.flush();
-            if (!token.getText().isEmpty()) {
-                store.saveToken(token.getText());
-                token.setText("");
-            } else if (tokenRemovalRequested) {
-                store.saveToken("");
-            }
+            for (String deleted : deletedProviders) store.saveToken(deleted, "");
+            deletedProviders.clear();
+            tokenEdits.clear();
+            token.setText("");
             tokenRemovalRequested = false;
             updateTokenState();
             return true;
@@ -686,6 +799,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         }
     }
 
+    Combo providerChoice() { return providerChoice; }
+    Text providerNameField() { return providerName; }
+    Text tokenField() { return token; }
     Button localDiagnosticsField() { return localDiagnostics; }
 
     private void column(String title, int width, Function<McpServer, String> text) {

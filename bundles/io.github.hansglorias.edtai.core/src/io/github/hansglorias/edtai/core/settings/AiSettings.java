@@ -18,6 +18,7 @@ import java.util.Objects;
  * @param caCertificateFile   путь к дополнительному PEM-файлу с сертификатами CA, пусто — нет
  * @param mcpServers          MCP-серверы
  * @param modelWindow         окно модели в токенах: сколько помещается в запрос вместе с ответом, 0 — по имени модели
+ * @param providerId          id выбранного API-провайдера, пусто — старые настройки одного подключения
  * @param mcpCheckMinutes     период проверки связи MCP: 0 (выключен), 3, 5 или 10 минут
  */
 public record AiSettings(
@@ -32,7 +33,8 @@ public record AiSettings(
         String caCertificateFile,
         List<McpServer> mcpServers,
         int modelWindow,
-        int mcpCheckMinutes) {
+        int mcpCheckMinutes,
+        String providerId) {
 
     public static final Protocol DEFAULT_PROTOCOL = Protocol.OPENAI_COMPATIBLE;
     public static final boolean DEFAULT_USE_SYSTEM_TRUST_STORE = true;
@@ -57,6 +59,7 @@ public record AiSettings(
             + " ключевыми словами, по стандартам разработки 1С. Если не уверен в ответе — так и скажи.";
 
     public AiSettings {
+        providerId = Objects.requireNonNullElse(providerId, "");
         protocol = Objects.requireNonNullElse(protocol, DEFAULT_PROTOCOL);
         baseUrl = Objects.requireNonNullElse(baseUrl, "").strip();
         model = Objects.requireNonNullElse(model, "").strip();
@@ -67,6 +70,14 @@ public record AiSettings(
         mcpServers = List.copyOf(Objects.requireNonNullElse(mcpServers, List.of()));
         modelWindow = Math.max(AUTO_MODEL_WINDOW, modelWindow);
         if (!List.of(0, 3, 5, 10).contains(mcpCheckMinutes)) mcpCheckMinutes = DEFAULT_MCP_CHECK_MINUTES;
+    }
+
+    /** Совместимость с настройками единственного подключения. */
+    public AiSettings(Protocol protocol, String baseUrl, String model, int maxTokens, String systemPrompt, int contextLimit,
+            boolean toolsEnabled, boolean useSystemTrustStore, String caCertificateFile, List<McpServer> mcpServers,
+            int modelWindow, int mcpCheckMinutes) {
+        this(protocol, baseUrl, model, maxTokens, systemPrompt, contextLimit, toolsEnabled, useSystemTrustStore,
+                caCertificateFile, mcpServers, modelWindow, mcpCheckMinutes, "");
     }
 
     public AiSettings(Protocol protocol, String baseUrl, String model, int maxTokens, String systemPrompt, int contextLimit,
@@ -95,6 +106,6 @@ public record AiSettings(
     /** Те же настройки с другой моделью: выбор в поле ввода. */
     public AiSettings withModel(String name) {
         return new AiSettings(protocol, baseUrl, name, maxTokens, systemPrompt, contextLimit, toolsEnabled, useSystemTrustStore,
-                caCertificateFile, mcpServers, modelWindow, mcpCheckMinutes);
+                caCertificateFile, mcpServers, modelWindow, mcpCheckMinutes, providerId);
     }
 }

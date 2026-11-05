@@ -138,6 +138,63 @@ class AiPreferencePageTest extends AbstractChatTest {
         }
     }
 
+    @Test
+    void providerDraftsKeepTokensSeparateAndCancelDoesNotSave() throws Exception {
+        PreferenceDialog dialog = openPreferences();
+        try {
+            AiPreferencePage settings = (AiPreferencePage) dialog.getSelectedPage();
+            settings.providerNameField().setText("Локальный");
+            settings.baseUrlField().setText("http://localhost:11434");
+            settings.modelField().setText("qwen-local");
+            settings.tokenField().setText("test-first-token");
+            settings.addProvider();
+            assertEquals("", settings.tokenField().getText(), "новый профиль не наследует секрет");
+            settings.providerNameField().setText("Облачный");
+            settings.baseUrlField().setText("https://llm.example.invalid");
+            settings.modelField().setText("remote-model");
+            settings.tokenField().setText("test-second-token");
+            settings.switchProvider(0);
+            assertEquals("qwen-local", settings.modelField().getText());
+            assertEquals("test-first-token", settings.tokenField().getText());
+            assertEquals(1, SettingsStore.workspace().providers().size(), "до Apply ничего не сохранено");
+            settings.switchProvider(1);
+            assertEquals("test-second-token", settings.tokenField().getText());
+            assertTrue(settings.performOk());
+            var store = SettingsStore.workspace();
+            assertEquals(2, store.providers().size());
+            assertEquals("test-first-token", store.loadToken(store.providers().get(0).id()));
+            assertEquals("test-second-token", store.loadToken(store.providers().get(1).id()));
+            dialog.getShell().setSize(900, 800);
+            var scroll = (ScrolledComposite) settings.providerNameField().getParent().getParent().getParent();
+            scroll.setOrigin(0, 0);
+            Screenshots.capture(dialog.getShell(), "preferences-providers");
+            settings.deleteProvider();
+            assertEquals(2, store.providers().size(), "удаление остаётся черновиком до Apply");
+        } finally {
+            dialog.close();
+            var store = SettingsStore.workspace();
+            for (var provider : store.providers()) store.saveToken(provider.id(), "");
+        }
+    }
+
+    @Test
+    void deletingProviderRemovesItsTokenOnlyOnApply() throws Exception {
+        var store = SettingsStore.workspace();
+        var first = store.providers().get(0);
+        var second = io.github.hansglorias.edtai.core.settings.ApiProvider.of("temporary", "Временный", AiSettings.defaults());
+        store.saveProviders(java.util.List.of(first, second), second.id());
+        store.saveToken(second.id(), "test-delete-token");
+        PreferenceDialog dialog = openPreferences();
+        try {
+            AiPreferencePage settings = (AiPreferencePage) dialog.getSelectedPage();
+            settings.deleteProvider();
+            assertTrue(store.hasToken(second.id()));
+            assertTrue(settings.performOk());
+            assertEquals(1, store.providers().size());
+            assertFalse(store.hasToken(second.id()));
+        } finally { dialog.close(); store.saveToken(second.id(), ""); }
+    }
+
     private static void assertDiagnosticsVisible(AiPreferencePage settings, ScrolledComposite scroll) {
         var field = settings.localDiagnosticsField();
         String geometry = "origin=" + scroll.getOrigin() + ", field=" + field.getBounds()
