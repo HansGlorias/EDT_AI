@@ -764,17 +764,16 @@ public class ChatView extends ViewPart {
 
     private void createHistory(Composite parent) {
         transcript = new Composite(parent, SWT.NONE);
-        GridLayoutFactory.fillDefaults().numColumns(2).spacing(0, 0).applyTo(transcript);
+        GridLayoutFactory.fillDefaults().applyTo(transcript);
         // Без системной полосы прокрутки: своя, узкая (ThinScrollBar).
         history = new StyledText(transcript, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY);
         GridDataFactory.fillDefaults().grab(true, true).hint(0, 0).applyTo(history);
         transcript.setBackground(history.getBackground());
         // Справа есть место и под внутреннее поле пузыря, и до края ленты.
-        history.setMargins(0, 24, 36, 24);
+        history.setMargins(24, 24, 36, 24);
         history.setLineSpacing(2);
         scrollBar = new ThinScrollBar(history);
         replyIndicator = new ReplyIndicator(history);
-        GridDataFactory.fillDefaults().grab(false, true).hint(ReplyIndicator.GUTTER, SWT.DEFAULT).applyTo(replyIndicator);
         scrollBar.onScroll(replyIndicator::reposition);
         renderer = new MessageRenderer(history, new MessageRenderer.Callbacks() {
             @Override

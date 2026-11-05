@@ -12,8 +12,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyledText;
+import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.GlyphMetrics;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
@@ -32,13 +34,15 @@ class ReplyIndicatorTest extends AbstractChatTest {
         try {
             shell.setLayout(new FillLayout());
             Composite transcript = new Composite(shell, SWT.NONE);
-            GridLayoutFactory.fillDefaults().numColumns(2).spacing(0, 0).applyTo(transcript);
+            GridLayoutFactory.fillDefaults().applyTo(transcript);
             StyledText text = new StyledText(transcript, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY);
             GridDataFactory.fillDefaults().grab(true, true).hint(0, 0).applyTo(text);
-            text.setMargins(0, 24, 24, 24);
-            text.setText("Рассуждает…\n" + "Сохранённый текст\n".repeat(80));
+            text.setMargins(24, 24, 24, 24);
+            text.setText("\uFFFCРассуждает…\n" + "Сохранённый текст\n".repeat(80));
+            StyleRange place = new StyleRange(0, 1, null, null);
+            place.metrics = new GlyphMetrics(11, 3, ReplyIndicator.SIZE + ReplyIndicator.GAP);
+            text.setStyleRange(place);
             ReplyIndicator indicator = new ReplyIndicator(text);
-            GridDataFactory.fillDefaults().grab(false, true).hint(ReplyIndicator.GUTTER, SWT.DEFAULT).applyTo(indicator);
             shell.setSize(420, 320);
             shell.open();
             indicator.follow(0);
@@ -104,7 +108,8 @@ class ReplyIndicatorTest extends AbstractChatTest {
         ReplyIndicator indicator = view.replyIndicator();
         assertStatusAlignment(view, "рассуждает");
         assertEquals(view.history().getParent(), indicator.getParent(), "анимация рядом с лентой, вне StyledText");
-        assertTrue(indicator.getBounds().x + indicator.getSize().x <= view.history().getBounds().x);
+        assertEquals(view.history().getBounds().x + view.history().getLeftMargin(), indicator.getBounds().x,
+                "значок на общей вертикали текста, внутри ленты");
         AtomicInteger hides = new AtomicInteger();
         AtomicInteger transcriptPaints = new AtomicInteger();
         indicator.addListener(SWT.Hide, event -> hides.incrementAndGet());
@@ -164,15 +169,15 @@ class ReplyIndicatorTest extends AbstractChatTest {
         int offset = view.history().getText().lastIndexOf(status);
         assertTrue(offset >= 0, view.history().getText());
         Rectangle glyph = view.history().getTextBounds(offset, offset);
-        Rectangle logo = view.replyIndicator().logoBounds();
+        Rectangle logo = view.replyIndicator().getBounds();
         assertEquals(14, logo.width);
         assertEquals(14, logo.height);
-        assertEquals((ReplyIndicator.GUTTER - logo.width) / 2, logo.x);
-        assertTrue(Math.abs(2 * glyph.y + glyph.height - 2 * logo.y - logo.height) <= 1,
+        assertEquals(logo.x + logo.width + ReplyIndicator.GAP, view.history().getBounds().x + glyph.x);
+        assertTrue(Math.abs(2 * (view.history().getBounds().y + glyph.y) + glyph.height - 2 * logo.y - logo.height) <= 1,
                 "ядро по центру строки состояния: " + glyph + " / " + logo);
     }
 
-    @Test void rotationChangesPixelsAtActualSizeInBothThemes() {
+    @Test void breathingChangesBrightnessAtActualSizeInBothThemes() {
         for (boolean dark : new boolean[] { false, true }) {
             ImageData[] frames = new ImageData[2];
             for (int frame = 0; frame < 2; frame++) {
@@ -193,7 +198,12 @@ class ReplyIndicatorTest extends AbstractChatTest {
                 if (x < 4 && y < 4) assertFalse(differs, "углы неподвижны");
                 if (differs) changed++;
             }
-            assertTrue(changed >= 8, "вращение должно быть видно при 14 px: " + changed);
+            assertTrue(changed >= 8, "дыхание должно быть видно при 14 px: " + changed);
+            var bright = frames[0].palette.getRGB(frames[0].getPixel(7, 7));
+            var dim = frames[1].palette.getRGB(frames[1].getPixel(7, 7));
+            assertNotEquals(bright, dim, "меняется яркость самого ядра");
+            assertNotEquals(dark ? new org.eclipse.swt.graphics.RGB(30, 32, 36)
+                    : new org.eclipse.swt.graphics.RGB(255, 255, 255), dim, "ядро не исчезает полностью");
         }
     }
 
@@ -216,8 +226,11 @@ class ReplyIndicatorTest extends AbstractChatTest {
                 if (first == null) first = data;
                 for (int theme = 0; theme < 2; theme++) {
                     int x = theme * 80;
-                    assertEquals(new org.eclipse.swt.graphics.RGB(0x5B, 0x7B, 0xD5), data.palette.getRGB(data.getPixel(x + 40, 40)));
-                    assertEquals(first.getPixel(x + 40, 40), data.getPixel(x + 40, 40), "ядро не исчезает");
+                    var background = theme == 0 ? new org.eclipse.swt.graphics.RGB(255, 255, 255)
+                            : new org.eclipse.swt.graphics.RGB(30, 32, 36);
+                    assertNotEquals(background, data.palette.getRGB(data.getPixel(x + 40, 40)), "ядро не исчезает");
+                    assertNotEquals(background, data.palette.getRGB(data.getPixel(x + 40, 25)), "верх ромба неподвижен");
+                    assertEquals(background, data.palette.getRGB(data.getPixel(x + 51, 29)), "ромб не вращается");
                     for (int y = 8; y < 26; y++) for (int at = x + 8; at < x + 26; at++) {
                         assertEquals(first.getPixel(at, y), data.getPixel(at, y), "углы неподвижны");
                     }

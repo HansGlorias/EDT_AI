@@ -249,13 +249,15 @@ final class MessageRenderer {
                 if (!parts.isEmpty()) {
                     text.append('\n');
                 }
-                if (message.status() == ChatMessage.Status.STREAMING && !placeholder.isBlank()) activityStart = offset + text.length();
+                if (message.status() == ChatMessage.Status.STREAMING && !placeholder.isBlank()) {
+                    activityStart = activityIcon(offset, text, styles);
+                }
                 styles.add(style(offset + text.length(), placeholder.length(), metaColor(), SWT.ITALIC));
                 text.append(placeholder);
             } else if (message.status() == ChatMessage.Status.STREAMING && !pending.isBlank()) {
                 text.append("\n\n");
-                activityStart = offset + text.length();
-                styles.add(style(activityStart, pending.length(), metaColor(), SWT.ITALIC));
+                activityStart = activityIcon(offset, text, styles);
+                styles.add(style(offset + text.length(), pending.length(), metaColor(), SWT.ITALIC));
                 text.append(pending);
             }
             changedFiles(message, offset, text, styles);
@@ -277,6 +279,16 @@ final class MessageRenderer {
         int footerStart = offset + text.length();
         footer(message, index, actions, offset, text, styles);
         return new Placement(bubbleStart, bubbleEnd, footerStart, activityStart);
+    }
+
+    /** Место внутри строки под отдельный Canvas: анимация не перерисовывает StyledText. */
+    private static int activityIcon(int offset, StringBuilder text, List<StyleRange> styles) {
+        int start = offset + text.length();
+        StyleRange place = new StyleRange(start, 1, null, null);
+        place.metrics = new GlyphMetrics(ReplyIndicator.SIZE - 3, 3, ReplyIndicator.SIZE + ReplyIndicator.GAP);
+        styles.add(place);
+        text.append(OBJECT);
+        return start;
     }
 
     /**
