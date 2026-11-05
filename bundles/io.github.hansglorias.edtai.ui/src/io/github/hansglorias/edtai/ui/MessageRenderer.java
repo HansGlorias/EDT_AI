@@ -94,9 +94,10 @@ final class MessageRenderer {
     /**
      * Где в ленте части сообщения: пузырь вопроса пользователя
      * {@code [bubbleStart, bubbleEnd)} (-1 — не вопрос) и начало строки под
-     * сообщением с временем и действиями.
+     * сообщением с временем и действиями. {@code activityStart} — строка
+     * состояния активного ответа (-1 — её нет).
      */
-    record Placement(int bubbleStart, int bubbleEnd, int footerStart) {
+    record Placement(int bubbleStart, int bubbleEnd, int footerStart, int activityStart) {
         boolean bubble() {
             return bubbleStart >= 0;
         }
@@ -219,6 +220,7 @@ final class MessageRenderer {
             attachments(message, offset, text, styles);
         }
         String body = message.text();
+        int activityStart = -1;
         if (message.role() == ChatRole.ASSISTANT) {
             // Текст и вызовы по порядку, как шёл ответ: видно, что модель делает между абзацами.
             List<AnswerParts.Part> parts = AnswerParts.split(body.isBlank() ? "" : body, message.tools());
@@ -247,8 +249,14 @@ final class MessageRenderer {
                 if (!parts.isEmpty()) {
                     text.append('\n');
                 }
+                if (message.status() == ChatMessage.Status.STREAMING && !placeholder.isBlank()) activityStart = offset + text.length();
                 styles.add(style(offset + text.length(), placeholder.length(), metaColor(), SWT.ITALIC));
                 text.append(placeholder);
+            } else if (message.status() == ChatMessage.Status.STREAMING && !pending.isBlank()) {
+                text.append("\n\n");
+                activityStart = offset + text.length();
+                styles.add(style(activityStart, pending.length(), metaColor(), SWT.ITALIC));
+                text.append(pending);
             }
             changedFiles(message, offset, text, styles);
             review(message, offset, text, styles, codeRanges);
@@ -268,7 +276,7 @@ final class MessageRenderer {
         text.append('\n');
         int footerStart = offset + text.length();
         footer(message, index, actions, offset, text, styles);
-        return new Placement(bubbleStart, bubbleEnd, footerStart);
+        return new Placement(bubbleStart, bubbleEnd, footerStart, activityStart);
     }
 
     /**
@@ -280,7 +288,7 @@ final class MessageRenderer {
         ReplyStats stats = finishedStats(message);
         // Время ответа — когда он закончился, а не когда начался (тогда оно совпадало бы со временем вопроса).
         String meta = TIME.format(stats != null ? stats.finished() : message.time()) + switch (message.status()) {
-            case STREAMING -> message.text().isBlank() ? "" : " · пишет…";
+            case STREAMING -> "";
             case STOPPED -> message.role() == ChatRole.ASSISTANT ? " · остановлено" : "";
             case DONE -> "";
         } + (stats != null ? " · " + stats.summary() : "");

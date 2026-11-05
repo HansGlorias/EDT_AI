@@ -3144,9 +3144,7 @@ public class ChatView extends ViewPart {
         if (session.isBusy() && !rendered.isEmpty() && !approvalBar.isShown() && !questionsBar.isShown()) {
             Rendered last = rendered.get(rendered.size() - 1);
             if (last.message().role() == ChatRole.ASSISTANT && last.message().status() == Status.STREAMING) {
-                int line = history.getLineAtOffset(last.placement().footerStart());
-                if (last.message().text().isBlank()) line = Math.max(0, line - 1);
-                offset = history.getOffsetAtLine(line);
+                offset = last.placement().activityStart();
             }
         }
         replyIndicator.follow(offset);
@@ -3161,7 +3159,7 @@ public class ChatView extends ViewPart {
     }
 
     private static String pending(ChatMessage message, String activity) {
-        return message.role() == ChatRole.ASSISTANT && message.status() == Status.STREAMING && message.text().isBlank()
+        return message.role() == ChatRole.ASSISTANT && message.status() == Status.STREAMING
                 ? activity : "";
     }
 
