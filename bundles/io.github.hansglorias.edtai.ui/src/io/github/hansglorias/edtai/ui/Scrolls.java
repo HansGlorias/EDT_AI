@@ -24,6 +24,7 @@ final class Scrolls extends Composite {
     private int x;
     private boolean syncing;
     private boolean fitWidth;
+    private java.util.function.IntConsumer columns;
     private boolean syncQueued;
 
     /** Вызывать после задания layoutData; оно остаётся общим с обёрткой. */
@@ -102,6 +103,9 @@ final class Scrolls extends Composite {
         boolean wide = !fitWidth && contentWidth() > width;
         int height = Math.max(0, area.height - (wide ? ThinScrollBar.WIDTH : 0));
         x = fitWidth ? 0 : Math.max(0, Math.min(x, contentWidth() - width));
+        // Колонки — до setBounds: иначе GTK раскладывает таблицу по прежней
+        // сумме колонок, и последняя колонка уходит за видимый край.
+        if (fitWidth) columns.accept(width);
         // Win32 Tree с NO_SCROLL не выполняет setTopItem. Его штатная полоса
         // остаётся рабочей, но находится за границей обёртки и закрыта нашим Canvas.
         int nativeWidth = content instanceof Tree && content.getVerticalBar() != null ? content.getVerticalBar().getSize().x : 0;
@@ -113,8 +117,9 @@ final class Scrolls extends Composite {
         sync();
     }
 
-    /** Таблица занимает ровно видимую ширину; её владелец распределяет колонки при Resize. */
-    void fitWidth() {
+    /** Таблица занимает ровно видимую ширину; columns распределяет её между колонками. */
+    void fitWidth(java.util.function.IntConsumer columns) {
+        this.columns = columns;
         fitWidth = true;
         layout();
     }
@@ -144,6 +149,12 @@ final class Scrolls extends Composite {
                 if (content.getVerticalBar() != null && content.getVerticalBar().getVisible()) content.getVerticalBar().setVisible(false);
                 if (content.getHorizontalBar() != null && content.getHorizontalBar().getVisible()) content.getHorizontalBar().setVisible(false);
             }
+            if (content instanceof Table table) {
+                // GTK после замены строк на более короткий список оставляет прежний
+                // верхний индекс: таблица выглядит пустой. Win32 ограничивает сам.
+                int max = Math.max(0, totalHeight() - pageHeight());
+                if (top() > max) table.setTopIndex(max / Math.max(1, lineHeight()));
+            }
             if (!getBackground().equals(content.getBackground())) setBackground(content.getBackground());
             if (!getForeground().equals(content.getForeground())) setForeground(content.getForeground());
             vertical.update();
@@ -158,7 +169,9 @@ final class Scrolls extends Composite {
     }
 
     private int pageHeight() {
-        int height = content.getClientArea().height;
+        // GTK Table/Tree с NO_SCROLL после изменения размера может вернуть
+        // клиентскую область на всю высоту строк: видимая часть не больше виджета.
+        int height = Math.min(content.getClientArea().height, content.getSize().y);
         if (content instanceof Table table) height -= table.getHeaderHeight();
         if (content instanceof Tree tree) height -= tree.getHeaderHeight();
         return Math.max(0, height);

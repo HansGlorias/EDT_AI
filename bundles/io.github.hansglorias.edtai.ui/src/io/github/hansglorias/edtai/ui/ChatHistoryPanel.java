@@ -132,8 +132,7 @@ final class ChatHistoryPanel {
         table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.NO_SCROLL);
         title = new TableColumn(table, SWT.NONE);
         time = new TableColumn(table, SWT.RIGHT);
-        table.addListener(SWT.Resize, event -> resizeColumns());
-        Scrolls.wrap(table).fitWidth();
+        Scrolls.wrap(table).fitWidth(this::resizeColumns);
         table.addListener(SWT.MeasureItem, event -> event.height = Math.max(event.height, 30));
         panel.addListener(SWT.Dispose, event -> {
             if (answeringDot != null) answeringDot.dispose();
@@ -166,10 +165,9 @@ final class ChatHistoryPanel {
         table.setMenu(menu);
     }
 
-    private void resizeColumns() {
+    private void resizeColumns(int width) {
         GC gc = new GC(table);
         try {
-            int width = table.getClientArea().width;
             // Запас под отступы ячейки Win32; дата не уезжает за край при сужении панели.
             int date = Math.max(gc.textExtent("00:00").x, gc.textExtent("00.00").x) + 3 * gc.textExtent("0").x + 12;
             time.setWidth(Math.min(date, width));

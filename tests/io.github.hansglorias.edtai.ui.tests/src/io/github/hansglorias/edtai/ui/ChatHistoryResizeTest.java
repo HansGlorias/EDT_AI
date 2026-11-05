@@ -86,9 +86,11 @@ class ChatHistoryResizeTest extends AbstractChatTest {
         assertEquals(area.width - ThinScrollBar.WIDTH, track.x, geometry);
         assertEquals(area.height, track.height, geometry);
         assertFalse(table.getBounds().intersects(track), "таблица не перекрывает полосу: " + geometry);
-        assertEquals(table.getClientArea().width, table.getColumn(0).getWidth() + table.getColumn(1).getWidth(), geometry);
+        // GTK с NO_SCROLL может держать клиентскую область больше виджета: видна только его часть.
+        int visible = Math.min(table.getClientArea().width, table.getSize().x);
+        assertEquals(visible, table.getColumn(0).getWidth() + table.getColumn(1).getWidth(), geometry);
         Rectangle date = table.getItem(table.getTopIndex()).getBounds(1);
-        assertTrue(date.x >= 0 && date.x + date.width <= table.getClientArea().width + 1,
+        assertTrue(date.x >= 0 && date.x + date.width <= visible + 1,
                 "дата внутри видимой области: " + date + "; " + geometry);
     }
 
