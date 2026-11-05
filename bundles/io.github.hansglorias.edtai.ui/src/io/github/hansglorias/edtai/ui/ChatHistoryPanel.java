@@ -127,21 +127,13 @@ final class ChatHistoryPanel {
         nothing.setVisible(false);
 
         Composite holder = new Composite(panel, SWT.NONE);
-        GridDataFactory.fillDefaults().grab(true, true).applyTo(holder);
+        GridDataFactory.fillDefaults().grab(true, true).hint(0, SWT.DEFAULT).applyTo(holder);
         holder.setLayout(new FillLayout());
         table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.NO_SCROLL);
         title = new TableColumn(table, SWT.NONE);
         time = new TableColumn(table, SWT.RIGHT);
-        GC gc = new GC(table);
-        try {
-            // Отступы ячейки на Windows больше, чем кажется: с запасом, иначе время обрезается до «19:…».
-            int text = Math.max(gc.textExtent("00:00").x, gc.textExtent("00.00").x);
-            time.setWidth(text + 3 * gc.textExtent("0").x + 12);
-        } finally {
-            gc.dispose();
-        }
-        Scrolls.wrap(table);
-        table.addListener(SWT.Resize, event -> title.setWidth(Math.max(0, table.getClientArea().width - time.getWidth())));
+        table.addListener(SWT.Resize, event -> resizeColumns());
+        Scrolls.wrap(table).fitWidth();
         table.addListener(SWT.MeasureItem, event -> event.height = Math.max(event.height, 30));
         panel.addListener(SWT.Dispose, event -> {
             if (answeringDot != null) answeringDot.dispose();
@@ -172,6 +164,19 @@ final class ChatHistoryPanel {
                 item(menu, "Выгрузка для разбора (ZIP)…", callbacks::exportAnalysis), item(menu, "Удалить", callbacks::delete));
         menu.addListener(SWT.Show, event -> items.forEach(item -> item.setEnabled(selected() != null)));
         table.setMenu(menu);
+    }
+
+    private void resizeColumns() {
+        GC gc = new GC(table);
+        try {
+            int width = table.getClientArea().width;
+            // Запас под отступы ячейки Win32; дата не уезжает за край при сужении панели.
+            int date = Math.max(gc.textExtent("00:00").x, gc.textExtent("00.00").x) + 3 * gc.textExtent("0").x + 12;
+            time.setWidth(Math.min(date, width));
+            title.setWidth(Math.max(0, width - time.getWidth()));
+        } finally {
+            gc.dispose();
+        }
     }
 
     private MenuItem item(Menu menu, String text, Consumer<String> action) {
@@ -262,6 +267,8 @@ final class ChatHistoryPanel {
     }
 
     // ---- для тестов ----
+
+    Table table() { return table; }
 
     List<String> titles() {
         List<String> titles = new ArrayList<>();

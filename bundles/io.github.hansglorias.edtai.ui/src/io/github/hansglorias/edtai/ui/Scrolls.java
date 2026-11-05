@@ -23,6 +23,7 @@ final class Scrolls extends Composite {
     private final ThinScrollBar horizontal;
     private int x;
     private boolean syncing;
+    private boolean fitWidth;
 
     /** Вызывать после задания layoutData; оно остаётся общим с обёрткой. */
     static Scrolls wrap(Scrollable control) {
@@ -60,7 +61,7 @@ final class Scrolls extends Composite {
             public int increment() { return lineHeight(); }
         });
         horizontal = new ThinScrollBar(this, true, new ThinScrollBar.Model() {
-            public int total() { return contentWidth(); }
+            public int total() { return fitWidth ? Math.max(0, page()) : contentWidth(); }
             public int page() { return getClientArea().width - ThinScrollBar.WIDTH; }
             public int position() { return x; }
             public void scroll(int value) {
@@ -96,16 +97,24 @@ final class Scrolls extends Composite {
     private void arrange() {
         Rectangle area = getClientArea();
         int width = Math.max(0, area.width - ThinScrollBar.WIDTH);
-        boolean wide = contentWidth() > width;
+        boolean wide = !fitWidth && contentWidth() > width;
         int height = Math.max(0, area.height - (wide ? ThinScrollBar.WIDTH : 0));
-        x = Math.max(0, Math.min(x, contentWidth() - width));
+        x = fitWidth ? 0 : Math.max(0, Math.min(x, contentWidth() - width));
         // Win32 Tree с NO_SCROLL не выполняет setTopItem. Его штатная полоса
         // остаётся рабочей, но находится за границей обёртки и закрыта нашим Canvas.
         int nativeWidth = content instanceof Tree && content.getVerticalBar() != null ? content.getVerticalBar().getSize().x : 0;
-        content.setBounds(-x, 0, Math.max(width, contentWidth()) + nativeWidth, height);
+        content.setBounds(-x, 0, (fitWidth ? width : Math.max(width, contentWidth())) + nativeWidth, height);
         vertical.control().setBounds(area.width - ThinScrollBar.WIDTH, 0, ThinScrollBar.WIDTH, height);
         horizontal.control().setBounds(0, height, width, ThinScrollBar.WIDTH);
+        vertical.control().moveAbove(null);
+        horizontal.control().moveAbove(null);
         sync();
+    }
+
+    /** Таблица занимает ровно видимую ширину; её владелец распределяет колонки при Resize. */
+    void fitWidth() {
+        fitWidth = true;
+        layout();
     }
 
     private int contentWidth() {
