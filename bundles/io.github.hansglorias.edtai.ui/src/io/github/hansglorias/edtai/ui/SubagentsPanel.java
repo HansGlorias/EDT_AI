@@ -350,6 +350,7 @@ final class SubagentsPanel {
         toggle.setText(value ? "‹" : "›");
         toggle.setToolTipText((value ? "Показать" : "Свернуть") + " специалистов\n" + title.getText());
         changed.run();
+        resize();
     }
 
     boolean isCollapsed() { return collapsed; }
