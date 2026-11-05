@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.core.settings;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -12,6 +13,9 @@ import org.eclipse.equinox.security.storage.SecurePreferencesFactory;
 import org.eclipse.equinox.security.storage.StorageException;
 import org.osgi.service.prefs.BackingStoreException;
 
+import io.github.hansglorias.edtai.core.chat.ChatModel;
+import io.github.hansglorias.edtai.core.json.Json;
+
 /**
  * Чтение и запись настроек. Обычные настройки лежат в preferences рабочей
  * области, токен — в Eclipse Secure Storage и больше нигде.
@@ -19,6 +23,9 @@ import org.osgi.service.prefs.BackingStoreException;
 public final class SettingsStore {
 
     public static final String QUALIFIER = "io.github.hansglorias.edtai.core";
+
+    public static final String KEY_PROVIDERS = "apiProviders";
+    public static final String KEY_ACTIVE_PROVIDER = "activeApiProvider";
 
     static final String KEY_PROTOCOL = "protocol";
     static final String KEY_BASE_URL = "baseUrl";
@@ -50,6 +57,12 @@ public final class SettingsStore {
     }
 
     public AiSettings load() {
+        AiSettings shared = loadLegacy();
+        if (preferences.get(KEY_PROVIDERS, "").isEmpty()) return shared;
+        return provider(activeProviderId()).apply(shared);
+    }
+
+    private AiSettings loadLegacy() {
         List<McpServer> servers;
         try {
             servers = McpServersCodec.decode(preferences.get(KEY_MCP_SERVERS, ""));
@@ -73,6 +86,12 @@ public final class SettingsStore {
     }
 
     public void save(AiSettings settings) throws BackingStoreException {
+        if (!settings.providerId().isEmpty()) {
+            List<ApiProvider> providers = new ArrayList<>(providers());
+            ApiProvider before = provider(settings.providerId());
+            providers.set(providers.indexOf(before), ApiProvider.of(before.id(), before.name(), settings));
+            saveProviders(providers, before.id());
+        }
         preferences.put(KEY_PROTOCOL, settings.protocol().name());
         put(KEY_BASE_URL, settings.baseUrl());
         put(KEY_MODEL, settings.model());
@@ -116,24 +135,99 @@ public final class SettingsStore {
      * спрашивает мастер-пароль.
      */
     public boolean hasToken() {
-        ISecurePreferences node = secureNode();
+        return hasToken(load().providerId());
+    }
+
+    public boolean hasToken(String providerId) {
+        ISecurePreferences node = secureNode(providerId);
         return Arrays.asList(node.keys()).contains(SECURE_KEY_TOKEN);
     }
 
     /** @return токен или пустая строка */
     public String loadToken() throws StorageException {
-        return secureNode().get(SECURE_KEY_TOKEN, "");
+        return loadToken(load().providerId());
+    }
+
+    public String loadToken(String providerId) throws StorageException {
+        return secureNode(providerId).get(SECURE_KEY_TOKEN, "");
     }
 
     /** Сохраняет токен в зашифрованном виде; пустой токен удаляет сохранённый. */
     public void saveToken(String token) throws StorageException, IOException {
-        ISecurePreferences node = secureNode();
+        saveToken(load().providerId(), token);
+    }
+
+    public void saveToken(String providerId, String token) throws StorageException, IOException {
+        ISecurePreferences node = secureNode(providerId);
         if (token == null || token.isEmpty()) {
             node.remove(SECURE_KEY_TOKEN);
         } else {
             node.put(SECURE_KEY_TOKEN, token, true);
         }
         node.flush();
+    }
+
+    public String activeProviderId() {
+        return preferences.get(KEY_ACTIVE_PROVIDER, ApiProvider.DEFAULT_ID);
+    }
+
+    /** Пока каталог не сохранён, старое подключение представляется первым профилем. */
+    public List<ApiProvider> providers() {
+        String value = preferences.get(KEY_PROVIDERS, "");
+        if (value.isEmpty()) return List.of(ApiProvider.of(ApiProvider.DEFAULT_ID, "Основной", loadLegacy()));
+        Object entries = Json.parse(value);
+        if (!(entries instanceof List<?> list) || list.isEmpty()) {
+            throw new IllegalArgumentException("Повреждён список API-провайдеров");
+        }
+        List<ApiProvider> result = new ArrayList<>();
+        for (Object entry : list) {
+            result.add(new ApiProvider(Json.stringAt(entry, "id"), Json.stringAt(entry, "name"),
+                    Protocol.parse(Json.stringAt(entry, "protocol")), Json.stringAt(entry, "baseUrl"),
+                    Json.stringAt(entry, "model"), integer(entry, "maxTokens"),
+                    integer(entry, "modelWindow"), !Boolean.FALSE.equals(Json.at(entry, "useSystemTrustStore")),
+                    Json.stringAt(entry, "caCertificateFile")));
+        }
+        return List.copyOf(result);
+    }
+
+    private static int integer(Object entry, String key) {
+        return Json.at(entry, key) instanceof Number number ? number.intValue() : 0;
+    }
+
+    public ApiProvider provider(String id) {
+        String key = id == null || id.isEmpty() ? activeProviderId() : id;
+        return providers().stream().filter(each -> each.id().equals(key)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Провайдер удалён. Выберите подключение в меню модели."));
+    }
+
+    public AiSettings forChat(ChatModel model) {
+        AiSettings shared = load();
+        if (model.providerId().isEmpty()) {
+            if (model.isEmpty() || shared.providerId().isEmpty()) return model.apply(shared);
+            ApiProvider original = providers().stream().filter(each -> each.id().equals(ApiProvider.DEFAULT_ID)).findFirst()
+                    .orElseGet(() -> ApiProvider.of(ApiProvider.DEFAULT_ID, "Удалённый провайдер", AiSettings.defaults()));
+            return original.baseUrl().isEmpty() ? original.apply(shared) : model.apply(original.apply(shared));
+        }
+        ApiProvider selected = providers().stream().filter(each -> each.id().equals(model.providerId())).findFirst()
+                .orElseGet(() -> ApiProvider.of(model.providerId(), "Удалённый провайдер", AiSettings.defaults()));
+        // Удалённое подключение не заменяется другим: история не должна незаметно уйти на другой сервер.
+        if (selected.baseUrl().isEmpty()) return selected.apply(shared);
+        return model.apply(selected.apply(shared));
+    }
+
+    /** Один JSON каталога, без токенов. Чтение секретов при сохранении не требуется. */
+    public void saveProviders(List<ApiProvider> providers, String activeId) throws BackingStoreException {
+        if (providers.isEmpty() || providers.stream().map(ApiProvider::id).distinct().count() != providers.size()
+                || providers.stream().noneMatch(each -> each.id().equals(activeId))) {
+            throw new IllegalArgumentException("Нужен непустой список уникальных провайдеров и выбранный профиль");
+        }
+        String value = Json.write(providers.stream().map(each -> Json.object(
+                "id", each.id(), "name", each.name(), "protocol", each.protocol().name(), "baseUrl", each.baseUrl(),
+                "model", each.model(), "maxTokens", each.maxTokens(), "modelWindow", each.modelWindow(),
+                "useSystemTrustStore", each.useSystemTrustStore(), "caCertificateFile", each.caCertificateFile())).toList());
+        preferences.put(KEY_PROVIDERS, value);
+        preferences.put(KEY_ACTIVE_PROVIDER, activeId);
+        preferences.flush();
     }
 
     private void put(String key, String value) {
@@ -144,11 +238,16 @@ public final class SettingsStore {
         }
     }
 
-    private ISecurePreferences secureNode() {
+    private ISecurePreferences secureNode(String providerId) {
         ISecurePreferences root = secureRoot != null ? secureRoot : SecurePreferencesFactory.getDefault();
         if (root == null) {
             throw new IllegalStateException("Eclipse Secure Storage недоступно");
         }
-        return root.node(SECURE_NODE);
+        if (providerId == null || providerId.isEmpty() || providerId.equals(ApiProvider.DEFAULT_ID)) {
+            // Прежний токен уже зашифрован здесь: не переносим и не расшифровываем при миграции.
+            return root.node(SECURE_NODE);
+        }
+        if (!providerId.matches("[a-zA-Z0-9_-]{1,80}")) throw new IllegalArgumentException("Некорректный идентификатор провайдера");
+        return root.node(SECURE_NODE + "/providers/" + providerId);
     }
 }

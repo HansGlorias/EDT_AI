@@ -68,6 +68,31 @@ class ChatAnalysisExportTest {
     private static List<Map<String, Object>> list(Object value) { return (List<Map<String, Object>>) value; }
 
     @Test
+    void exportUsesHistoricalIdentityAndSafeChatFileName() throws Exception {
+        var answer = ChatMessage.of(ChatRole.ASSISTANT, "answer")
+                .withReplyModel(new ReplyModel("ANTHROPIC", "historical-model"));
+        var legacy = ChatMessage.of(ChatRole.ASSISTANT, "old answer");
+        var snapshot = new ChatAnalysisExport.Snapshot("Test", List.of(answer, legacy), configuration(), List.of(), null, false);
+        for (boolean content : List.of(true, false)) {
+            var files = write(snapshot, content);
+            var messages = list(Json.parseObject(files.get("conversation.json")).get("messages"));
+            var identity = map(messages.get(0).get("reply_model"));
+            assertEquals("response_connection_snapshot", identity.get("scope"));
+            assertEquals("historical-model", map(identity.get("model")).get("value"));
+            assertEquals("unknown", map(messages.get(1).get("reply_model")).get("status"));
+        }
+        assertEquals("Мой чат-analysis.zip", ChatAnalysisExport.fileName("Мой чат"));
+        assertEquals("_CON-analysis.zip", ChatAnalysisExport.fileName("CON"));
+        assertEquals("_con.txt-analysis.zip", ChatAnalysisExport.fileName("con.txt"));
+        assertEquals("chat-analysis.zip", ChatAnalysisExport.fileName(" ... "));
+        for (String title : List.of("a/b\\c:d*e?f\"g<h>i|j\n", "😀".repeat(300))) {
+            String name = ChatAnalysisExport.fileName(title);
+            assertFalse(name.matches(".*[\\p{Cntrl}<>:\"/\\\\|?*].*"));
+            assertTrue(name.codePointCount(0, name.length()) <= 113);
+        }
+    }
+
+    @Test
     void safeDefaultHasFixedZipSchemaAndNoContent() throws Exception {
         var entries = write(snapshot(), false);
         assertEquals(List.of("manifest.json", "conversation.md", "conversation.json", "summary.md", "feedback.md"),

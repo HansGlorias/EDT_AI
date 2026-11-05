@@ -12,6 +12,7 @@ import java.util.function.UnaryOperator;
 import io.github.hansglorias.edtai.core.chat.ChatMessage;
 import io.github.hansglorias.edtai.core.chat.ChatProvider;
 import io.github.hansglorias.edtai.core.chat.ChatRole;
+import io.github.hansglorias.edtai.core.chat.ReplyModel;
 import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.diagnostics.DiagnosticEvent.RequestType;
@@ -94,13 +95,13 @@ public final class ModelChatProvider implements ChatProvider {
         return connection(store, UnaryOperator.identity());
     }
 
-    private static ModelConnection connection(SettingsStore store, UnaryOperator<AiSettings> adjust) throws Exception {
+    public static ModelConnection connection(SettingsStore store, UnaryOperator<AiSettings> adjust) throws Exception {
         AiSettings settings = adjust.apply(store.load());
         if (!settings.isConfigured()) {
             throw new ModelException("Модель не настроена: укажите адрес сервера и модель в настройках EDT AI.");
         }
         // Без сохранённого токена Secure Storage не открываем: иначе он может спросить мастер-пароль.
-        String token = store.hasToken() ? store.loadToken() : "";
+        String token = store.hasToken(settings.providerId()) ? store.loadToken(settings.providerId()) : "";
         return ModelConnection.of(settings, token);
     }
 
@@ -133,6 +134,12 @@ public final class ModelChatProvider implements ChatProvider {
     @Override
     public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
             Consumer<TokenUsage> onUsage, Runnable onReasoning) {
+        return reply(history, onText, onTool, onUsage, onReasoning, identity -> { });
+    }
+
+    @Override
+    public CompletableFuture<String> reply(List<ChatMessage> history, Consumer<String> onText, Consumer<ToolUse> onTool,
+            Consumer<TokenUsage> onUsage, Runnable onReasoning, Consumer<ReplyModel> onModel) {
         ModelConnection connection;
         try {
             connection = source.get();
@@ -141,6 +148,7 @@ public final class ModelChatProvider implements ChatProvider {
         } catch (Exception e) {
             return CompletableFuture.failedFuture(new ModelException("Не удалось прочитать настройки EDT AI: " + e.getMessage(), e));
         }
+        onModel.accept(new ReplyModel(connection.protocol().name(), connection.model()));
         connection = withBrief(connection);
         String server = connection.baseUrl() + "|" + connection.model();
         if (tools == ToolSource.NONE || withoutTools.contains(server)) {

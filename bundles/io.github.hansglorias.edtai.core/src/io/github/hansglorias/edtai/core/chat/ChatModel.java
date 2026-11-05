@@ -6,32 +6,35 @@ import java.util.Objects;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
 
 /**
- * Модель, привязанная к чату, и сервер, на котором её выбрали. Чат отвечает
- * этой моделью, даже если в другом чате выбрали другую. Если в настройках
- * теперь другой сервер, привязка не действует: имя модели с прежнего сервера
- * там может не существовать.
+ * Выбранная модель и стабильный id API-провайдера чата. У старых записей id
+ * пустой: до миграции привязка действует на том же сервере; после — в исходном
+ * профиле default. Подключение и токен разрешает SettingsStore.
  */
-public record ChatModel(String model, String baseUrl) {
+public record ChatModel(String model, String baseUrl, String providerId) {
+
+    public ChatModel(String model, String baseUrl) { this(model, baseUrl, ""); }
 
     public static final ChatModel NONE = new ChatModel("", "");
 
     public ChatModel {
+        providerId = Objects.requireNonNullElse(providerId, "");
         model = Objects.requireNonNullElse(model, "").strip();
         baseUrl = Objects.requireNonNullElse(baseUrl, "").strip();
     }
 
     /** Модель из настроек: её получает чат при первой отправке. */
     public static ChatModel of(AiSettings settings) {
-        return new ChatModel(settings.model(), settings.baseUrl());
+        return new ChatModel(settings.model(), settings.baseUrl(), settings.providerId());
     }
 
     public boolean isEmpty() {
         return model.isEmpty();
     }
 
-    /** Действует ли привязка при этих настройках: тот же сервер. */
+    /** Тот же профиль; для старых записей — тот же адрес сервера. */
     public boolean appliesTo(AiSettings settings) {
-        return !isEmpty() && server(baseUrl).equals(server(settings.baseUrl()));
+        return !isEmpty() && (providerId.isEmpty() ? server(baseUrl).equals(server(settings.baseUrl()))
+                : providerId.equals(settings.providerId()));
     }
 
     /** Настройки для запросов этого чата: с его моделью, если привязка действует. */

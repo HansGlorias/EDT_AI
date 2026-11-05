@@ -152,6 +152,7 @@ import io.github.hansglorias.edtai.core.llm.ModelClient;
 import io.github.hansglorias.edtai.core.mcp.McpHub;
 import io.github.hansglorias.edtai.core.mcp.McpMonitor;
 import io.github.hansglorias.edtai.core.settings.AiSettings;
+import io.github.hansglorias.edtai.core.settings.ApiProvider;
 import io.github.hansglorias.edtai.core.settings.AgentModeStore;
 import io.github.hansglorias.edtai.core.settings.McpServer;
 import io.github.hansglorias.edtai.core.settings.SettingsStore;
@@ -309,7 +310,7 @@ public class ChatView extends ViewPart {
 
     private ChatSession newSession(Live chat) {
         return new ChatSession(
-            ModelChatProvider.forStore(SettingsStore.workspace(), loaded -> chat.model.apply(loaded), new ModelClient(diagnostics, diagnostics::isEnabled), new ToolSource() {
+            ModelChatProvider.forStore(SettingsStore.workspace(), loaded -> SettingsStore.workspace().forChat(chat.model), new ModelClient(diagnostics, diagnostics::isEnabled), new ToolSource() {
                 @Override
                 public List<Tool> tools(Consumer<ToolUse> problems) {
                     return ChatView.this.tools(chat, problems);
@@ -616,7 +617,8 @@ public class ChatView extends ViewPart {
         diagnostics.setEnabled(UiDiagnosticLog.preference());
         AiSettings previous = settings;
         settings = SettingsStore.workspace().load();
-        if (current != null && !previous.model().equals(settings.model())) {
+        if (current != null && hasProvider(current) && (!previous.model().equals(settings.model())
+                || !providerKey(previous).equals(providerKey(settings)))) {
             // Модель сменили (меню, /model или настройки) — открытый чат дальше отвечает ею.
             useModel(current, ChatModel.of(settings));
         }
@@ -1449,7 +1451,7 @@ public class ChatView extends ViewPart {
         if (messages == null) return;
         AnalysisExportDialog.Options options = askAnalysisOptions.get();
         if (options == null) return;
-        Path target = chooseAnalysisFile.apply("chat-analysis.zip");
+        Path target = chooseAnalysisFile.apply(ChatAnalysisExport.fileName(chats.title(id, messages)));
         if (target == null) return;
         // За время модальных диалогов фоновый ответ мог измениться.
         messages = messagesOf(id);
@@ -1457,7 +1459,7 @@ public class ChatView extends ViewPart {
         Live live = lives.get(id);
         AiSettings loaded = SettingsStore.workspace().load();
         ChatModel bound = live == null ? chats.model(id) : live.model;
-        AiSettings profile = bound.apply(loaded);
+        AiSettings profile = SettingsStore.workspace().forChat(bound);
         var config = new ChatAnalysisExport.Configuration(FrameworkUtil.getBundle(ChatView.class).getVersion().toString(),
                 live != null && live.session.isBusy() ? live.responseMode : agentMode(), profile.protocol().name(),
                 profile.model(), profile.modelWindow(), profile.maxTokens(), profile.contextLimit(), profile.toolsEnabled());
@@ -1478,11 +1480,18 @@ public class ChatView extends ViewPart {
         List<String> endpoints = new ArrayList<>();
         endpoints.add(loaded.baseUrl());
         endpoints.add(bound.baseUrl());
+        SettingsStore.workspace().providers().forEach(provider -> endpoints.add(provider.baseUrl()));
         loaded.mcpServers().forEach(server -> endpoints.add(server.target()));
         // Расшифровка нужна только для очистки, токен не становится полем Snapshot/ZIP/исключения.
         final ExportRedactor redactor;
         try {
-            redactor = new ExportRedactor(List.of(analysisToken.call()), endpoints);
+            List<String> secrets = new ArrayList<>();
+            secrets.add(analysisToken.call());
+            SettingsStore store = SettingsStore.workspace();
+            for (ApiProvider provider : store.providers()) {
+                if (store.hasToken(provider.id())) secrets.add(store.loadToken(provider.id()));
+            }
+            redactor = new ExportRedactor(secrets, endpoints);
         } catch (Exception e) {
             showNotice("Выгрузка не создана: не удалось получить известные секреты для очистки");
             return;
@@ -2408,18 +2417,20 @@ public class ChatView extends ViewPart {
             modelButton.getParent().layout(true, true);
         }
         modelButton.setToolTipText(chat.model().isEmpty() ? "Модель не выбрана: щелчок — выбрать"
-                : "Модель: " + chat.model() + " · " + host(chat.baseUrl()) + "\nЩелчок — сменить (/model)");
+                : "Модель: " + chat.model() + " · " + host(chat.baseUrl())
+                        + (chat.providerId().isEmpty() ? "" : " · " + providerName(chat)) + "\nЩелчок — сменить (/model)");
     }
 
     /** Модели для меню: текущая, недавние, с сервера. */
     List<String> modelChoices() {
-        return ModelChoices.merge(chatSettings().model(), ModelChoices.parse(preferences().get(recentModelsKey(), "")), serverModels);
+        return ModelChoices.merge(chatSettings().model(), ModelChoices.parse(preferences().get(recentModelsKey(), "")),
+                modelsFor.equals(modelsKey()) ? serverModels : List.of());
     }
 
-    /** Настройки открытого чата: с его моделью, если она привязана к этому серверу. */
+    /** Подключение и модель открытого чата; токен здесь не читается. */
     AiSettings chatSettings() {
         Live chat = current;
-        return chat == null ? settings : chat.model.apply(settings);
+        return chat == null ? settings : SettingsStore.workspace().forChat(chat.model);
     }
 
     /** Новая модель чата: у ещё не отправленного — только в памяти, иначе и в {@code models.json}. */
@@ -2455,11 +2466,14 @@ public class ChatView extends ViewPart {
 
     /** Недавние модели — у каждого сервера свои. */
     private String recentModelsKey() {
-        return ModelChoices.recentKey(RECENT_MODELS, settings.baseUrl());
+        AiSettings chat = chatSettings();
+        return ModelChoices.recentKey(RECENT_MODELS, chat.baseUrl())
+                + (chat.providerId().isEmpty() || chat.providerId().equals(ApiProvider.DEFAULT_ID) ? "" : "@" + chat.providerId());
     }
 
     private String modelsKey() {
-        return settings.protocol() + " " + settings.baseUrl();
+        AiSettings chat = chatSettings();
+        return chat.providerId() + " " + chat.protocol() + " " + chat.baseUrl();
     }
 
     /**
@@ -2480,7 +2494,8 @@ public class ChatView extends ViewPart {
         if (modelsLoading) {
             return;
         }
-        if (!settings.isConfigured() || !force && key.equals(modelsFor)) {
+        AiSettings requested = chatSettings();
+        if (!requested.isConfigured() || !force && key.equals(modelsFor)) {
             runAfterModels();
             return;
         }
@@ -2491,7 +2506,7 @@ public class ChatView extends ViewPart {
             List<String> models = List.of();
             String error = null;
             try {
-                models = new ModelClient().models(ModelChatProvider.connection(SettingsStore.workspace())).get(60, TimeUnit.SECONDS);
+                models = new ModelClient().models(ModelChatProvider.connection(SettingsStore.workspace(), ignored -> requested)).get(60, TimeUnit.SECONDS);
             } catch (ExecutionException e) {
                 error = e.getCause() == null ? e.getMessage() : e.getCause().getMessage();
             } catch (Exception e) {
@@ -2504,6 +2519,11 @@ public class ChatView extends ViewPart {
             String problem = error;
             inUi(() -> {
                 modelsLoading = false;
+                if (!key.equals(modelsKey())) {
+                    modelsFor = "";
+                    loadModels(false);
+                    return;
+                }
                 serverModels = loaded;
                 modelsError = problem;
                 runAfterModels();
@@ -2575,6 +2595,22 @@ public class ChatView extends ViewPart {
     /** Меню моделей: выбранная отмечена; внизу — обновить список и настройки. */
     Menu modelMenu() {
         Menu menu = new Menu(modelButton.getParent());
+        List<ApiProvider> providers = SettingsStore.workspace().providers();
+        if (providers.size() > 1 || !chatSettings().providerId().isEmpty()) {
+            MenuItem select = new MenuItem(menu, SWT.CASCADE);
+            select.setText("Провайдер: " + providerName(chatSettings()));
+            Menu submenu = new Menu(menu);
+            select.setMenu(submenu);
+            for (ApiProvider provider : providers) {
+                MenuItem item = new MenuItem(submenu, SWT.RADIO);
+                item.setText(provider.name().replace("&", "&&"));
+                item.setSelection(provider.id().equals(chatSettings().providerId()));
+                item.addListener(SWT.Selection, event -> {
+                    if (item.getSelection()) chooseProvider(provider.id());
+                });
+            }
+            new MenuItem(menu, SWT.SEPARATOR);
+        }
         for (String name : modelChoices()) {
             MenuItem item = new MenuItem(menu, SWT.RADIO);
             item.setText(name);
@@ -2587,7 +2623,7 @@ public class ChatView extends ViewPart {
         }
         String state = modelsLoading ? "Загружаю список с сервера…"
                 : modelsError != null ? "Список не получен: " + shorten(modelsError, 80)
-                : serverModels.isEmpty() && settings.isConfigured() ? "Сервер не отдал список моделей" : null;
+                : serverModels.isEmpty() && chatSettings().isConfigured() ? "Сервер не отдал список моделей" : null;
         if (state != null) {
             MenuItem note = new MenuItem(menu, SWT.PUSH);
             note.setText(state);
@@ -2596,7 +2632,7 @@ public class ChatView extends ViewPart {
         new MenuItem(menu, SWT.SEPARATOR);
         MenuItem refresh = new MenuItem(menu, SWT.PUSH);
         refresh.setText("Обновить список");
-        refresh.setEnabled(settings.isConfigured() && !modelsLoading);
+        refresh.setEnabled(chatSettings().isConfigured() && !modelsLoading);
         refresh.addListener(SWT.Selection, event -> {
             loadModels(true);
             showNotice("Загружаю список моделей…");
@@ -2605,6 +2641,44 @@ public class ChatView extends ViewPart {
         configure.setText("Настройки модели…");
         configure.addListener(SWT.Selection, event -> openPreferences());
         return menu;
+    }
+
+    private static String providerKey(AiSettings value) {
+        return value.providerId().isEmpty() ? ApiProvider.DEFAULT_ID : value.providerId();
+    }
+
+    private boolean hasProvider(Live chat) {
+        String id = chat.model.providerId().isEmpty() ? ApiProvider.DEFAULT_ID : chat.model.providerId();
+        return chat.model.isEmpty() || SettingsStore.workspace().providers().stream().anyMatch(each -> each.id().equals(id));
+    }
+
+    private String providerName(AiSettings value) {
+        return SettingsStore.workspace().providers().stream().filter(each -> each.id().equals(value.providerId()))
+                .map(ApiProvider::name).findFirst().orElse(value.providerId().isEmpty() ? "Основной" : "Удалённый провайдер");
+    }
+
+    /** Переключение действует на следующий ответ; текущий AgentLoop уже получил своё подключение. */
+    void chooseProvider(String id) {
+        SettingsStore store = SettingsStore.workspace();
+        ApiProvider provider = store.provider(id);
+        AiSettings selected = provider.apply(store.load());
+        try {
+            store.saveProviders(store.providers(), id);
+        } catch (BackingStoreException e) {
+            showNotice("Провайдер не сохранить: " + e.getMessage());
+            return;
+        }
+        settings = store.load();
+        useModel(current, ChatModel.of(selected));
+        serverModels = List.of();
+        modelsFor = "";
+        modelsError = null;
+        estimated = null;
+        window = session.provider().window();
+        updateModelButton();
+        updateStatus();
+        updateEmptyState();
+        showNotice("Провайдер: " + provider.name() + (session.isBusy() ? " — со следующего вопроса" : ""));
     }
 
     private static String shorten(String text, int max) {
@@ -2617,18 +2691,22 @@ public class ChatView extends ViewPart {
      * в недавние.
      */
     void chooseModel(String name) {
+        if (!hasProvider(current)) {
+            showNotice("Провайдер удалён. Выберите подключение в меню модели");
+            return;
+        }
         String model = name.strip();
         String before = chatSettings().model();
         if (model.isEmpty() || model.equals(before)) {
             return;
         }
         try {
-            SettingsStore.workspace().save(settings.withModel(model));
+            SettingsStore.workspace().save(chatSettings().withModel(model));
         } catch (BackingStoreException e) {
             showNotice("Модель не сохранить: " + e.getMessage());
             return;
         }
-        useModel(current, new ChatModel(model, settings.baseUrl()));
+        useModel(current, ChatModel.of(chatSettings().withModel(model)));
         // Прежняя — тоже в недавние: к ней обычно возвращаются.
         List<String> recent = ModelChoices.remember(ModelChoices.parse(preferences().get(recentModelsKey(), "")), before);
         preferences().put(recentModelsKey(), ModelChoices.format(ModelChoices.remember(recent, model)));
@@ -2643,7 +2721,11 @@ public class ChatView extends ViewPart {
             showModelMenu();
             return;
         }
-        loadModels(false, () -> chooseTyped(argument));
+        Live target = current;
+        String key = modelsKey();
+        loadModels(false, () -> {
+            if (current == target && key.equals(modelsKey())) chooseTyped(argument);
+        });
     }
 
     private void chooseTyped(String argument) {
@@ -3388,7 +3470,7 @@ public class ChatView extends ViewPart {
     // ---- состояние ----
 
     private void updateEmptyState() {
-        boolean configured = settings.isConfigured();
+        boolean configured = chatSettings().isConfigured();
         String title = configured ? "Чем помочь?" : "Модель не настроена";
         String text = configured
                 ? "Задайте вопрос модели " + chatSettings().model() + ". Enter — отправить, Shift+Enter — новая строка,"
@@ -3448,7 +3530,7 @@ public class ChatView extends ViewPart {
             estimated = session.isBusy() || usage == null || usage.contextSource() != TokenUsage.Source.SERVER;
         }
         contextUsage.setCompacting(session.isCompacting());
-        contextUsage.setGauge(settings.isConfigured() && window > 0 ? new ContextGauge(used, window, estimated) : null);
+        contextUsage.setGauge(chatSettings().isConfigured() && window > 0 ? new ContextGauge(used, window, estimated) : null);
     }
 
     private void updateStatus() {
@@ -3456,7 +3538,7 @@ public class ChatView extends ViewPart {
         String text;
         if (notice != null) {
             text = notice;
-        } else if (!settings.isConfigured()) {
+        } else if (!chatSettings().isConfigured()) {
             text = "Модель не настроена";
         } else {
             List<String> parts = new ArrayList<>(List.of(chatSettings().model()));
@@ -3474,14 +3556,14 @@ public class ChatView extends ViewPart {
             } else if (estimate() > 0) {
                 parts.add(TokenUsage.describeEstimate(estimate(), window));
             } else {
-                parts.add(host(settings.baseUrl()));
+                parts.add(host(chatSettings().baseUrl()));
             }
             if (agentMode() != AgentMode.AGENT) {
                 parts.add("режим «" + agentMode().label() + "»");
             }
             text = String.join(" · ", parts);
         }
-        status.setToolTipText((settings.isConfigured() ? chatSettings().model() + " · " + settings.baseUrl() + "\n" : "")
+        status.setToolTipText((chatSettings().isConfigured() ? chatSettings().model() + " · " + chatSettings().baseUrl() + "\n" : "")
                 + diagnostics.description());
         if (!text.equals(status.getText())) {
             status.setText(text);

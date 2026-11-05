@@ -3,6 +3,10 @@ package io.github.hansglorias.edtai.core.settings;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import io.github.hansglorias.edtai.core.chat.ChatModel;
+import io.github.hansglorias.edtai.core.llm.ModelChatProvider;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -183,4 +187,60 @@ class SettingsStoreTest {
         assertFalse(store.hasToken());
         assertEquals("", store.loadToken());
     }
+    @Test
+    void providersMigrateLegacyWithoutReadingTokenAndKeepSecretsSeparate() throws Exception {
+        AiSettings original = new AiSettings(Protocol.OPENAI_COMPATIBLE, "http://localhost:8080", "small", 100,
+                "общий промпт", 7000, true, false, "", List.of(), 8192);
+        store.save(original);
+        store.saveToken(TOKEN);
+        ApiProvider first = store.providers().get(0);
+        ApiProvider second = new ApiProvider("other", "Второй", Protocol.ANTHROPIC, "http://localhost:8081", "large",
+                200, 32768, true, "");
+        store.saveProviders(List.of(first, second), second.id());
+        store.saveToken(second.id(), "test-other-secret");
+
+        assertEquals(second.apply(original), store.load());
+        assertEquals(TOKEN, store.loadToken(first.id()));
+        assertEquals("test-other-secret", store.loadToken());
+        assertEquals(TOKEN, secure.node(SettingsStore.SECURE_NODE).get(SettingsStore.SECURE_KEY_TOKEN, ""));
+        assertTrue(secure.node(SettingsStore.SECURE_NODE + "/providers/other").isEncrypted(SettingsStore.SECURE_KEY_TOKEN));
+        for (String key : preferences.keys()) {
+            assertFalse(preferences.get(key, "").contains(TOKEN));
+            assertFalse(preferences.get(key, "").contains("test-other-secret"));
+        }
+        ChatModel oldChat = new ChatModel("small-custom", original.baseUrl());
+        assertEquals("small-custom", store.forChat(oldChat).model());
+        assertEquals(first.id(), store.forChat(oldChat).providerId(), "старый чат остаётся на прежнем подключении");
+        var connection = ModelChatProvider.connection(store, ignored -> store.forChat(oldChat));
+        assertEquals(original.baseUrl(), connection.baseUrl());
+        assertEquals(TOKEN, connection.token());
+        assertEquals(Protocol.OPENAI_COMPATIBLE, connection.protocol());
+        assertEquals(8192, connection.window());
+
+        store.save(store.load().withModel("large-custom"));
+        assertEquals("small", store.provider(first.id()).model());
+        assertEquals("large-custom", store.provider(second.id()).model());
+        assertEquals(second.id(), store.load().providerId());
+    }
+
+    @Test
+    void profileIdentitySeparatesSameEndpointAndDeletionDoesNotRerouteChat() throws Exception {
+        ApiProvider first = new ApiProvider("first", "Первый", Protocol.OPENAI_COMPATIBLE, "http://localhost:8080", "m",
+                0, 8192, false, "");
+        ApiProvider second = new ApiProvider("second", "Второй", Protocol.OPENAI_COMPATIBLE, first.baseUrl(), "m",
+                0, 16384, true, "");
+        store.saveProviders(List.of(first, second), second.id());
+        store.saveToken(first.id(), "first-secret");
+        store.saveToken(second.id(), "second-secret");
+        ChatModel bound = ChatModel.of(first.apply(AiSettings.defaults()));
+        assertEquals("first-secret", ModelChatProvider.connection(store, ignored -> store.forChat(bound)).token());
+        assertEquals(8192, ModelChatProvider.connection(store, ignored -> store.forChat(bound)).window());
+        assertFalse(bound.appliesTo(store.load()));
+        store.saveProviders(List.of(second), second.id());
+        assertFalse(store.forChat(bound).isConfigured(), "удаление не отправляет историю другому провайдеру");
+        assertThrows(Exception.class, () -> ModelChatProvider.connection(store, ignored -> store.forChat(bound)));
+        assertThrows(IllegalArgumentException.class, () -> store.saveProviders(List.of(second, second), second.id()));
+        assertThrows(IllegalArgumentException.class, () -> store.saveToken("../escape", "secret"));
+    }
+
 }

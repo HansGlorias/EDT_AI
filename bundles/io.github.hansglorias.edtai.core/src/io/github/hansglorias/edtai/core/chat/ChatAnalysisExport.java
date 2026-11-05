@@ -31,7 +31,17 @@ public final class ChatAnalysisExport {
     // Структурированный формат progress ID ExploreProject (#90), не разбор summary/outcome.
     private static final Pattern CHILD = Pattern.compile("^(.*)/child/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:/.*)?$");
 
-    /** Только белый список текущих настроек. Исторические настройки по запросам неизвестны. */
+    /** Имя архива без каталогов, допустимое на Windows и Linux. */
+    public static String fileName(String title) {
+        String stem = title == null ? "" : title.replaceAll("[\\p{Cntrl}<>:\"/\\\\|?*]", "_").strip();
+        stem = stem.replaceAll("[ .]+$", "");
+        if (stem.isBlank()) stem = "chat";
+        if (stem.matches("(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\\..*)?")) stem = "_" + stem;
+        if (stem.length() > 100) stem = stem.substring(0, stem.offsetByCodePoints(0, Math.min(100, stem.codePointCount(0, stem.length()))));
+        return stem + "-analysis.zip";
+    }
+
+    /** Белый список настроек на момент экспорта; не заменяет сохранённый reply_model. */
     public record Configuration(String pluginVersion, AgentMode mode, String protocol, String model,
             int configuredWindow, int maxOutputTokens, int contextLimit, boolean toolsEnabled) { }
 
@@ -175,6 +185,9 @@ public final class ChatAnalysisExport {
             }
             messages.add(object("id", mid, "links", links(), "role", message.role().name(),
                     "status", message.status().name(), "time", message.time().toString(), "text", body,
+                    "reply_model", message.replyModel() == null ? object("scope", "response_connection_snapshot", "status", "unknown")
+                            : object("scope", "response_connection_snapshot", "status", "available",
+                                    "protocol", content.metadata(message.replyModel().protocol()), "model", content.metadata(message.replyModel().model())),
                     "tools", uses, "tool_count_in_history", message.tools().size(),
                     "context", contexts, "context_count_in_history", message.context().size(),
                     "attachments", attachments, "attachment_count_in_history", message.attachments().size(),
