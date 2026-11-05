@@ -41,7 +41,7 @@ final class JumpToBottom extends Canvas {
         var bounds = new org.eclipse.swt.graphics.Rectangle(Math.max(0, (area.width - SIZE) / 2),
                 Math.max(0, area.height - SIZE - 12), SIZE, SIZE);
         if (!bounds.equals(getBounds())) setBounds(bounds);
-        boolean shown = text.isVisible() && area.height > SIZE + 24
+        boolean shown = text.isVisible() && text.getCharCount() > 0 && area.height > SIZE + 24
                 && text.getLinePixel(text.getLineCount()) + text.getBottomMargin() > area.height + text.getLineHeight();
         if (getVisible() != shown) {
             setVisible(shown);

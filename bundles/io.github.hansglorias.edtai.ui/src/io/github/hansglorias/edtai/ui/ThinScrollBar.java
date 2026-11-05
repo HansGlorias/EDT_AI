@@ -89,7 +89,8 @@ final class ThinScrollBar {
         Rectangle area = text != null ? text.getClientArea() : bar.getBounds();
         int total = model.total();
         // Скрытая лента (пока чат пуст, видна заглушка) ещё не разложена: её размер ничего не значит.
-        boolean needed = (text != null ? text.isVisible() : bar.getParent().getVisible()) && total > model.page() && model.page() > 0;
+        boolean needed = (text != null ? text.isVisible() && text.getCharCount() > 0 : bar.getParent().getVisible())
+                && total > model.page() && model.page() > 0;
         if (text != null) {
             Rectangle bounds = new Rectangle(area.x + area.width - WIDTH, area.y, WIDTH, area.height);
             if (!bar.getBounds().equals(bounds)) bar.setBounds(bounds);

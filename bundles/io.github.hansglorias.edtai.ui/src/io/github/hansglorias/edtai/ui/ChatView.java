@@ -3397,6 +3397,7 @@ public class ChatView extends ViewPart {
             topLayout.topControl = shown;
             top.layout(true);
         }
+        scrollBar.update();
     }
 
     private void updateSendButton() {

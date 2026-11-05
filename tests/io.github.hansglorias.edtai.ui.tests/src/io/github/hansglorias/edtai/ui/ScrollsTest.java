@@ -69,10 +69,13 @@ class ScrollsTest extends AbstractChatTest {
             field.sync();
             assertFalse(field.vertical().isShown());
             text.setText("длинная строка без переводов ".repeat(100));
+            // GTK пересчитывает adjustment после размещения перенесённых строк, в цикле событий.
+            settle();
             field.sync();
             assertTrue(field.vertical().isShown());
             wheel(text, -3);
-            assertTrue(text.getTopPixel() > 0, "прокрутка внутри одной перенесённой строки");
+            waitUntil(() -> text.getTopPixel() > 0, () -> "прокрутка внутри одной перенесённой строки: максимум="
+                    + text.getVerticalBar().getMaximum() + ", видимая часть=" + text.getVerticalBar().getThumb());
             Screenshots.capture(shell, "thin-scroll-windows");
         } finally { shell.dispose(); }
     }
