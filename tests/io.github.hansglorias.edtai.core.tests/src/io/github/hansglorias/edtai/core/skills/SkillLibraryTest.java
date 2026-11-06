@@ -79,7 +79,7 @@ class SkillLibraryTest {
         assertEquals(Skill.Source.PROJECT, posting.source(), "скилл проекта заменяет встроенный");
         assertEquals("Проведение по-нашему", posting.description());
         assertEquals(SkillLibrary.BUILT_IN.size() + 1, library.all().size(), "битые и с плохим именем пропущены");
-        assertEquals(List.of("platform-gotchas", "posting", "print-form"), library.matching("p").stream().map(Skill::name).toList());
+        assertEquals(List.of("platform-gotchas", "posting", "print-form", "project-navigation"), library.matching("p").stream().map(Skill::name).toList());
 
         String described = library.describe();
         assertTrue(described.startsWith("Встроенные:\n  /access-rights — "), described);
@@ -91,6 +91,35 @@ class SkillLibraryTest {
         assertThrows(IllegalArgumentException.class, () -> library.save("плохое имя", "о", "т"));
         assertThrows(IllegalArgumentException.class, () -> library.save("review", "о", "т"), "встроенная команда");
         assertThrows(IllegalArgumentException.class, () -> library.save("empty", " ", "т"));
+    }
+
+    @Test
+    void navigationProfileUsesTheAvailableSkillAndStaysOutOfTheCatalogBody() throws Exception {
+        SkillLibrary library = library();
+        String body = library.find("project-navigation").orElseThrow().body();
+        List<Tool> tools = SkillTools.create(library);
+        assertFalse(library.prompt().contains(body), "в каталоге только описание");
+        assertEquals(body, tools.get(0).call(Map.of("name", "project-navigation")).text(), "ведущий читает по запросу");
+        assertEquals(body, SkillTools.instructions(tools, "project-navigation"));
+        library.save("project-navigation", "Своя методика исследования", "USER_NAVIGATION_METHOD");
+        assertEquals("USER_NAVIGATION_METHOD", SkillTools.instructions(tools, "project-navigation"));
+        Path project = Files.createDirectories(temp.resolve("project/.edtai/skills"));
+        Files.writeString(project.resolve("project-navigation.md"),
+                "---\nname: project-navigation\ndescription: Методика проекта\n---\nPROJECT_NAVIGATION_METHOD");
+        SkillLibrary projectLibrary = library(project);
+        assertEquals("PROJECT_NAVIGATION_METHOD", SkillTools.instructions(SkillTools.create(projectLibrary), "project-navigation"));
+        SkillLibrary disabled = new SkillLibrary(temp.resolve("user"), () -> List.of(project), Set.of(),
+                () -> Set.of("project-navigation"));
+        assertEquals("", SkillTools.instructions(SkillTools.create(disabled), "project-navigation"));
+        assertEquals("", SkillTools.instructions(List.of(tools.get(1)), "project-navigation"), "одного save_skill недостаточно");
+        Tool impostor = new Tool() {
+            public String name() { return "skill"; }
+            public String description() { return "не библиотека"; }
+            public Map<String, Object> inputSchema() { return Map.of(); }
+            public String summary(Map<String, Object> input) { return ""; }
+            public Result call(Map<String, Object> input) { throw new AssertionError("не должен вызываться"); }
+        };
+        assertEquals("", SkillTools.instructions(List.of(impostor), "project-navigation"));
     }
 
     @Test

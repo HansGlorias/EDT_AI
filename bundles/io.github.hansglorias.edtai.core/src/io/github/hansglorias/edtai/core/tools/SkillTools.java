@@ -26,6 +26,20 @@ public final class SkillTools {
         return List.of(new Read(library), new Save(library));
     }
 
+    /**
+     * Методика для отдельной роли из доступного встроенного чтения скиллов.
+     * Сохраняет пользовательские/проектные замены и выключение скилла.
+     * Совпадение имени инструмента с {@code skill} не даёт доступа к библиотеке.
+     */
+    public static String instructions(List<Tool> tools, String name) {
+        for (Tool tool : tools) {
+            if (tool instanceof Read read) {
+                return read.library().find(name).map(Skill::body).orElse("");
+            }
+        }
+        return "";
+    }
+
     private record Read(SkillLibrary library) implements Tool {
 
         @Override

@@ -16,14 +16,14 @@ final class DelegateTask implements Tool {
     @Override public String name() { return "delegate_task"; }
     @Override public boolean safeInPlan() { return true; }
     @Override public String description() {
-        return "Изолированное чтение: research — исследование связей, review — ошибки и регрессии по diff/коду,"
+        return "Изолированное чтение: research — исследование связей (с доступным скиллом project-navigation), review — ошибки и регрессии по diff/коду,"
                 + " verify — проверка гипотезы доступной диагностикой. Без записей, на текущей модели."
                 + " MCP доступен через каталог. Один краткий отчёт; общий с explore_project лимит — 2 запуска за ответ.";
     }
     @Override public Map<String, Object> inputSchema() {
         return Json.object("type", "object", "properties", Json.object(
                 "role", Json.object("type", "string", "enum", List.of("research", "review", "verify")),
-                "task", Json.object("type", "string", "description", "Задача до 4000 символов"),
+                "task", Json.object("type", "string", "description", "Конкретная подзадача, известные факты и критерии результата (ссылки, проверки, неизвестное). До 4000 символов"),
                 "scope", Json.object("type", "string", "description", "Ориентир поиска до 1000 символов; не граница доступа")),
                 "required", List.of("role", "task"), "additionalProperties", false);
     }

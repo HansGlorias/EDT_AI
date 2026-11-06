@@ -27,8 +27,10 @@ import io.github.hansglorias.edtai.core.chat.TokenUsage;
 import io.github.hansglorias.edtai.core.chat.ToolUse;
 import io.github.hansglorias.edtai.core.json.Json;
 import io.github.hansglorias.edtai.core.settings.Protocol;
+import io.github.hansglorias.edtai.core.skills.SkillLibrary;
 import io.github.hansglorias.edtai.core.tls.TrustSettings;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
+import io.github.hansglorias.edtai.core.tools.SkillTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolApprover;
 import io.github.hansglorias.edtai.core.tools.ToolException;
@@ -567,6 +569,118 @@ class ExploreProjectTest {
     }
 
     @Test
+    void researchGetsTheAvailableMethodOnlyWhenLaunchedForBothEntryPointsAndProtocols() throws Exception {
+        SkillLibrary library = new SkillLibrary(temp.resolve("skills"), List::of, java.util.Set.of());
+        List<Tool> reads = reads();
+        String method = library.find("project-navigation").orElseThrow().body();
+        String task = "Установи связи выбранных объектов. Верни подтверждённые факты, ссылки и неизвестное.";
+        for (Protocol protocol : Protocol.values()) {
+            for (String role : List.of("explore", "research", "review", "verify")) {
+                AtomicInteger requests = new AtomicInteger();
+                List<Throwable> errors = new CopyOnWriteArrayList<>();
+                try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+                    try {
+                        int step = requests.getAndIncrement();
+                        String system = systemPrompt(request.body(), protocol);
+                        if (step == 0) {
+                            assertFalse(system.contains(method), "ведущий получает короткий каталог");
+                            if (role.equals("explore")) send(response, protocol, "", List.of(call("explore_project",
+                                    Map.of("question", task, "scope", "CommonModules"))), 1, 1);
+                            else send(response, protocol, "", List.of(call("delegate_task",
+                                    Map.of("role", role, "task", task, "scope", "CommonModules"))), 1, 1);
+                        } else if (step <= 2) {
+                            Map<String, Object> body = Json.parseObject(request.body());
+                            assertEquals(role.equals("explore") || role.equals("research"), system.contains(method));
+                            assertTrue(request.body().contains(task), "подзадача сохранена");
+                            assertFalse(request.body().contains("parent-private-history"));
+                            assertFalse(toolNames(body, protocol).contains("delegate_task"));
+                            assertFalse(toolNames(body, protocol).contains("save_skill"));
+                            if (step == 1) send(response, protocol, "", List.of(call("read_module",
+                                    Map.of("module", "src/CommonModules/Test/Module.bsl"))), 1, 1);
+                            else send(response, protocol, "Проверенный факт: CommonModule.Test:1. Остальное неизвестно.", List.of(), 1, 1);
+                        } else {
+                            assertEquals(3, step);
+                            assertFalse(system.contains(method), "полная методика остаётся у исследователя");
+                            assertTrue(request.body().contains("CommonModule.Test:1"), "ведущий получил факт и ссылку");
+                            send(response, protocol, "Итог по подтверждённому факту.", List.of(), 1, 1);
+                        }
+                    } catch (Throwable error) {
+                        errors.add(error);
+                        response.send(500, "application/json", "{}");
+                    }
+                })) {
+                    ToolSource source = new ToolSource() {
+                        public List<Tool> tools(java.util.function.Consumer<ToolUse> problems) {
+                            List<Tool> tools = new ArrayList<>(reads);
+                            tools.addAll(SkillTools.create(library));
+                            return tools;
+                        }
+                        public List<Tool> explorationTools() { return reads; }
+                        public String brief() { return library.prompt(); }
+                    };
+                    String answer = new ModelChatProvider(() -> connection(server, protocol), new ModelClient(), source, ToolApprover.ALLOW_ALL)
+                            .reply(List.of(ChatMessage.of(ChatRole.USER, "parent-private-history")), part -> { }, use -> { })
+                            .get(15, TimeUnit.SECONDS);
+                    assertEquals(List.of(), errors);
+                    assertEquals("Итог по подтверждённому факту.", answer);
+                    assertEquals(4, requests.get());
+                }
+            }
+        }
+    }
+
+    @Test
+    void navigationMethodFitsAnEightThousandTokenChildWindow() throws Exception {
+        SkillLibrary library = new SkillLibrary(temp.resolve("skills"), List::of, java.util.Set.of());
+        String method = library.find("project-navigation").orElseThrow().body();
+        AtomicInteger requests = new AtomicInteger();
+        try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+            if (requests.getAndIncrement() == 0) send(response, Protocol.OPENAI_COMPATIBLE, "", List.of(call("read_module",
+                    Map.of("module", "src/CommonModules/Test/Module.bsl"))), 1, 1);
+            else send(response, Protocol.OPENAI_COMPATIBLE, "Факт: CommonModule.Test:1", List.of(), 1, 1);
+        })) {
+            ModelConnection connection = new ModelConnection(Protocol.OPENAI_COMPATIBLE, server.url(), "test-model", "", 4096,
+                    "", new TrustSettings(false, Optional.empty()), 8192);
+            Tool.Result report = new ExploreProject(new ModelClient(), connection, reads(), use -> { },
+                    (id, usage) -> { }, ToolApprover.ALLOW_ALL, method).call(Map.of("question", "Установи факт по модулю"));
+            assertEquals("complete", report.outcome());
+            assertTrue(report.text().contains("CommonModule.Test:1"));
+            assertEquals(2, requests.get());
+        }
+    }
+
+    @Test
+    void localReadDoesNotStartAResearcherOrSendTheFullMethod() throws Exception {
+        List<Tool> reads = reads();
+        SkillLibrary library = new SkillLibrary(temp.resolve("skills"), List::of, java.util.Set.of());
+        String method = library.find("project-navigation").orElseThrow().body();
+        AtomicInteger requests = new AtomicInteger();
+        List<ToolUse> progress = new CopyOnWriteArrayList<>();
+        try (FakeModelServer server = FakeModelServer.http().handler((request, response) -> {
+            if (requests.getAndIncrement() == 0) send(response, Protocol.OPENAI_COMPATIBLE, "",
+                    List.of(call("read_module", Map.of("module", "src/CommonModules/Test/Module.bsl"))), 1, 1);
+            else send(response, Protocol.OPENAI_COMPATIBLE, "Ответ по одному модулю.", List.of(), 1, 1);
+        })) {
+            ToolSource source = new ToolSource() {
+                public List<Tool> tools(java.util.function.Consumer<ToolUse> problems) {
+                    List<Tool> tools = new ArrayList<>(reads);
+                    tools.addAll(SkillTools.create(library));
+                    return tools;
+                }
+                public List<Tool> explorationTools() { return reads; }
+                public String brief() { return library.prompt(); }
+            };
+            String answer = new ModelChatProvider(() -> connection(server, Protocol.OPENAI_COMPATIBLE), new ModelClient(), source, ToolApprover.ALLOW_ALL)
+                    .reply(List.of(ChatMessage.of(ChatRole.USER, "Объясни известный модуль")), part -> { }, progress::add)
+                    .get(15, TimeUnit.SECONDS);
+            assertEquals("Ответ по одному модулю.", answer);
+            assertEquals(2, requests.get());
+            assertTrue(progress.stream().noneMatch(use -> use.name().equals(ToolUse.SUBAGENT)));
+            assertTrue(server.requests().stream().noneMatch(request -> systemPrompt(request.body(), Protocol.OPENAI_COMPATIBLE).contains(method)));
+        }
+    }
+
+    @Test
     void corruptChildKeepsItsPrefixAndCheckedAreaWithoutRetry() throws Exception {
         for (Protocol protocol : Protocol.values()) {
             AtomicInteger requests = new AtomicInteger();
@@ -642,6 +756,12 @@ class ExploreProjectTest {
     private ModelConnection connection(FakeModelServer server, Protocol protocol) {
         return new ModelConnection(protocol, server.url(), "fixed-parent-model", "", 4096,
                 "parent-private-prompt", new TrustSettings(false, Optional.empty()), 32768);
+    }
+
+    private static String systemPrompt(String request, Protocol protocol) {
+        Map<String, Object> body = Json.parseObject(request);
+        return protocol == Protocol.ANTHROPIC ? Json.stringAt(body, "system")
+                : Json.stringAt(Json.asList(body.get("messages")).get(0), "content");
     }
 
     private static List<String> toolNames(Map<String, Object> body, Protocol protocol) {
