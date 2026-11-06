@@ -10,6 +10,37 @@ import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolException;
 
 class McpToolCatalogTest {
+    @Test void defaultValidatorSchemasStayOrdinaryReplaceableSelections() throws Exception {
+        Tool first = tool("validate_query", "read");
+        Tool second = new Tool() {
+            public boolean mcp() { return true; }
+            public String mcpName() { return "validate_query"; }
+            public String name() { return "other__validate_query"; }
+            public String description() { return "second provider"; }
+            public Map<String,Object> inputSchema() { return Map.of("type", "object"); }
+            public String summary(Map<String,Object> input) { return name(); }
+            public Result call(Map<String,Object> input) { throw new AssertionError("No automatic execution"); }
+        };
+        Tool unrelated = tool("prefix_validate_query", "read");
+        McpToolCatalog catalog = new McpToolCatalog(List.of(first, second, unrelated));
+        catalog.selectDefaults();
+        assertEquals(List.of(first, second), catalog.selected(), "все доступные провайдеры без выбора за модель");
+        assertEquals(List.of("validate_query", "other__validate_query"), Json.asList(Json.parseObject(
+                catalog.call(Map.of("action", "list")).text()).get("active")));
+        catalog.call(Map.of("action", "select", "names", List.of()));
+        assertTrue(catalog.selected().isEmpty(), "select освобождает и начальные схемы");
+        catalog.call(Map.of("action", "select", "names", List.of(second.name())));
+        assertEquals(List.of(second), catalog.selected());
+        catalog.disable();
+        catalog.selectDefaults();
+        assertTrue(catalog.selected().isEmpty(), "отказ модели не включает схемы повторно");
+
+        McpToolCatalog tight = new McpToolCatalog(List.of(first, second));
+        tight.fits(selected -> selected.size() < 2);
+        tight.selectDefaults();
+        assertTrue(tight.selected().isEmpty(), "набор целиком не помещается: не выбираем первый сервер");
+    }
+
     @Test void pagesAreBoundedAndHonest() throws Exception {
         McpToolCatalog catalog = new McpToolCatalog(IntStream.range(0, 23).mapToObj(i -> tool("mcp_" + i, "x".repeat(50_000))).toList());
         String first = catalog.call(Map.of("action", "list")).text();

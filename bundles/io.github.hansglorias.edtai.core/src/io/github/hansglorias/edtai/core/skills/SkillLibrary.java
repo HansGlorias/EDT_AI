@@ -30,7 +30,7 @@ public final class SkillLibrary {
     /** Встроенные скиллы: файлы {@code builtin/<имя>.md} рядом с классом. */
     public static final List<String> BUILT_IN = List.of("create-skill", "bsl-style", "query-style", "query-optimize", "code-standards",
             "posting", "client-server", "method-docs", "edt-project", "project-navigation", "access-rights", "release-update", "html-field", "commit-message",
-            "live-base", "platform-gotchas");
+            "live-base", "platform-gotchas", "development-workflow", "query-development");
     /** Каталог скиллов внутри проекта. */
     public static final String PROJECT_DIRECTORY = ".edtai/skills";
 

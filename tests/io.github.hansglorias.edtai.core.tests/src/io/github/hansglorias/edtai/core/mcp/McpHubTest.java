@@ -161,6 +161,8 @@ class McpHubTest {
         List<Tool> second = hub.tools(List.of(edt("get_*"), new McpServer("Второй EDT", McpTransport.HTTP, server.url(), true, "get_*")),
                 TRUST, Set.of("read_module"), () -> limit, problems::add);
         assertEquals(List.of("get_edt_version", "EDT__get_edt_version"), second.stream().map(Tool::name).toList());
+        assertEquals(List.of("get_edt_version", "get_edt_version"), second.stream().map(Tool::mcpName).toList(),
+                "каталог получает исходное имя даже при коллизии");
         assertTrue(second.stream().allMatch(Tool::mcp), "переименование при коллизии сохраняет происхождение MCP");
         assertEquals("mcp__x", McpHub.exposedName(new McpServer("Рабочий", McpTransport.HTTP, "", true), "x", Set.of("x")));
         assertEquals("mcp__x_2", McpHub.exposedName(new McpServer("Рабочий", McpTransport.HTTP, "", true), "x", Set.of("x", "mcp__x")));

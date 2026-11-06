@@ -78,6 +78,9 @@ public final class ToolActivity {
         public boolean mcp() { return tool.mcp(); }
 
         @Override
+        public String mcpName() { return tool.mcpName(); }
+
+        @Override
         public boolean needsApproval() {
             return tool.needsApproval();
         }

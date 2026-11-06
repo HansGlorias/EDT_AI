@@ -35,11 +35,20 @@ final class McpToolCatalog implements Tool {
     List<Tool> selected() { return selected; }
     void restore(List<Tool> previous) { selected = previous; }
 
+    /** Начальный набор обычных схем. При нескольких серверах не выбираем один произвольно. */
+    void selectDefaults() {
+        if (disabled) return;
+        List<Tool> defaults = candidates.stream()
+                .filter(tool -> tool.mcpName().equals("validate_query") && !tool.modifies()).toList();
+        if (!defaults.isEmpty() && fits.test(defaults)) selected = defaults;
+    }
+
     @Override public String name() { return NAME; }
     @Override public String description() {
         return "Find available MCP tools: list/search pages of names and short descriptions using optional query substring, then select exact names to load schemas. "
                 + "select replaces all active MCP schemas within the request budget; call selected tools only in the next model request. "
-                + "No MCP tools can be called before selection. Server-side toolset expansion is not supported.";
+                + "Available validate_query schemas may already be loaded at answer start. Only call tools whose schemas are currently provided. "
+                + "Server-side toolset expansion is not supported.";
     }
     @Override public Map<String, Object> inputSchema() {
         return Map.of("type", "object", "properties", Map.of(

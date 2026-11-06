@@ -142,4 +142,16 @@ class SkillLibraryTest {
         assertThrows(ToolException.class, () -> tools.get("save_skill").call(Map.of("name", "new", "description", "о",
                 "instructions", "т")));
     }
+
+    @Test
+    void queryMethodCanBeReplacedAndDisabledWithoutLoadingItsBodyInTheCatalog() throws Exception {
+        SkillLibrary library = library();
+        String method = library.find("query-development").orElseThrow().body();
+        assertFalse(library.prompt().contains(method));
+        library.save("query-development", "Своя проверка запроса", "CUSTOM_QUERY_METHOD");
+        assertEquals("CUSTOM_QUERY_METHOD", SkillTools.create(library).get(0).call(Map.of("name", "query-development")).text());
+        SkillLibrary disabled = new SkillLibrary(temp.resolve("user"), List::of, Set.of(), () -> Set.of("query-development"));
+        assertFalse(disabled.prompt().contains("- query-development"));
+        assertThrows(ToolException.class, () -> SkillTools.create(disabled).get(0).call(Map.of("name", "query-development")));
+    }
 }

@@ -57,6 +57,9 @@ final class McpTool implements Tool {
     public boolean mcp() { return true; }
 
     @Override
+    public String mcpName() { return info.name(); }
+
+    @Override
     public boolean needsApproval() {
         return true;
     }
