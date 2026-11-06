@@ -105,6 +105,7 @@ final class AgentLoop {
     private List<Tool> tools = List.of();
     private List<Tool> fixedTools = List.of();
     private McpToolCatalog catalog;
+    private String workflowInstructions = "";
     private volatile CompletableFuture<ModelReply> current;
     private final StringBuilder answer = new StringBuilder();
     private boolean separate;
@@ -240,6 +241,7 @@ final class AgentLoop {
         try {
             tools = List.copyOf(source.tools(onTool));
             if (!exploration) {
+                workflowInstructions = SkillTools.instructions(tools, "development-workflow");
                 List<Tool> reads = new ArrayList<>(source.explorationTools().stream().filter(tool -> ProjectTools.isBuiltInRead(tool)
                         || io.github.hansglorias.edtai.core.tools.GitTools.isBuiltInRead(tool)).toList());
                 tools.stream().filter(tool -> tool.mcp() && tool.safeInPlan() && !tool.modifies()).forEach(reads::add);
@@ -281,6 +283,7 @@ final class AgentLoop {
                         part -> RequestBudget.size(connection(), part, retained, candidate), budget);
                 return RequestBudget.size(connection(), fitted.history(), retained, candidate) <= budget;
             });
+            if (!exploration) catalog.selectDefaults();
         }
         for (int step = 1;; step++) {
             checkCancelled();
@@ -551,7 +554,8 @@ final class AgentLoop {
     private ModelConnection connection() {
         if (exploration && toolsOff) return base.withSystemPromptPart(SUMMARY_ONLY);
         if (exploration || tools.isEmpty()) return base;
-        ModelConnection connection = base.withSystemPromptPart(ProjectBrief.TOOL_RULES);
+        ModelConnection connection = base.withSystemPromptPart(ProjectBrief.TOOL_RULES)
+                .withSystemPromptPart(workflowInstructions);
         return tools.stream().anyMatch(DelegateTask.class::isInstance)
                 ? connection.withSystemPromptPart(ExploreProject.PARENT_RULES) : connection;
     }
