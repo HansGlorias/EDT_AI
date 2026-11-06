@@ -6,6 +6,8 @@ import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.resource.ResourceLocator;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Point;
 
 /**
  * Значки плагина из {@code icons/}: 16 px и {@code @2x} для HiDPI (его
@@ -58,5 +60,16 @@ final class Icons {
             image = registry.get(PREFIX + name);
         }
         return image;
+    }
+
+    /** Общий размер и центр для значков Canvas-кнопок и состояний специалистов. */
+    static void paint(GC gc, String name, Point size) {
+        Image image = image(name);
+        var source = image.getBounds();
+        int side = Math.max(1, Math.min(16, Math.min(size.x, size.y) - 2));
+        if (side > 1 && ((size.x - side) & 1) != 0 && ((size.y - side) & 1) != 0) side--;
+        gc.setInterpolation(SWT.HIGH);
+        gc.drawImage(image, 0, 0, source.width, source.height,
+                (size.x - side) / 2, (size.y - side) / 2, side, side);
     }
 }

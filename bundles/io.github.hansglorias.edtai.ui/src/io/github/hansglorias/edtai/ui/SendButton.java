@@ -70,18 +70,6 @@ final class SendButton extends Chip {
 
     @Override
     protected void paintIcon(GC gc, Point size) {
-        int cx = size.x / 2;
-        int cy = size.y / 2;
-        int half = Math.max(3, size.y / 4);
-        if (busy) {
-            gc.setBackground(gc.getForeground());
-            gc.fillRoundRectangle(cx - half, cy - half, 2 * half, 2 * half, 2, 2);
-        } else {
-            gc.setLineWidth(Math.max(1, size.y / 12));
-            gc.setLineCap(SWT.CAP_ROUND);
-            gc.setLineJoin(SWT.JOIN_ROUND);
-            gc.drawLine(cx, cy + half, cx, cy - half);
-            gc.drawPolyline(new int[] { cx - half, cy, cx, cy - half, cx + half, cy });
-        }
+        Icons.paint(gc, busy ? "stop" : "send", size);
     }
 }

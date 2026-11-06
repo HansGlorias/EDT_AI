@@ -78,6 +78,7 @@ class McpStatusDialog extends TitleAreaDialog {
         tree.setHeaderVisible(true);
         tree.setLinesVisible(false);
         GridDataFactory.fillDefaults().grab(true, true).hint(760, 340).applyTo(tree);
+        ScrollFrame.wrap(tree);
         column("Сервер, инструмент", 260);
         column("Доступ", 120);
         column("Состояние, описание", 380);
@@ -85,6 +86,7 @@ class McpStatusDialog extends TitleAreaDialog {
 
         details = new Text(body, SWT.BORDER | SWT.READ_ONLY | SWT.WRAP | SWT.V_SCROLL | SWT.MULTI);
         GridDataFactory.fillDefaults().grab(true, false).hint(760, 72).applyTo(details);
+        ScrollFrame.wrap(details);
         tree.addListener(SWT.Selection, event -> showDetails());
         if (tree.getItemCount() > 0) {
             tree.setSelection(tree.getItem(0));
