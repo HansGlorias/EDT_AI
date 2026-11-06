@@ -129,8 +129,9 @@ class ScrollFrameTest extends AbstractChatTest {
                 assertFalse(frame.horizontal().isShown(), "колонки подстраиваются под ширину " + width);
                 var bar = frame.vertical().control().getBounds();
                 assertTrue(bar.x >= 0 && bar.x + bar.width <= frame.getClientArea().width);
-                assertTrue(table.getColumn(0).getWidth() + table.getColumn(1).getWidth() <= table.getClientArea().width + 2,
-                        "дата остаётся внутри таблицы при ширине " + width);
+                assertTrue(table.getColumn(0).getWidth() + table.getColumn(1).getWidth() <= frame.getClientArea().width - ThinScrollBar.WIDTH + 2,
+                        "дата остаётся внутри viewport при ширине " + width + ": frame="
+                        + frame.getClientArea() + ", table=" + table.getClientArea());
                 wheel(table, -100);
             }
             table.setSelection(79);
@@ -149,7 +150,9 @@ class ScrollFrameTest extends AbstractChatTest {
             assertFalse(frame.vertical().isShown(), "после сокращения списка полоса скрыта");
             assertTrue(table.getColumn(0).getWidth() + table.getColumn(1).getWidth()
                     <= frame.getClientArea().width - ThinScrollBar.WIDTH + 2,
-                    "дата остаётся внутри viewport после сокращения списка");
+                    "дата остаётся внутри viewport после сокращения списка: frame=" + frame.getClientArea()
+                    + ", table=" + table.getClientArea() + ", columns="
+                    + (table.getColumn(0).getWidth() + table.getColumn(1).getWidth()));
         } finally { shell.dispose(); }
     }
     @Test void fieldsListsAndTreesUseThinBars() throws Exception {
