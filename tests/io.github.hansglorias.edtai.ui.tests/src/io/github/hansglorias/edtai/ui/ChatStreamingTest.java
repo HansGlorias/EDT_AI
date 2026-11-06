@@ -1,6 +1,7 @@
 package io.github.hansglorias.edtai.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -22,7 +23,7 @@ class ChatStreamingTest extends AbstractChatTest {
         CountDownLatch release = new CountDownLatch(1);
         server = FakeModelServer.http().handler((request, response) -> {
             response.start(200, "text/event-stream");
-            response.write(openAiPart("Начало ответа. " + "слово ".repeat(200) + "\n\n"));
+            response.write(openAiPart("Начало ответа. " + numberedWords(200) + "\n\n"));
             release.await(10, TimeUnit.SECONDS);
             for (int i = 0; i < 60; i++) {
                 response.write(openAiPart("Абзац " + i + ": " + "текст ".repeat(30) + "\n\n"));
@@ -89,7 +90,7 @@ class ChatStreamingTest extends AbstractChatTest {
                 release.await(10, TimeUnit.SECONDS);
                 response.sse(List.of(openAiPart("Кратко: был вопрос."), "data: [DONE]\n\n"), 0);
             } else {
-                response.sse(List.of(openAiPart("Подробный ответ. " + "слово ".repeat(1500)), "data: [DONE]\n\n"), 0);
+                response.sse(List.of(openAiPart("Подробный ответ. " + numberedWords(1500)), "data: [DONE]\n\n"), 0);
             }
         });
         configure(server);
@@ -111,6 +112,30 @@ class ChatStreamingTest extends AbstractChatTest {
         // После уведомления «История сжата» — то же число, что у процента, а не оценка одной истории.
         waitUntil(() -> view.status().getText().contains(TokenUsage.describeEstimate(after.used(), after.window())),
                 () -> view.status().getText());
+    }
+
+    @Test
+    void repeatedStreamShowsReasonAndKeepsCleanPrefix() throws Exception {
+        server = FakeModelServer.http().handler((request, response) -> response.sse(List.of(
+                openAiPart("Полезный результат.\n\n"),
+                openAiPart("</function_results>".repeat(1500)), "data: [DONE]\n\n"), 0));
+        configure(server);
+        ChatView view = showView();
+        ask(view, "Вопрос с испорченным ответом");
+        waitUntil(() -> !view.session().isBusy() && view.history().getText().contains("зациклилась"),
+                () -> view.history().getText());
+        assertTrue(view.history().getText().contains("Полезный результат."));
+        assertFalse(view.history().getText().contains("</function_results>"));
+        assertEquals(io.github.hansglorias.edtai.core.chat.ChatMessage.Status.STOPPED,
+                view.session().messages().get(1).status());
+        assertEquals("Полезный результат.", view.session().messages().get(1).text());
+        assertEquals(1, server.requests().size(), "без автоматического повторного запроса");
+        Screenshots.capture(view.control(), "repeated-generation-stopped");
+    }
+
+    private static String numberedWords(int count) {
+        return java.util.stream.IntStream.range(0, count).mapToObj(i -> "слово " + i + " ")
+                .collect(java.util.stream.Collectors.joining());
     }
 
     @Test
