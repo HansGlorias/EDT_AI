@@ -1042,7 +1042,7 @@ class AgentLoopTest {
                 List<String> events = new java.util.ArrayList<>();
                 if (index == 1) {
                     events.add("data: " + Json.write(Json.object("choices", List.of(Json.object("delta",
-                            Json.object("content", "x".repeat(13_000)))))) + "\n\n");
+                            Json.object("content", "```text\n" + "x".repeat(13_000) + "\n```"))))) + "\n\n");
                 }
                 events.add(discoveryCall(Protocol.OPENAI_COMPATIBLE, 0, "select_" + index, "discover_mcp_tools",
                         Json.object("action", "select", "names", List.of(index == 0 ? small.name() : large.name()))));

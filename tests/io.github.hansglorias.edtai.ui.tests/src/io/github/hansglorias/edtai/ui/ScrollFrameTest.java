@@ -123,12 +123,15 @@ class ScrollFrameTest extends AbstractChatTest {
                 shell.setSize(width, 330);
                 shell.layout(true, true);
                 settle();
-                assertTrue(frame.vertical().isShown());
+                waitUntil(() -> frame.vertical().isShown(), () -> "ширина=" + width
+                        + ", frame=" + frame.getClientArea() + ", table=" + table.getClientArea()
+                        + ", items=" + table.getItemCount() + ", itemHeight=" + table.getItemHeight());
                 assertFalse(frame.horizontal().isShown(), "колонки подстраиваются под ширину " + width);
                 var bar = frame.vertical().control().getBounds();
                 assertTrue(bar.x >= 0 && bar.x + bar.width <= frame.getClientArea().width);
-                assertTrue(table.getColumn(0).getWidth() + table.getColumn(1).getWidth() <= table.getClientArea().width + 2,
-                        "дата остаётся внутри таблицы при ширине " + width);
+                assertTrue(table.getColumn(0).getWidth() + table.getColumn(1).getWidth() <= frame.getClientArea().width - ThinScrollBar.WIDTH + 2,
+                        "дата остаётся внутри viewport при ширине " + width + ": frame="
+                        + frame.getClientArea() + ", table=" + table.getClientArea());
                 wheel(table, -100);
             }
             table.setSelection(79);
@@ -145,6 +148,11 @@ class ScrollFrameTest extends AbstractChatTest {
             settle();
             assertEquals(0, table.getTopIndex());
             assertFalse(frame.vertical().isShown(), "после сокращения списка полоса скрыта");
+            assertTrue(table.getColumn(0).getWidth() + table.getColumn(1).getWidth()
+                    <= frame.getClientArea().width - ThinScrollBar.WIDTH + 2,
+                    "дата остаётся внутри viewport после сокращения списка: frame=" + frame.getClientArea()
+                    + ", table=" + table.getClientArea() + ", columns="
+                    + (table.getColumn(0).getWidth() + table.getColumn(1).getWidth()));
         } finally { shell.dispose(); }
     }
     @Test void fieldsListsAndTreesUseThinBars() throws Exception {
@@ -233,13 +241,17 @@ class ScrollFrameTest extends AbstractChatTest {
                 java.util.stream.Stream.of("model-with-" + "very-long-name-".repeat(30))).toArray());
         dialog.setBlockOnOpen(false);
         dialog.open();
+        dialog.getShell().setSize(480, 380);
+        dialog.getShell().layout(true, true);
         try {
             Table table = findTable(dialog.getShell());
             assertNotNull(table);
             waitUntil(() -> table.getItemCount() == 101);
             var scroll = assertInstanceOf(ScrollFrame.class, table.getParent());
             waitUntil(() -> scroll.vertical().isShown());
-            assertTrue(scroll.horizontal().isShown(), "длинное имя модели доступно узкой горизонтальной полосой");
+            waitUntil(() -> scroll.horizontal().isShown(), () -> "длинное имя модели: frame="
+                    + scroll.getClientArea() + ", table=" + table.getClientArea()
+                    + ", preferred=" + table.computeSize(SWT.DEFAULT, SWT.DEFAULT));
             wheel(table, -3);
             assertTrue(table.getTopIndex() > 0);
             dialog.setFilter("model-99");

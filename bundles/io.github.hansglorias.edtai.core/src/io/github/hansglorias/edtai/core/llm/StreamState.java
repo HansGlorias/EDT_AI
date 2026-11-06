@@ -15,6 +15,7 @@ import io.github.hansglorias.edtai.core.chat.TokenUsage;
 final class StreamState {
 
     private final StringBuilder text = new StringBuilder();
+    private final RepetitionGuard repetitions = new RepetitionGuard();
     private final Map<Integer, Builder> calls = new TreeMap<>();
     private final Consumer<String> onText;
     private final Runnable onReasoning;
@@ -81,6 +82,10 @@ final class StreamState {
     private void visible(String part) {
         if (!part.isEmpty()) {
             text.append(part);
+            int repeated = repetitions.append(part);
+            if (repeated >= 0) {
+                throw new GenerationStoppedException(ThinkFilter.strip(text.substring(0, repeated)).stripTrailing());
+            }
             onText.accept(part);
         }
     }

@@ -28,6 +28,7 @@ final class ScrollFrame extends Composite {
     private boolean queued;
     private int textHeight;
     private int measuredWidth = -1;
+    private int measuredNativeWidth = -1;
 
     /** Вызывать после задания layoutData; оно остаётся общим с обёрткой. */
     static ScrollFrame wrap(Scrollable control) {
@@ -137,7 +138,7 @@ final class ScrollFrame extends Composite {
         x = Math.max(0, Math.min(x, contentWidth() - width));
         // Win32 Tree с NO_SCROLL не выполняет setTopItem. Его штатная полоса
         // остаётся рабочей, но находится за границей обёртки и закрыта нашим Canvas.
-        int nativeWidth = !(content instanceof Text) && content.getVerticalBar() != null ? content.getVerticalBar().getSize().x : 0;
+        int nativeWidth = nativeWidth();
         Rectangle bounds = new Rectangle(-x, 0, Math.max(width, contentWidth()) + nativeWidth, height);
         if (!layoutChild.getBounds().equals(bounds)) layoutChild.setBounds(bounds);
         if (layoutChild instanceof Composite composite && layoutChild != content) composite.layout();
@@ -164,10 +165,21 @@ final class ScrollFrame extends Composite {
         syncing = true;
         try {
             int width = contentWidth();
-            if (measuredWidth != width) { measuredWidth = width; queueArrange(); }
+            int nativeWidth = nativeWidth();
+            if (measuredWidth != width || measuredNativeWidth != nativeWidth) {
+                measuredWidth = width;
+                measuredNativeWidth = nativeWidth;
+                queueArrange();
+            }
             vertical.update();
             horizontal.update();
         } finally { syncing = false; }
+    }
+
+    /** GTK может рисовать overlay-полосу: её размер не равен занятой части viewport. */
+    private int nativeWidth() {
+        if (content instanceof Text || content.getVerticalBar() == null) return 0;
+        return Math.max(0, content.getSize().x - content.getClientArea().width - 2 * content.getBorderWidth());
     }
 
     private int lineHeight() {

@@ -434,6 +434,11 @@ public final class ModelClient {
                 result.complete(answer);
             } catch (Throwable e) {
                 if (!result.isDone()) {
+                    if (e instanceof GenerationStoppedException stopped) {
+                        closeQuietly();
+                        result.fail(stopped, Status.FAILED);
+                        return;
+                    }
                     ModelException error = uri == null && !(e instanceof ModelException)
                             ? new ModelException("Ошибка запроса к модели: " + e.getMessage(), e)
                             : ModelErrors.of(e, Objects.requireNonNullElse(uri, URI.create("http://localhost")),
@@ -482,6 +487,10 @@ public final class ModelClient {
         private ModelReply readFull(InputStream in) throws IOException, ModelException {
             String text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
             ModelReply answer = adapter.fullResponse(Json.parse(text));
+            int repeated = new RepetitionGuard().append(answer.text());
+            if (repeated >= 0) {
+                throw new GenerationStoppedException(answer.text().substring(0, repeated).stripTrailing());
+            }
             if (!answer.text().isEmpty() && !result.isDone()) {
                 onText.accept(answer.text());
             }
