@@ -18,6 +18,7 @@ import io.github.hansglorias.edtai.core.json.JsonException;
 import io.github.hansglorias.edtai.core.settings.Protocol;
 import io.github.hansglorias.edtai.core.tools.ProjectBrief;
 import io.github.hansglorias.edtai.core.tools.ProjectTools;
+import io.github.hansglorias.edtai.core.tools.SkillTools;
 import io.github.hansglorias.edtai.core.tools.Tool;
 import io.github.hansglorias.edtai.core.tools.ToolApprover;
 import io.github.hansglorias.edtai.core.tools.ToolException;
@@ -246,7 +247,7 @@ final class AgentLoop {
                     tools = new ArrayList<>(tools);
                     ExploreProject runner = new ExploreProject(client, base, reads, use -> {
                         if (!result.isDone()) onTool.accept(use);
-                    }, this::childUsage, approver);
+                    }, this::childUsage, approver, SkillTools.instructions(tools, ExploreProject.NAVIGATION_SKILL));
                     tools.add(runner);
                     tools.add(new DelegateTask(runner));
                 }
