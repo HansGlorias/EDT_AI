@@ -147,6 +147,9 @@ class ScrollFrameTest extends AbstractChatTest {
             settle();
             assertEquals(0, table.getTopIndex());
             assertFalse(frame.vertical().isShown(), "после сокращения списка полоса скрыта");
+            assertTrue(table.getColumn(0).getWidth() + table.getColumn(1).getWidth()
+                    <= frame.getClientArea().width - ThinScrollBar.WIDTH + 2,
+                    "дата остаётся внутри viewport после сокращения списка");
         } finally { shell.dispose(); }
     }
     @Test void fieldsListsAndTreesUseThinBars() throws Exception {

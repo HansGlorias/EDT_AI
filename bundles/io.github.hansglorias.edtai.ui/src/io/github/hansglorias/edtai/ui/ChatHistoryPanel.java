@@ -139,7 +139,9 @@ final class ChatHistoryPanel {
         GridDataFactory.fillDefaults().grab(true, true).applyTo(holder);
         TableColumnLayout columns = new TableColumnLayout();
         holder.setLayout(columns);
-        table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.NO_SCROLL);
+        // GTK с NO_SCROLL выделяет высоту под все строки, минуя viewport.
+        // Штатная вертикальная прокрутка работает внутри обрезанной ScrollFrame.
+        table = new Table(holder, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL);
         FontData[] fontData = JFaceResources.getDialogFont().getFontData();
         for (FontData data : fontData) { data.setHeight(Math.max(9, data.getHeight() - 1)); data.setStyle(SWT.NORMAL); }
         Font font = new Font(table.getDisplay(), fontData);

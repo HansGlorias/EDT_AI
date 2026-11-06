@@ -137,7 +137,8 @@ final class ScrollFrame extends Composite {
         x = Math.max(0, Math.min(x, contentWidth() - width));
         // Win32 Tree с NO_SCROLL не выполняет setTopItem. Его штатная полоса
         // остаётся рабочей, но находится за границей обёртки и закрыта нашим Canvas.
-        int nativeWidth = !(content instanceof Text) && content.getVerticalBar() != null ? content.getVerticalBar().getSize().x : 0;
+        int nativeWidth = !(content instanceof Text) && content.getVerticalBar() != null
+                && content.getVerticalBar().getVisible() ? content.getVerticalBar().getSize().x : 0;
         Rectangle bounds = new Rectangle(-x, 0, Math.max(width, contentWidth()) + nativeWidth, height);
         if (!layoutChild.getBounds().equals(bounds)) layoutChild.setBounds(bounds);
         if (layoutChild instanceof Composite composite && layoutChild != content) composite.layout();
